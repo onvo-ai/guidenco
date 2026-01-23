@@ -1,8 +1,8 @@
-import { auth } from '@/lib/auth';
-import { db } from '@/lib/db';
-import { users } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
-import { headers } from 'next/headers';
+import { auth } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
+import { headers } from "next/headers";
 
 export async function POST(req: Request) {
   try {
@@ -11,10 +11,12 @@ export async function POST(req: Request) {
     });
 
     if (!session) {
-      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { name, phoneNumber } = await req.json();
+    // console.log(await req.json());
+    const { name, phoneNumber = "" } = await req.json();
+    console.log("Updating user:", { name, phoneNumber });
 
     await db
       .update(users)
@@ -27,7 +29,7 @@ export async function POST(req: Request) {
 
     return Response.json({ success: true });
   } catch (error) {
-    console.error('Error updating user:', error);
-    return Response.json({ error: 'Failed to update user' }, { status: 500 });
+    console.error("Error updating user:", error);
+    return Response.json({ error: "Failed to update user" }, { status: 500 });
   }
 }

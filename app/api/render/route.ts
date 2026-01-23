@@ -1,11 +1,11 @@
-import { NextResponse } from 'next/server';
-import puppeteer from 'puppeteer';
-import Handlebars from 'handlebars';
+import { NextResponse } from "next/server";
+import puppeteer from "puppeteer";
+import Handlebars from "handlebars";
 
 export const maxDuration = 30;
 
 // Register Handlebars helpers
-Handlebars.registerHelper('range', function(start: number, end: number) {
+Handlebars.registerHelper("range", function (start: number, end: number) {
   const result = [];
   for (let i = start; i <= end; i++) {
     result.push(i);
@@ -13,20 +13,30 @@ Handlebars.registerHelper('range', function(start: number, end: number) {
   return result;
 });
 
-Handlebars.registerHelper('odd', function(value: number) {
+Handlebars.registerHelper("odd", function (value: number) {
   return value % 2 === 1;
 });
 
-Handlebars.registerHelper('even', function(value: number) {
+Handlebars.registerHelper("even", function (value: number) {
   return value % 2 === 0;
 });
 
 export async function POST(req: Request) {
   try {
-    const { template, width, height, format = 'base64', googleFonts = [], scale = 1 } = await req.json();
+    const {
+      template,
+      width,
+      height,
+      format = "base64",
+      googleFonts = [],
+      scale = 1,
+    } = await req.json();
 
     if (!template || !width || !height) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing required fields" },
+        { status: 400 },
+      );
     }
 
     // Compile Handlebars template with sample data
@@ -34,24 +44,28 @@ export async function POST(req: Request) {
     try {
       const hbsTemplate = Handlebars.compile(template);
       const sampleData = {
-        title: 'Sample Title',
-        description: 'Sample Description',
-        items: ['Item 1', 'Item 2', 'Item 3'],
-        user: { name: 'John Doe', email: 'john@example.com' },
+        title: "Sample Title",
+        description: "Sample Description",
+        items: ["Item 1", "Item 2", "Item 3"],
+        user: { name: "John Doe", email: "john@example.com" },
         count: 5,
         isActive: true,
       };
       compiledHTML = hbsTemplate(sampleData);
     } catch (error: any) {
-      return NextResponse.json({ error: `Template compilation error: ${error.message}` }, { status: 400 });
+      return NextResponse.json(
+        { error: `Template compilation error: ${error.message}` },
+        { status: 400 },
+      );
     }
 
     // Build Google Fonts link if fonts are specified
-    const googleFontsLink = googleFonts.length > 0
-      ? `<link rel="preconnect" href="https://fonts.googleapis.com">
+    const googleFontsLink =
+      googleFonts.length > 0
+        ? `<link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?${googleFonts.map((font: string) => `family=${font.replace(/ /g, '+')}:wght@400;700`).join('&')}&display=swap" rel="stylesheet">`
-      : '';
+  <link href="https://fonts.googleapis.com/css2?${googleFonts.map((font: string) => `family=${font.replace(/ /g, "+")}:wght@400;700`).join("&")}&display=swap" rel="stylesheet">`
+        : "";
 
     // Build complete HTML document with optional scaling
     const fullHTML = `
@@ -72,7 +86,7 @@ export async function POST(req: Request) {
     body {
       width: ${width}px;
       height: ${height}px;
-      ${scale !== 1 ? `transform: scale(${scale}); transform-origin: top left;` : ''}
+      ${scale !== 1 ? `transform: scale(${scale}); transform-origin: top left;` : ""}
     }
   </style>
 </head>
@@ -85,37 +99,43 @@ export async function POST(req: Request) {
     // Launch Puppeteer and render
     const browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
 
     const page = await browser.newPage();
     // Set viewport to scaled dimensions
-    await page.setViewport({ width: Math.ceil(width * scale), height: Math.ceil(height * scale) });
-    await page.setContent(fullHTML, { waitUntil: 'networkidle0' });
+    await page.setViewport({
+      width: Math.ceil(width * scale),
+      height: Math.ceil(height * scale),
+    });
+    await page.setContent(fullHTML, { waitUntil: "networkidle0" });
 
     // Take screenshot
     const screenshot = await page.screenshot({
-      type: 'png',
-      encoding: format === 'base64' ? 'base64' : 'binary',
+      type: "png",
+      encoding: format === "base64" ? "base64" : "binary",
     });
 
     await browser.close();
 
-    if (format === 'base64') {
-      return NextResponse.json({ 
+    if (format === "base64") {
+      return NextResponse.json({
         success: true,
         image: `data:image/png;base64,${screenshot}`,
       });
     } else {
-      return new NextResponse(screenshot as Buffer, {
-        headers: {
-          'Content-Type': 'image/png',
-          'Content-Disposition': `attachment; filename="artwork-${Date.now()}.png"`,
+      return new NextResponse(
+        Buffer.from(screenshot as unknown as Uint8Array),
+        {
+          headers: {
+            "Content-Type": "image/png",
+            "Content-Disposition": `attachment; filename="artwork-${Date.now()}.png"`,
+          },
         },
-      });
+      );
     }
   } catch (error: any) {
-    console.error('Render error:', error);
+    console.error("Render error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
