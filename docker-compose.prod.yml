@@ -1,11 +1,20 @@
 version: '3.8'
 
+# Environment: Use .env.docker file
+# Run with: docker compose -f docker-compose.prod.yml --env-file .env.docker up
+
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        POSTGRES_URL: ${POSTGRES_URL}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
     container_name: artiste-app-prod
+    env_file:
+      - .env
     environment:
       NODE_ENV: ${NODE_ENV}
       POSTGRES_URL: ${POSTGRES_URL}
