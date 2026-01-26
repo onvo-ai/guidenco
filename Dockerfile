@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
 # Install all dependencies (including dev)
-RUN npm ci --legacy-peer-deps
+RUN npm ci 
 
 # Copy source code
 COPY . .
@@ -50,7 +50,7 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 
 # Create non-root user for security
-RUN useradd -m -u 1001 nextjs
+RUN useradd -m -u 1001 nextjs       
 
 USER nextjs
 
