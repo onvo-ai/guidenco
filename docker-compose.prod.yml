@@ -1,31 +1,22 @@
 version: '3.8'
 
-# Environment: Use .env.example file
-# Run with: docker compose -f docker-compose.prod.yml --env-file .env.example up
-# For Coolify: Make sure to expose port 3000 and configure domain in Coolify settings
-
 services:
-  app:
-    image: artiste-app:latest
+  artiste-app:
+    image: artiste-app
+    container_name: artiste-app
     build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        POSTGRES_URL: ${POSTGRES_URL}
-        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      context: ./
+      dockerfile: ./Dockerfile
+      target: production
+    restart: always
     env_file:
-      - .env
+      - ./.env
     environment:
-      NODE_ENV: ${NODE_ENV}
-      POSTGRES_URL: ${POSTGRES_URL}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-      PORT: 3000
-      HOSTNAME: 0.0.0.0
-    expose:
-      - 3000
-    restart: unless-stopped
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+    ports:
+      - 3000:3000
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
       interval: 30s
