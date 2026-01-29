@@ -13,10 +13,11 @@ import remarkGfm from 'remark-gfm';
 
 interface ChatInterfaceProps {
   projectId: string;
+  selectedPageIndex: number;
   onArtworkUpdate: () => void;
 }
 
-export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps) {
+export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [attachedImages, setAttachedImages] = useState<Array<{ url: string; file: File }>>([]);
   const [initialMessages, setInitialMessages] = useState<any[]>([]);
@@ -24,12 +25,12 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
   const lastProcessedState = useRef<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  
+
   const transport = useMemo(
-    () => new DefaultChatTransport({ api: `/api/chat?projectId=${projectId}` }),
-    [projectId]
+    () => new DefaultChatTransport({ api: `/api/chat?projectId=${projectId}&pageIndex=${selectedPageIndex}` }),
+    [projectId, selectedPageIndex]
   );
-  
+
   const { messages, sendMessage, status, setMessages } = useChat({
     transport,
   });
@@ -49,7 +50,7 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
         setIsLoadingHistory(false);
       }
     };
-    
+
     loadHistory();
   }, [projectId, setMessages]);
 
@@ -75,13 +76,13 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
     // Process ALL messages from start to end to build up the artwork state
     for (const message of messages) {
       if (message.role !== 'assistant' || !message.parts) continue;
-      
+
       for (const part of message.parts) {
         const toolPart = part as any;
-        
+
         // Handle nested output structure from database
         const output = toolPart.output?.output || toolPart.output;
-        
+
         if (toolPart.type === 'tool-createArtwork' && output) {
           artworkWidth = output.width;
           artworkHeight = output.height;
@@ -93,11 +94,22 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
           // Also get dimensions if provided
           if (output.width) artworkWidth = output.width;
           if (output.height) artworkHeight = output.height;
+        } else if (toolPart.type === 'tool-writePagesHTML' && output) {
+          version = output.version ?? version;
+          totalVersions = output.totalVersions ?? totalVersions;
+          if (output.width) artworkWidth = output.width;
+          if (output.height) artworkHeight = output.height;
         } else if (toolPart.type === 'tool-getArtworkState' && output) {
           // getArtworkState returns the full state - this is authoritative
           if (output.width) artworkWidth = output.width;
           if (output.height) artworkHeight = output.height;
           if (output.html) artworkHTML = output.html;
+          version = output.version ?? version;
+          totalVersions = output.totalVersions ?? totalVersions;
+        } else if (toolPart.type === 'tool-createPage' && output) {
+          version = output.version ?? version;
+          totalVersions = output.totalVersions ?? totalVersions;
+        } else if (toolPart.type === 'tool-deletePage' && output) {
           version = output.version ?? version;
           totalVersions = output.totalVersions ?? totalVersions;
         }
@@ -138,7 +150,7 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
-    
+
     // Auto-resize textarea
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -156,9 +168,9 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!input.trim() && attachedImages.length === 0) || isLoading) return;
-    
+
     const parts: any[] = [];
-    
+
     // Add images first
     for (const img of attachedImages) {
       const reader = new FileReader();
@@ -172,35 +184,35 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
         reader.readAsDataURL(img.file);
       });
       const base64 = await base64Promise;
-      
+
       // Determine mime type
       const mimeType = img.file.type || 'image/png';
-      
-      parts.push({ 
-        type: 'image', 
+
+      parts.push({
+        type: 'image',
         image: base64,
         mimeType: mimeType
       });
     }
-    
+
     // Add text if present
     if (input.trim()) {
       parts.push({ type: 'text', text: input.trim() });
     }
-    
+
     // Clear input and images immediately before sending
     setInput('');
     const imagesToCleanup = [...attachedImages];
     setAttachedImages([]);
-    
+
     // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    
+
     // Send message
     await sendMessage({ role: 'user', parts });
-    
+
     // Cleanup image URLs
     imagesToCleanup.forEach(img => URL.revokeObjectURL(img.url));
   };
@@ -215,7 +227,7 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
               <p>Ask me to create graphics, illustrations, or any visual content using canvas!</p>
             </div>
           )}
-          
+
           {messages.map((message) => {
             return (
               <div key={message.id} className="space-y-2">
@@ -226,9 +238,9 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
                     const toolName = part.type?.replace('tool-', '');
                     const output = part.output?.output || part.output;
                     const input = part.output?.input || part.args;
-                    
+
                     let displayMessage = output?.message || toolName;
-                    
+
                     if (toolName === 'createArtwork') {
                       const width = input?.width;
                       const height = input?.height;
@@ -237,6 +249,29 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
                       }
                     } else if (toolName === 'writeHTML') {
                       displayMessage = output?.message || 'Writing HTML...';
+                    } else if (toolName === 'writePagesHTML') {
+                      const pageCount = output?.pageCount;
+                      if (typeof pageCount === 'number') {
+                        displayMessage = `Writing ${pageCount} pages...`;
+                      } else {
+                        displayMessage = output?.message || 'Writing pages...';
+                      }
+                    } else if (toolName === 'createPage') {
+                      const pageCount = output?.pageCount;
+                      const pageIndex = output?.pageIndex;
+                      if (typeof pageCount === 'number' && typeof pageIndex === 'number') {
+                        displayMessage = `Page created (page ${pageIndex + 1} of ${pageCount})`;
+                      } else {
+                        displayMessage = output?.message || 'Creating page...';
+                      }
+                    } else if (toolName === 'deletePage') {
+                      const pageCount = output?.pageCount;
+                      const deletedPageIndex = output?.deletedPageIndex;
+                      if (typeof pageCount === 'number' && typeof deletedPageIndex === 'number') {
+                        displayMessage = `Page deleted (deleted page ${deletedPageIndex + 1}; now ${pageCount} pages)`;
+                      } else {
+                        displayMessage = output?.message || 'Deleting page...';
+                      }
                     } else if (toolName === 'searchImage') {
                       // Try multiple paths to get the query
                       const searchQuery = input?.query || part.args?.query || output?.query;
@@ -248,25 +283,28 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
                     } else if (toolName === 'getArtworkState') {
                       displayMessage = 'Inspecting current artwork';
                     }
-                    
+
                     const hasImage = toolName === 'getArtworkState' && output?.image;
-                    
+
                     return (
                       <div key={partIdx} className="space-y-2">
                         <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-600 dark:text-zinc-400 w-full">
                           <span>
                             {toolName === 'createArtwork' && '🎨'}
                             {toolName === 'writeHTML' && '✏️'}
+                            {toolName === 'writePagesHTML' && '✏️'}
                             {toolName === 'getArtworkState' && '👁️'}
+                            {toolName === 'createPage' && '📄'}
+                            {toolName === 'deletePage' && '🗑️'}
                             {toolName === 'searchImage' && '🔍'}
                           </span>
                           <span className="font-medium">{displayMessage}</span>
                         </div>
                         {hasImage && (
                           <div className="ml-8">
-                            <img 
-                              src={output.image} 
-                              alt="Artwork preview" 
+                            <img
+                              src={output.image}
+                              alt="Artwork preview"
                               className="max-w-[200px] max-h-[200px] rounded border border-zinc-200 dark:border-zinc-700 shadow-sm"
                             />
                           </div>
@@ -274,19 +312,17 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
                       </div>
                     );
                   }
-                  
+
                   // Handle text
                   if (part.type === 'text' && part.text) {
                     return (
                       <div key={partIdx} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                          message.role === 'user'
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
-                        }`}>
-                          <div className={`prose prose-sm max-w-none ${
-                            message.role === 'user' ? 'prose-invert' : 'dark:prose-invert'
+                        <div className={`max-w-[80%] rounded-lg px-4 py-2 ${message.role === 'user'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
                           }`}>
+                          <div className={`prose prose-sm max-w-none ${message.role === 'user' ? 'prose-invert' : 'dark:prose-invert'
+                            }`}>
                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
                               {part.text}
                             </ReactMarkdown>
@@ -295,7 +331,7 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
                       </div>
                     );
                   }
-                  
+
                   // Handle images
                   if (part.type === 'image') {
                     return (
@@ -308,13 +344,13 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
                       </div>
                     );
                   }
-                  
+
                   return null;
                 })}
               </div>
             );
           })}
-          
+
           {isLoading && (
             <div className="flex justify-start">
               <div className="bg-zinc-100 dark:bg-zinc-800 rounded-lg px-4 py-2">
@@ -347,7 +383,7 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
               ))}
             </div>
           )}
-          
+
           {/* Input form */}
           <form onSubmit={handleSubmit} className="flex gap-2 items-end">
             <input
@@ -381,8 +417,8 @@ export function ChatInterface({ projectId, onArtworkUpdate }: ChatInterfaceProps
               data-1p-ignore
               data-lpignore="true"
             />
-            <Button 
-              type="submit" 
+            <Button
+              type="submit"
               disabled={isLoading || (!input.trim() && attachedImages.length === 0)}
               size="icon"
               className="mb-0.5"

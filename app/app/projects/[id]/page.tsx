@@ -11,6 +11,7 @@ export default function ProjectPage() {
   const router = useRouter();
   const params = useParams();
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [selectedPageIndex, setSelectedPageIndex] = useState(0);
   const [artworkState, setArtworkState] = useState({
     width: 800,
     height: 600,
@@ -83,28 +84,31 @@ export default function ProjectPage() {
 
   return (
     <ResizablePanelGroup direction="horizontal" className="flex-1">
-        {/* Chat Panel */}
-        <ResizablePanel defaultSize={50} minSize={30}>
-          <ChatInterface
-            key={resetKey}
-            projectId={currentProject.id}
-            onArtworkUpdate={handleArtworkUpdate}
+      {/* Chat Panel */}
+      <ResizablePanel defaultSize={50} minSize={30}>
+        <ChatInterface
+          key={resetKey}
+          projectId={currentProject.id}
+          selectedPageIndex={selectedPageIndex}
+          onArtworkUpdate={handleArtworkUpdate}
+        />
+      </ResizablePanel>
+
+      <ResizableHandle withHandle />
+
+      {/* Artwork Panel */}
+      <ResizablePanel defaultSize={50} minSize={30}>
+        <div className="h-full p-4">
+          <HTMLViewer
+            width={artworkState.width}
+            height={artworkState.height}
+            versions={artworkState.versions}
+            currentVersion={artworkState.currentVersion}
+            selectedPageIndex={selectedPageIndex}
+            onSelectedPageIndexChange={setSelectedPageIndex}
           />
-        </ResizablePanel>
-        
-        <ResizableHandle withHandle />
-        
-        {/* Artwork Panel */}
-        <ResizablePanel defaultSize={50} minSize={30}>
-          <div className="h-full p-4">
-            <HTMLViewer
-              width={artworkState.width}
-              height={artworkState.height}
-              versions={artworkState.versions}
-              currentVersion={artworkState.currentVersion}
-            />
-          </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+        </div>
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }
