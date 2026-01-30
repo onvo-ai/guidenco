@@ -1,0 +1,64 @@
+name: SonarQube Code Analysis
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - dev-sec-ops
+  pull_request:
+    branches:
+      - main
+      - develop
+      - dev-sec-ops
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  sonarqube-analysis:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      - name: Run ESLint with JSON report
+        run: npm run lint -- --format json --output-file reports/eslint-report.json || true
+        continue-on-error: true
+
+      - name: Run tests with coverage
+        run: npm run test:coverage || true
+        continue-on-error: true
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@master
+        env:
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        continue-on-error: true
+
+      - name: SonarQube Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        continue-on-error: true
