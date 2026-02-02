@@ -27,13 +27,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
 # Install all dependencies (including dev)
-RUN npm ci
+RUN yarn install --frozen-lockfile
 
 # Copy source code
 COPY . .
 
 # Build the Next.js application
-RUN npm run build
+RUN yarn run build
 
 # Production stage
 FROM node:20-slim
@@ -70,4 +70,4 @@ EXPOSE 3000
 ENTRYPOINT ["dumb-init", "--"]
 
 # Start the Next.js application
-CMD ["npm", "start"]
+CMD ["yarn", "start"]
