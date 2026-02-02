@@ -7,8 +7,10 @@ WORKDIR /app
 ARG POSTGRES_URL
 ARG NEXT_PUBLIC_APP_URL
 ARG BETTER_AUTH_SECRET
+ARG NODE_ENV=production
 
 # Set environment variables for build
+ENV NODE_ENV=production
 ENV POSTGRES_URL=${POSTGRES_URL}
 ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
 ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
@@ -39,6 +41,9 @@ RUN yarn run build
 FROM node:20-slim
 
 WORKDIR /app
+
+# Set production environment
+ENV NODE_ENV=production
 
 # Install only runtime dependencies for canvas libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
