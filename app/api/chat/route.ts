@@ -49,6 +49,8 @@ export async function POST(req: Request) {
     apiKey: process.env.OPENROUTER_API_KEY,
   });
 
+  const modelId = (process.env.OPENROUTER_MODEL || '').trim() || 'google/gemini-2.5-pro';
+
   // Manually convert messages to handle images properly
   const convertedMessages = messages.map((msg: any) => {
     const content: any[] = [];
@@ -72,7 +74,7 @@ export async function POST(req: Request) {
   });
 
   const result = streamText({
-    model: openrouter('google/gemini-2.5-pro'),
+    model: openrouter(modelId),
     messages: convertedMessages as any,
     stopWhen: stepCountIs(5),
     system: `You are an AI assistant that helps users create digital assets using HTML, Tailwind CSS, and FontAwesome icons.

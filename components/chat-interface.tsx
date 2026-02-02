@@ -22,9 +22,11 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
   const [attachedImages, setAttachedImages] = useState<Array<{ url: string; file: File }>>([]);
   const [initialMessages, setInitialMessages] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [hasStalled, setHasStalled] = useState(false);
   const lastProcessedState = useRef<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const transport = useMemo(
     () => new DefaultChatTransport({ api: `/api/chat?projectId=${projectId}&pageIndex=${selectedPageIndex}` }),
@@ -55,7 +57,45 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
   }, [projectId, setMessages]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const isLoading = status === 'submitted';
+  const isLoading = status === 'submitted' && !hasStalled;
+
+  const appendAssistantError = (text: string) => {
+    setMessages((prev: any[]) => [
+      ...prev,
+      {
+        id: `local-error-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        role: 'assistant',
+        parts: [{ type: 'text', text }],
+      },
+    ]);
+  };
+
+  useEffect(() => {
+    if (status !== 'submitted') {
+      setHasStalled(false);
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (stallTimerRef.current) return;
+
+    stallTimerRef.current = setTimeout(() => {
+      setHasStalled(true);
+      appendAssistantError(
+        'This is taking longer than expected and may have failed. Please try again. If it keeps happening, check the server logs for an error.'
+      );
+    }, 60_000);
+
+    return () => {
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
+      }
+    };
+  }, [status]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -211,7 +251,14 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
     }
 
     // Send message
-    await sendMessage({ role: 'user', parts });
+    try {
+      await sendMessage({ role: 'user', parts });
+    } catch (error) {
+      console.error('Error sending message:', error);
+      const message = error instanceof Error ? error.message : 'Request failed.';
+      appendAssistantError(`Request failed: ${message}`);
+      setHasStalled(true);
+    }
 
     // Cleanup image URLs
     imagesToCleanup.forEach(img => URL.revokeObjectURL(img.url));
@@ -244,8 +291,15 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
                     if (toolName === 'createArtwork') {
                       const width = input?.width;
                       const height = input?.height;
+                      const pageCount =
+                        typeof input?.pageCount === 'number'
+                          ? input.pageCount
+                          : typeof output?.pageCount === 'number'
+                            ? output.pageCount
+                            : undefined;
                       if (width && height) {
-                        displayMessage = `Artwork created with dimensions ${width}x${height}`;
+                        displayMessage = `Artwork created with dimensions ${width}x${height}${typeof pageCount === 'number' ? ` (${pageCount} ${pageCount === 1 ? 'page' : 'pages'})` : ''
+                          }`;
                       }
                     } else if (toolName === 'writeHTML') {
                       displayMessage = output?.message || 'Writing HTML...';
@@ -281,34 +335,85 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
                         displayMessage = 'Searching for images...';
                       }
                     } else if (toolName === 'getArtworkState') {
-                      displayMessage = 'Inspecting current artwork';
+                      const requestedPageIndex =
+                        typeof input?.pageIndex === 'number'
+                          ? input.pageIndex
+                          : typeof part.args?.pageIndex === 'number'
+                            ? part.args.pageIndex
+                            : selectedPageIndex;
+                      displayMessage = `Inspecting current artwork (page ${requestedPageIndex + 1})`;
                     }
 
                     const hasImage = toolName === 'getArtworkState' && output?.image;
+                    const hasSearchImages =
+                      toolName === 'searchImage' &&
+                      output?.success &&
+                      Array.isArray(output?.images) &&
+                      output.images.length > 0;
 
                     return (
-                      <div key={partIdx} className="space-y-2">
-                        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-600 dark:text-zinc-400 w-full">
-                          <span>
-                            {toolName === 'createArtwork' && '🎨'}
-                            {toolName === 'writeHTML' && '✏️'}
-                            {toolName === 'writePagesHTML' && '✏️'}
-                            {toolName === 'getArtworkState' && '👁️'}
-                            {toolName === 'createPage' && '📄'}
-                            {toolName === 'deletePage' && '🗑️'}
-                            {toolName === 'searchImage' && '🔍'}
-                          </span>
-                          <span className="font-medium">{displayMessage}</span>
-                        </div>
-                        {hasImage && (
-                          <div className="ml-8">
-                            <img
-                              src={output.image}
-                              alt="Artwork preview"
-                              className="max-w-[200px] max-h-[200px] rounded border border-zinc-200 dark:border-zinc-700 shadow-sm"
-                            />
+                      <div key={partIdx} className="w-full">
+                        <div className="w-full rounded-md bg-zinc-100 dark:bg-zinc-800 px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400">
+                          <div className="flex items-center gap-2">
+                            <span>
+                              {toolName === 'createArtwork' && '🎨'}
+                              {toolName === 'writeHTML' && '✏️'}
+                              {toolName === 'writePagesHTML' && '✏️'}
+                              {toolName === 'getArtworkState' && '👁️'}
+                              {toolName === 'createPage' && '📄'}
+                              {toolName === 'deletePage' && '🗑️'}
+                              {toolName === 'searchImage' && '🔍'}
+                            </span>
+                            <span className="font-medium">{displayMessage}</span>
                           </div>
-                        )}
+
+                          {hasImage && (
+                            <div className="mt-2">
+                              <img
+                                src={output.image}
+                                alt="Artwork preview"
+                                className="max-w-[200px] max-h-[200px] rounded border border-zinc-200 dark:border-zinc-700 shadow-sm"
+                              />
+                            </div>
+                          )}
+
+                          {hasSearchImages && (
+                            <div className="mt-2 overflow-x-auto">
+                              <div className="flex gap-2 pb-1">
+                                {output.images.map((img: any, idx: number) => {
+                                  const thumbSrc = img?.thumbnail || img?.url;
+                                  const fullSrc = img?.url || img?.thumbnail;
+                                  if (!thumbSrc) return null;
+
+                                  const altText =
+                                    img?.description ||
+                                    (typeof output?.query === 'string' ? output.query : 'Image option');
+
+                                  return (
+                                    <button
+                                      key={idx}
+                                      type="button"
+                                      onClick={() => {
+                                        if (typeof fullSrc === 'string') {
+                                          window.open(fullSrc, '_blank', 'noopener,noreferrer');
+                                        }
+                                      }}
+                                      className="h-20 w-20 shrink-0 overflow-hidden rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                                      title={altText}
+                                    >
+                                      <img
+                                        src={thumbSrc}
+                                        alt={altText}
+                                        className="h-full w-full object-cover"
+                                        loading="lazy"
+                                      />
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   }

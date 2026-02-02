@@ -27,13 +27,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
 # Install all dependencies (including dev)
+ENV NODE_ENV=development
 RUN npm ci
 
 # Copy source code
 COPY . .
 
 # Build the Next.js application
+ENV NODE_ENV=production
 RUN npm run build
+
+# Prune dev dependencies to reduce image size
+RUN npm prune --production
 
 # Production stage
 FROM node:20-slim
