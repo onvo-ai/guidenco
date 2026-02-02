@@ -14,7 +14,7 @@ services:
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
     container_name: artiste-app-prod
     env_file:
-      - .env
+      - ./.env
     environment:
       NODE_ENV: ${NODE_ENV}
       POSTGRES_URL: ${POSTGRES_URL}
