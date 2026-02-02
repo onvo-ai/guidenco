@@ -1,73 +1,49 @@
-# Build stage
-FROM node:20-slim AS builder
-
+# Using a multi-stage build for simplicity and to ensure all dependencies are available.
+FROM node:22.19-alpine AS deps
 WORKDIR /app
+RUN apk add --no-cache libc6-compat yarn python3 make g++ pkgconfig pixman-dev cairo-dev pango-dev libjpeg-turbo-dev giflib-dev
+WORKDIR /app
+# Copy all necessary files at the beginning.
+COPY package.json yarn.lock ./
+# Install dependencies.
+RUN yarn install --pure-lockfile --no-cache
 
+FROM deps AS builder
+WORKDIR /app
 # Accept build arguments for environment variables
 ARG POSTGRES_URL
 ARG NEXT_PUBLIC_APP_URL
 ARG BETTER_AUTH_SECRET
+ARG OPENROUTER_API_KEY
+ARG UNSPLASH_ACCESS_KEY
 
 # Set environment variables for build
 ENV POSTGRES_URL=${POSTGRES_URL}
 ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
 ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+ENV OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+ENV UNSPLASH_ACCESS_KEY=${UNSPLASH_ACCESS_KEY}
+ENV NODE_ENV=production
 
-# Install build dependencies for native modules
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    build-essential \
-    libcairo2-dev \
-    libjpeg-dev \
-    libpango1.0-dev \
-    libgif-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy package files
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
-
-# Install all dependencies (including dev)
-RUN yarn install --frozen-lockfile
-
-# Copy source code
+# Copy dashboard source
 COPY . .
+# Build Next.js standalone output
+ENV STANDALONE=true
+RUN yarn build && ls -l .next && ls -la .next/standalone || true
 
-# Build the Next.js application
-RUN yarn run build
-
-# Production stage
-FROM node:20-slim
-
+# Production image
+FROM node:22.19-alpine AS production
 WORKDIR /app
-
-# Install only runtime dependencies for canvas libraries
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    dumb-init \
-    libcairo2 \
-    libjpeg62-turbo \
-    libpango-1.0-0 \
-    libgif7 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy package files
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
-
-# Copy pre-built node_modules from builder
-COPY --from=builder /app/node_modules ./node_modules
-
-# Copy built application from builder
-COPY --from=builder /app/.next ./.next
+ENV NODE_ENV=development
+ENV PORT=3004
+ENV HOSTNAME="0.0.0.0"
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
+# Copy the standalone output and other necessary files from the base stage.
+COPY --from=builder /app/.next/standalone/ ./
+COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
-
-# Create non-root user for security
-RUN useradd -m -u 1001 nextjs       
-
+COPY --from=deps /app/node_modules ./node_modules
 USER nextjs
-
-EXPOSE 3000
-
-# Use dumb-init to properly handle signals
-ENTRYPOINT ["dumb-init", "--"]
-
-# Start the Next.js application
-CMD ["yarn", "start"]
+EXPOSE 3004
+CMD ["node", "server.js"]
