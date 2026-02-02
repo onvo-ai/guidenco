@@ -3,6 +3,16 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
+# Accept build arguments for environment variables
+ARG POSTGRES_URL
+ARG NEXT_PUBLIC_APP_URL
+ARG BETTER_AUTH_SECRET
+
+# Set environment variables for build
+ENV POSTGRES_URL=${POSTGRES_URL}
+ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
+ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+
 # Install build dependencies for native modules
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -17,13 +27,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
 # Install all dependencies (including dev)
-RUN npm ci 
+RUN yarn install --frozen-lockfile
 
 # Copy source code
 COPY . .
 
 # Build the Next.js application
-RUN npm run build
+RUN yarn run build
 
 # Production stage
 FROM node:20-slim
@@ -60,4 +70,4 @@ EXPOSE 3000
 ENTRYPOINT ["dumb-init", "--"]
 
 # Start the Next.js application
-CMD ["npm", "start"]
+CMD ["yarn", "start"]

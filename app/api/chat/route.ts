@@ -7,10 +7,31 @@ export const maxDuration = 30;
 
 // Temporary state for dimensions during creation
 const tempDimensions = new Map<string, { width: number; height: number }>();
+const tempPageCounts = new Map<string, number>();
+
+const PAGE_BREAK = '\n<!-- ARTISTE_PAGE_BREAK -->\n';
+
+function splitPages(html: string): string[] {
+  if (!html) return [''];
+  const parts = html.split(PAGE_BREAK);
+  return parts.length > 0 ? parts : [''];
+}
+
+function joinPages(pages: string[]): string {
+  return pages.join(PAGE_BREAK);
+}
+
+function clampPageIndex(pageIndex: number, pageCount: number): number {
+  if (pageCount <= 0) return 0;
+  return Math.min(Math.max(0, pageIndex), pageCount - 1);
+}
 
 export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
   const projectId = searchParams.get('projectId');
+  const selectedPageIndexParam = searchParams.get('pageIndex');
+  const selectedPageIndex = selectedPageIndexParam ? Number(selectedPageIndexParam) : 0;
+  const defaultSelectedPageIndex = Number.isFinite(selectedPageIndex) && selectedPageIndex >= 0 ? selectedPageIndex : 0;
 
   if (!projectId) {
     return new Response('Project ID required', { status: 400 });
@@ -56,19 +77,31 @@ export async function POST(req: Request) {
     stopWhen: stepCountIs(5),
     system: `You are an AI assistant that helps users create digital assets using HTML, Tailwind CSS, and FontAwesome icons.
 
+Current context:
+- The user currently has pageIndex=${defaultSelectedPageIndex} selected in the UI.
+- If the user asks to edit or inspect a page without specifying which one, prefer using this selected pageIndex.
+
 You have access to tools to:
-1. Create an artwork with specific dimensions (container size)
-2. Write HTML with Tailwind CSS classes, FontAwesome icons, and Google Fonts
-3. View the current artwork state - this returns BOTH the HTML code AND a rendered image of what it looks like
+1. Create an artwork with specific dimensions (container size) and number of pages
+2. Write HTML with Tailwind CSS classes, FontAwesome icons, and Google Fonts (optionally targeting a specific page)
+   - For multi-page initial creation, you can write ALL pages at once in a single version using writePagesHTML.
+3. Create/delete pages
+4. View the current artwork state (optionally for a specific page) - this returns BOTH the HTML code AND a rendered image of what it looks like
 
 When a user asks you to create something:
 1. First, create an artwork with appropriate dimensions using the createArtwork tool (ONLY call this once per artwork)
-2. Then, write HTML using the writeHTML tool with:
+   - If the user needs multiple pages, set pageCount accordingly.
+2. Then, write HTML:
+   - If there are multiple pages, prefer using writePagesHTML ONCE to write all pages in a single version.
+   - Otherwise use writeHTML.
+   - Each writeHTML/writePagesHTML call creates a new version.
+3. For HTML, use:
    - Tailwind CSS for styling
    - FontAwesome icons (e.g., <i class="fas fa-heart"></i>)
    - Google Fonts by specifying the googleFonts parameter (e.g., ["Roboto", "Playfair Display"])
    - Use font-family CSS or Tailwind's arbitrary values to apply fonts: style="font-family: 'Roboto'" or class="font-['Roboto']"
-3. After writing HTML, ALWAYS call getArtworkState to verify the output matches the user's requirements
+   - If there are multiple pages, pass pageIndex to writeHTML to edit a specific page.
+4. After writing HTML, ALWAYS call getArtworkState (with pageIndex if relevant) to verify the output matches the user's requirements
    - The getArtworkState tool will show you an IMAGE of the rendered artwork
    - LOOK AT THE IMAGE carefully to verify it matches what the user requested
    - The image field contains a base64-encoded PNG showing exactly what the artwork looks like
@@ -76,9 +109,9 @@ When a user asks you to create something:
 
 When a user asks you to UPDATE or MODIFY existing artwork:
 - DO NOT call createArtwork again - this will reset the version history
-- First, call getArtworkState to see the current HTML AND the rendered image
-- Then call writeHTML with the updated HTML
-- After writing, call getArtworkState again to verify the changes
+- First, call getArtworkState (with pageIndex if relevant) to see the current HTML AND the rendered image
+- Then call writeHTML with the updated HTML (with pageIndex if relevant)
+- After writing, call getArtworkState again (with pageIndex if relevant) to verify the changes
 - Each writeHTML call creates a new version automatically
 
 Guidelines:
@@ -99,15 +132,18 @@ Always use the tools to create the artwork. The user will see the visual output 
         inputSchema: z.object({
           width: z.number().describe('Width of the artwork in pixels'),
           height: z.number().describe('Height of the artwork in pixels'),
+          pageCount: z.number().int().min(1).max(50).optional().describe('How many pages to create (default: 1)'),
         }),
-        execute: async ({ width, height }: { width: number; height: number }) => {
+        execute: async ({ width, height, pageCount = 1 }: { width: number; height: number; pageCount?: number }) => {
           // Store dimensions temporarily for writeHTML
           tempDimensions.set(projectId, { width, height });
+          tempPageCounts.set(projectId, pageCount);
           return {
             success: true,
             message: `Artwork created with dimensions ${width}x${height}`,
             width,
             height,
+            pageCount,
           };
         },
       }),
@@ -116,11 +152,21 @@ Always use the tools to create the artwork. The user will see the visual output 
         inputSchema: z.object({
           html: z.string().describe('Complete Handlebars template with Tailwind CSS classes. Use plain HTML for static content. Available helpers: (range start end) creates array from start to end, (odd number) checks if odd, (even number) checks if even. Example: {{#each (range 1 5)}}<div>{{this}}</div>{{/each}}. Use FontAwesome icons with <i class="fas fa-icon-name"></i>. For Google Fonts, use font-family in style or Tailwind classes.'),
           googleFonts: z.array(z.string()).optional().describe('Array of Google Font family names to load (e.g., ["Roboto", "Open Sans", "Playfair Display"]). These will be automatically loaded from Google Fonts.'),
+          pageIndex: z.number().int().min(0).optional().describe('If provided, updates only this page (0-based index) instead of replacing the entire multi-page document.'),
         }),
-        execute: async ({ html, googleFonts }: { html: string; googleFonts?: string[] }) => {
+        execute: async ({
+          html,
+          googleFonts,
+          pageIndex,
+        }: {
+          html: string;
+          googleFonts?: string[];
+          pageIndex?: number;
+        }) => {
           try {
             // Get dimensions from temp storage or existing artwork
             let dimensions = tempDimensions.get(projectId);
+            const requestedPageCount = tempPageCounts.get(projectId);
 
             if (!dimensions) {
               const existingArtwork = await getProjectArtwork(projectId);
@@ -134,26 +180,54 @@ Always use the tools to create the artwork. The user will see the visual output 
               }
             }
 
+            let htmlToStore = html;
+            if (typeof pageIndex === 'number') {
+              const existingArtwork = await getProjectArtwork(projectId);
+              const existingFullHTML = existingArtwork
+                ? existingArtwork.versions[existingArtwork.currentVersion]?.html || ''
+                : '';
+
+              let pages = splitPages(existingFullHTML);
+
+              if ((!existingArtwork || pages.length === 1) && requestedPageCount && requestedPageCount > 1) {
+                pages = Array.from({ length: requestedPageCount }, () => '');
+              }
+
+              const safeIndex = clampPageIndex(pageIndex, pages.length);
+              pages[safeIndex] = html;
+              htmlToStore = joinPages(pages);
+            } else if (requestedPageCount && requestedPageCount > 1) {
+              const pages = Array.from({ length: requestedPageCount }, () => '');
+              pages[0] = html;
+              htmlToStore = joinPages(pages);
+            }
+
             // Save to database
             const { currentVersion, totalVersions } = await createOrUpdateArtwork(
               projectId,
               dimensions.width,
               dimensions.height,
-              html,
+              htmlToStore,
               googleFonts || []
             );
 
             // Clear temp dimensions
             tempDimensions.delete(projectId);
+            tempPageCounts.delete(projectId);
+
+            const storedPages = splitPages(htmlToStore);
+            const resolvedPageIndex = typeof pageIndex === 'number' ? clampPageIndex(pageIndex, storedPages.length) : 0;
 
             return {
               success: true,
               message: `HTML updated successfully (Version ${currentVersion + 1})`,
-              html,
+              html: typeof pageIndex === 'number' ? storedPages[resolvedPageIndex] : htmlToStore,
               version: currentVersion,
               totalVersions,
               width: dimensions.width,
               height: dimensions.height,
+              pageCount: storedPages.length,
+              pageIndex: resolvedPageIndex,
             };
           } catch (error: any) {
             console.error('Error in writeHTML:', error);
@@ -164,10 +238,75 @@ Always use the tools to create the artwork. The user will see the visual output 
           }
         },
       }),
-      getArtworkState: tool({
-        description: 'Get the current state of the artwork including dimensions, HTML code, and a rendered image. Use this to see what has been created so far and make improvements.',
-        inputSchema: z.object({}),
-        execute: async () => {
+      writePagesHTML: tool({
+        description: 'Write ALL pages of a multi-page artwork in a SINGLE version. Use this for initial multi-page creation when you want one version to contain the full document.',
+        inputSchema: z.object({
+          pages: z.array(z.string()).min(1).max(50).describe('Array of page HTML strings, in order. Each entry is the COMPLETE HTML for that page.'),
+          googleFonts: z.array(z.string()).optional().describe('Array of Google Font family names to load (e.g., ["Roboto", "Open Sans", "Playfair Display"]). These will be automatically loaded from Google Fonts.'),
+        }),
+        execute: async ({
+          pages,
+          googleFonts,
+        }: {
+          pages: string[];
+          googleFonts?: string[];
+        }) => {
+          try {
+            // Get dimensions from temp storage or existing artwork
+            let dimensions = tempDimensions.get(projectId);
+            const requestedPageCount = tempPageCounts.get(projectId);
+
+            if (!dimensions) {
+              const existingArtwork = await getProjectArtwork(projectId);
+              if (existingArtwork) {
+                dimensions = { width: existingArtwork.width, height: existingArtwork.height };
+              } else {
+                return {
+                  success: false,
+                  error: 'No artwork exists. Please create an artwork first using createArtwork.',
+                };
+              }
+            }
+
+            const desiredCount = requestedPageCount && requestedPageCount > 0 ? requestedPageCount : pages.length;
+            const normalizedPages = Array.from({ length: desiredCount }, (_, idx) => pages[idx] ?? '');
+            const htmlToStore = joinPages(normalizedPages);
+
+            const { currentVersion, totalVersions } = await createOrUpdateArtwork(
+              projectId,
+              dimensions.width,
+              dimensions.height,
+              htmlToStore,
+              googleFonts || []
+            );
+
+            tempDimensions.delete(projectId);
+            tempPageCounts.delete(projectId);
+
+            return {
+              success: true,
+              message: `HTML updated successfully (Version ${currentVersion + 1})`,
+              version: currentVersion,
+              totalVersions,
+              width: dimensions.width,
+              height: dimensions.height,
+              pageCount: normalizedPages.length,
+            };
+          } catch (error: any) {
+            console.error('Error in writePagesHTML:', error);
+            return {
+              success: false,
+              error: `Failed to write pages HTML: ${error.message}`,
+            };
+          }
+        },
+      }),
+      createPage: tool({
+        description: 'Create a new blank page in the current artwork. By default it appends a page to the end. This creates a new version.',
+        inputSchema: z.object({
+          afterPageIndex: z.number().int().min(-1).optional().describe('Insert the new page after this 0-based index. Use -1 to insert at the beginning. Defaults to append.'),
+        }),
+        execute: async ({ afterPageIndex }: { afterPageIndex?: number }) => {
           try {
             const artwork = await getProjectArtwork(projectId);
             if (!artwork) {
@@ -180,6 +319,122 @@ Always use the tools to create the artwork. The user will see the visual output 
             const currentHTML = artwork.versions[artwork.currentVersion]?.html || '';
             const currentFonts = artwork.versions[artwork.currentVersion]?.googleFonts || [];
 
+            const pages = splitPages(currentHTML);
+            const insertAfter = typeof afterPageIndex === 'number' ? afterPageIndex : pages.length - 1;
+            const insertAt = Math.min(Math.max(insertAfter + 1, 0), pages.length);
+
+            const nextPages = [...pages.slice(0, insertAt), '', ...pages.slice(insertAt)];
+            const nextHTML = joinPages(nextPages);
+
+            const { currentVersion, totalVersions } = await createOrUpdateArtwork(
+              projectId,
+              artwork.width,
+              artwork.height,
+              nextHTML,
+              currentFonts
+            );
+
+            return {
+              success: true,
+              message: `Page created (Version ${currentVersion + 1})`,
+              pageCount: nextPages.length,
+              pageIndex: insertAt,
+              version: currentVersion,
+              totalVersions,
+            };
+          } catch (error: any) {
+            console.error('Error in createPage:', error);
+            return {
+              success: false,
+              error: `Failed to create page: ${error.message}`,
+            };
+          }
+        },
+      }),
+      deletePage: tool({
+        description: 'Delete a page from the current artwork by 0-based pageIndex. This creates a new version. You cannot delete the last remaining page.',
+        inputSchema: z.object({
+          pageIndex: z.number().int().min(0).describe('0-based index of the page to delete.'),
+        }),
+        execute: async ({ pageIndex }: { pageIndex: number }) => {
+          try {
+            const artwork = await getProjectArtwork(projectId);
+            if (!artwork) {
+              return {
+                success: false,
+                error: 'No artwork exists yet. Create one first using createArtwork.',
+              };
+            }
+
+            const currentHTML = artwork.versions[artwork.currentVersion]?.html || '';
+            const currentFonts = artwork.versions[artwork.currentVersion]?.googleFonts || [];
+
+            const pages = splitPages(currentHTML);
+            if (pages.length <= 1) {
+              return {
+                success: false,
+                error: 'Cannot delete the last remaining page.',
+              };
+            }
+
+            if (pageIndex < 0 || pageIndex >= pages.length) {
+              return {
+                success: false,
+                error: `Invalid pageIndex. Must be between 0 and ${pages.length - 1}.`,
+              };
+            }
+
+            const nextPages = pages.filter((_, idx) => idx !== pageIndex);
+            const nextHTML = joinPages(nextPages);
+
+            const { currentVersion, totalVersions } = await createOrUpdateArtwork(
+              projectId,
+              artwork.width,
+              artwork.height,
+              nextHTML,
+              currentFonts
+            );
+
+            return {
+              success: true,
+              message: `Page deleted (Version ${currentVersion + 1})`,
+              pageCount: nextPages.length,
+              deletedPageIndex: pageIndex,
+              version: currentVersion,
+              totalVersions,
+            };
+          } catch (error: any) {
+            console.error('Error in deletePage:', error);
+            return {
+              success: false,
+              error: `Failed to delete page: ${error.message}`,
+            };
+          }
+        },
+      }),
+      getArtworkState: tool({
+        description: 'Get the current state of the artwork including dimensions, HTML code, and a rendered image. Use this to see what has been created so far and make improvements.',
+        inputSchema: z.object({
+          pageIndex: z.number().int().min(0).optional().describe('If provided, returns state for this specific page (0-based).'),
+        }),
+        execute: async ({ pageIndex }: { pageIndex?: number }) => {
+          try {
+            const artwork = await getProjectArtwork(projectId);
+            if (!artwork) {
+              return {
+                success: false,
+                error: 'No artwork exists yet. Create one first using createArtwork.',
+              };
+            }
+
+            const currentHTML = artwork.versions[artwork.currentVersion]?.html || '';
+            const currentFonts = artwork.versions[artwork.currentVersion]?.googleFonts || [];
+
+            const pages = splitPages(currentHTML);
+            const requestedIndex = typeof pageIndex === 'number' ? pageIndex : defaultSelectedPageIndex;
+            const resolvedPageIndex = clampPageIndex(requestedIndex, pages.length);
+            const pageHTML = pages[resolvedPageIndex] || '';
+
             // Render the template to an image
             let imageData = null;
             try {
@@ -187,7 +442,7 @@ Always use the tools to create the artwork. The user will see the visual output 
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  template: currentHTML,
+                  template: pageHTML,
                   width: artwork.width,
                   height: artwork.height,
                   format: 'base64',
@@ -210,10 +465,13 @@ Always use the tools to create the artwork. The user will see the visual output 
               success: true,
               width: artwork.width,
               height: artwork.height,
-              html: currentHTML,
+              html: pageHTML,
+              fullHtml: currentHTML,
               image: imageData,
               version: artwork.currentVersion,
               totalVersions: artwork.versions.length,
+              pageCount: pages.length,
+              pageIndex: resolvedPageIndex,
             };
 
             console.log('📊 getArtworkState returning:', {

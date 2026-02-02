@@ -1,9 +1,14 @@
 version: '3.8'
 
+# Environment: Use .env.docker file
+# Run with: docker compose --env-file .env.docker up
+
 services:
   postgres:
     image: postgres:17-alpine
     container_name: artiste-db
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -24,7 +29,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        POSTGRES_URL: ${POSTGRES_URL}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
     container_name: artiste-app
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
