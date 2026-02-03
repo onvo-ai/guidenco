@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-slim AS builder
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
@@ -7,85 +7,80 @@ WORKDIR /app
 ARG POSTGRES_URL
 ARG NEXT_PUBLIC_APP_URL
 ARG BETTER_AUTH_SECRET
-ARG OPENROUTER_API_KEY=""
-ARG UNSPLASH_ACCESS_KEY=""
 
 # Set environment variables for build
-ENV NODE_ENV=production
 ENV POSTGRES_URL=${POSTGRES_URL}
 ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
-ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
-ENV OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-ENV UNSPLASH_ACCESS_KEY=${UNSPLASH_ACCESS_KEY}
+ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET} \
+    NODE_ENV=development
 
-# Install build dependencies for native modules (canvas, sqlite3, etc.)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install build dependencies for native modules
+RUN apk add --no-cache --virtual .build-deps \
     python3 \
-    build-essential \
-    libcairo2-dev \
-    libjpeg-dev \
-    libpango1.0-dev \
-    libgif-dev \
-    pkg-config \
-    && rm -rf /var/lib/apt/lists/*
+    make \
+    g++ \
+    cairo-dev \
+    jpeg-dev \
+    pango-dev \
+    giflib-dev
 
-# Copy package files first for dependency caching
-COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* ./
+# Copy package files
+COPY --chown=node:node package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
-# Install dependencies with better error handling
-# Use --non-interactive to prevent hanging, and don't use frozen-lockfile
-# as it can be too strict and prevent proper resolution of devDependencies
-RUN yarn install --non-interactive --network-timeout 100000 || yarn install
+# Install all dependencies (including dev)
+RUN npm ci --prefer-offline --no-audit
 
 # Copy source code
-COPY . .
+COPY --chown=node:node . .
 
 # Build the Next.js application
-RUN yarn run build
+ENV NODE_ENV=production
+RUN npm run build
+
+# Prune dev dependencies to reduce image size
+RUN npm prune --production
+
+# Clean up build dependencies
+RUN apk del .build-deps
 
 # Production stage
-FROM node:20-slim
+FROM node:20-alpine
 
 WORKDIR /app
 
-# Set production environment
-ENV NODE_ENV=production
-ENV PORT=3000
-
-# Install runtime dependencies only (for canvas and image processing)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install only runtime dependencies for canvas libraries
+RUN apk add --no-cache \
     dumb-init \
-    libcairo2 \
-    libjpeg62-turbo \
-    libpango-1.0-0 \
-    libgif7 \
-    && rm -rf /var/lib/apt/lists/*
+    cairo \
+    jpeg \
+    pango \
+    giflib
+
+# Create non-root user with minimal privileges (use existing node user)
+# Set proper file permissions
+RUN chown -R node:node /app
 
 # Copy package files
-COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* ./
+COPY --chown=node:node --from=builder /app/package.json /app/package-lock.json* /app/yarn.lock* /app/pnpm-lock.yaml* ./
 
-# Copy pre-built node_modules from builder stage
-COPY --from=builder /app/node_modules ./node_modules
+# Copy pre-built node_modules from builder
+COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 
-# Copy built application from builder stage
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
+# Copy built application from builder
+COPY --chown=node:node --from=builder /app/.next ./.next
+COPY --chown=node:node --from=builder /app/public ./public
 
-# Copy other necessary files
-COPY --from=builder /app/drizzle ./drizzle
-COPY --from=builder /app/next.config.ts ./
-COPY --from=builder /app/postcss.config.mjs ./
-COPY --from=builder /app/tsconfig.json ./
+# Switch to non-root user
+USER node
 
-# Create non-root user for security
-RUN useradd -m -u 1001 nextjs && chown -R nextjs:nextjs /app
-
-USER nextjs
+# Set environment variables
+ENV NODE_ENV=production \
+    NODE_OPTIONS="--disable-warning=ExperimentalWarning"
 
 EXPOSE 3000
 
-# Use dumb-init to properly handle signals and reaping zombies
+# Use dumb-init to properly handle signals
 ENTRYPOINT ["dumb-init", "--"]
 
-# Start the Next.js application in production mode
-CMD ["yarn", "start"]
+# Start the Next.js application
+CMD ["npm", "start"]
