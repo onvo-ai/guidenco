@@ -127,7 +127,7 @@ export function Header({ currentProject, onProjectChange, showProjectSelector = 
           className="text-lg font-semibold cursor-pointer hover:text-blue-600 transition-colors"
           onClick={() => router.push('/app')}
         >
-          Artiste
+          Guidenco
         </h1>
 
         {showProjectSelector && (

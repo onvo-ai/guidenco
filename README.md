@@ -1,4 +1,4 @@
-# Artiste - AI Digital Asset Creator
+# Guidenco - AI Digital Asset Creator
 
 An AI-powered digital asset creation tool that uses HTML, Tailwind CSS, and LLMs to generate graphics, illustrations, and visual content.
 
@@ -39,21 +39,25 @@ An AI-powered digital asset creation tool that uses HTML, Tailwind CSS, and LLMs
 ### Installation
 
 1. Clone the repository:
+
 ```bash
-cd artiste
+cd guidenco
 ```
 
 2. Install dependencies:
+
 ```bash
 npm install
 ```
 
 3. Create a `.env.local` file in the root directory:
+
 ```bash
 cp .env.local.example .env.local
 ```
 
 4. Add your environment variables to `.env.local`:
+
 ```
 DATABASE_URL=your_postgres_connection_string
 BETTER_AUTH_SECRET=your_auth_secret
@@ -64,10 +68,12 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
 Get your API keys from:
+
 - [OpenRouter](https://openrouter.ai/keys)
 - [Unsplash](https://unsplash.com/developers)
 
 5. Set up the database:
+
 ```bash
 npm run db:push
 ```
@@ -75,6 +81,7 @@ npm run db:push
 ### Choosing a Model
 
 The app is configured to use `google/gemini-2.5-pro` by default. You can change this in `/app/api/chat/route.ts` to use any model available on OpenRouter, such as:
+
 - `openai/gpt-4o` - GPT-4o
 - `anthropic/claude-3.5-sonnet` - Claude 3.5 Sonnet
 - `meta-llama/llama-3.1-70b-instruct` - Llama 3.1 70B
@@ -83,6 +90,7 @@ The app is configured to use `google/gemini-2.5-pro` by default. You can change 
 ### Running the App
 
 Start the development server:
+
 ```bash
 npm run dev
 ```
@@ -116,7 +124,7 @@ The AI can take multiple turns to refine the artwork, viewing the current state 
 ## Project Structure
 
 ```
-artiste/
+guidenco/
 ├── app/
 │   ├── api/
 │   │   ├── auth/              # Authentication endpoints

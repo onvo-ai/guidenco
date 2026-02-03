@@ -10,7 +10,7 @@ export const maxDuration = 30;
 const tempDimensions = new Map<string, { width: number; height: number }>();
 const tempPageCounts = new Map<string, number>();
 
-const PAGE_BREAK = '\n<!-- ARTISTE_PAGE_BREAK -->\n';
+const PAGE_BREAK = '\n<!-- GUIDENCO_PAGE_BREAK -->\n';
 
 function splitPages(html: string): string[] {
   if (!html) return [''];

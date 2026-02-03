@@ -218,7 +218,7 @@ export function HTMLViewer({
     const blob = new Blob([fullHTML], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.download = `artiste-${Date.now()}.html`;
+    link.download = `guidenco-${Date.now()}.html`;
     link.href = url;
     link.click();
     URL.revokeObjectURL(url);
@@ -285,7 +285,7 @@ export function HTMLViewer({
         pdf.addImage(img.dataUrl, 'PNG', 0, 0, img.width, img.height);
       });
 
-      pdf.save(`artiste-${Date.now()}.pdf`);
+      pdf.save(`guidenco-${Date.now()}.pdf`);
       setExportStatus('success');
     } catch (error) {
       console.error('Error downloading PDF:', error);
@@ -337,7 +337,7 @@ export function HTMLViewer({
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(zipBlob);
       const link = document.createElement('a');
-      link.download = `artiste-${Date.now()}-png.zip`;
+      link.download = `guidenco-${Date.now()}-png.zip`;
       link.href = url;
       link.click();
       URL.revokeObjectURL(url);
@@ -385,7 +385,7 @@ export function HTMLViewer({
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(zipBlob);
       const link = document.createElement('a');
-      link.download = `artiste-${Date.now()}-svg.zip`;
+      link.download = `guidenco-${Date.now()}-svg.zip`;
       link.href = url;
       link.click();
       URL.revokeObjectURL(url);
@@ -427,7 +427,7 @@ export function HTMLViewer({
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.download = `artiste-${Date.now()}.png`;
+      link.download = `guidenco-${Date.now()}.png`;
       link.href = url;
       link.click();
       URL.revokeObjectURL(url);
@@ -456,7 +456,7 @@ export function HTMLViewer({
     const blob = new Blob([svgContent], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.download = `artiste-${Date.now()}.svg`;
+    link.download = `guidenco-${Date.now()}.svg`;
     link.href = url;
     link.click();
     URL.revokeObjectURL(url);

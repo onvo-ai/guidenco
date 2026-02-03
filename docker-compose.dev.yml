@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 # Environment: Use .env.docker file
 # Run with: docker compose -f docker-compose.dev.yml --env-file .env.docker up
@@ -12,7 +12,7 @@ services:
         POSTGRES_URL: ${POSTGRES_URL}
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-    container_name: artiste-app-dev
+    container_name: guidenco-app-dev
     env_file:
       - .env
     environment:

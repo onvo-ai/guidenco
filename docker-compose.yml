@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 # Environment: Use .env.docker file
 # Run with: docker compose --env-file .env.docker up
@@ -6,7 +6,7 @@ version: '3.8'
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: artiste-db
+    container_name: guidenco-db
     env_file:
       - .env
     environment:
@@ -23,7 +23,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - artiste-network
+      - guidenco-network
 
   app:
     build:
@@ -33,7 +33,7 @@ services:
         POSTGRES_URL: ${POSTGRES_URL}
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-    container_name: artiste-app
+    container_name: guidenco-app
     env_file:
       - .env
     depends_on:
@@ -51,7 +51,7 @@ services:
       - /app/node_modules
       - /app/.next
     networks:
-      - artiste-network
+      - guidenco-network
     restart: unless-stopped
 
 volumes:
@@ -59,5 +59,5 @@ volumes:
     driver: local
 
 networks:
-  artiste-network:
+  guidenco-network:
     driver: bridge

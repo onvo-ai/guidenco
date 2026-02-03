@@ -17,7 +17,7 @@ export default function LandingPage() {
     <div className="min-h-screen">
       <Navbar
         logo={<Palette className="h-6 w-6" />}
-        name="Artiste"
+        name="Guidenco"
         homeUrl="/"
         showNavigation={true}
         customNavigation={
@@ -125,7 +125,7 @@ export default function LandingPage() {
           plans={[
             {
               name: "Free",
-              description: "Perfect for trying out Artiste",
+              description: "Perfect for trying out Guidenco",
               price: 0,
               priceNote: "Free forever",
               cta: {
@@ -234,10 +234,10 @@ export default function LandingPage() {
           </h2>
           <div className="max-w-3xl space-y-4">
             <p className="text-muted-foreground text-lg sm:text-xl">
-              Join thousands of creators, designers, and marketers who are already using Artiste to bring their ideas to life. Whether you're creating social media graphics, banners, posters, or custom designs, our AI-powered platform makes it effortless.
+              Join thousands of creators, designers, and marketers who are already using Guidenco to bring their ideas to life. Whether you're creating social media graphics, banners, posters, or custom designs, our AI-powered platform makes it effortless.
             </p>
             <p className="text-muted-foreground text-base sm:text-lg">
-              Start creating for free today—no credit card required, no commitments. Experience the power of AI-driven design and see why creators love Artiste.
+              Start creating for free today—no credit card required, no commitments. Experience the power of AI-driven design and see why creators love Guidenco.
             </p>
           </div>
           <div className="flex justify-center gap-4">
@@ -254,7 +254,7 @@ export default function LandingPage() {
 
       <Footer
         logo={<Palette className="h-6 w-6" />}
-        name="Artiste"
+        name="Guidenco"
         columns={[
           {
             title: "Product",

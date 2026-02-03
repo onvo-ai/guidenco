@@ -18,7 +18,7 @@ export default function SignInPage() {
     return (
         <div className="flex items-center justify-center min-h-screen bg-zinc-50 dark:bg-zinc-950">
             <div className="w-full max-w-md p-8 bg-white dark:bg-zinc-900 rounded-lg shadow-lg relative">
-                <h1 className="text-2xl font-bold text-center mb-6">Sign In to Artiste</h1>
+                <h1 className="text-2xl font-bold text-center mb-6">Sign In to Guidenco</h1>
 
                 <SignInForm onSuccess={async () => {
                     setDebugInfo({ status: 'verifying', message: 'Sign in successful. Verifying session...' });

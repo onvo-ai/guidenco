@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 # Environment: Use .env.docker file
 # Run with: docker compose -f docker-compose.prod.yml --env-file .env.docker up
@@ -12,7 +12,7 @@ services:
         POSTGRES_URL: ${POSTGRES_URL}
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-    container_name: artiste-app-prod
+    container_name: guidenco-app-prod
     env_file:
       - ./.env
     environment:
@@ -23,9 +23,17 @@ services:
     ports:
       - 3000:3000
     restart: always
-    # healthcheck:
-    #   test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 40s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

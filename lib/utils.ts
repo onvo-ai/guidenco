@@ -5,7 +5,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-export const PAGE_BREAK = '\n<!-- ARTISTE_PAGE_BREAK -->\n';
+export const PAGE_BREAK = '\n<!-- GUIDENCO_PAGE_BREAK -->\n';
 
 export function splitPages(html: string): string[] {
   if (!html) return [''];

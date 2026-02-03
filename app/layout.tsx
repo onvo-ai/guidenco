@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Artiste - AI Digital Asset Creator",
+  title: "Guidenco - AI Digital Asset Creator",
   description: "Create digital assets using AI and HTML canvas",
 };
 
