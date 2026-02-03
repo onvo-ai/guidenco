@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { ChatInterface } from '@/components/chat-interface';
 import { HTMLViewer } from '@/components/html-viewer';
+import { CodeViewer } from '@/components/code-viewer';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Project } from '@/lib/types';
 
@@ -19,6 +20,7 @@ export default function ProjectPage() {
     currentVersion: -1,
   });
   const [resetKey, setResetKey] = useState(0);
+  const [showCode, setShowCode] = useState(false);
 
   // Load project by ID
   useEffect(() => {
@@ -50,12 +52,24 @@ export default function ProjectPage() {
       const response = await fetch(`/api/artwork?projectId=${projectId}`);
       if (response.ok) {
         const artwork = await response.json();
+        console.log('Loaded artwork:', artwork);
         setArtworkState({
           width: artwork.width,
           height: artwork.height,
           versions: artwork.versions || [],
           currentVersion: artwork.currentVersion,
         });
+      } else if (response.status === 404) {
+        console.log('No artwork found yet for project:', projectId);
+        // Initialize with default empty state
+        setArtworkState({
+          width: 800,
+          height: 600,
+          versions: [],
+          currentVersion: -1,
+        });
+      } else {
+        console.error('Failed to load artwork:', response.status, response.statusText);
       }
     } catch (error) {
       console.error('Error loading artwork:', error);
@@ -70,6 +84,8 @@ export default function ProjectPage() {
   const handleArtworkUpdate = async () => {
     // Reload artwork from API to get latest version with fonts
     if (params.id) {
+      // Add a small delay to ensure database transaction completes
+      await new Promise(resolve => setTimeout(resolve, 500));
       await loadArtwork(params.id as string);
     }
   };
@@ -84,21 +100,60 @@ export default function ProjectPage() {
 
   return (
     <ResizablePanelGroup direction="horizontal" className="flex-1">
-      {/* Chat Panel */}
+      {/* Left Panel: Chat or HTML Code */}
       <ResizablePanel defaultSize={50} minSize={30}>
-        <ChatInterface
-          key={resetKey}
-          projectId={currentProject.id}
-          selectedPageIndex={selectedPageIndex}
-          onArtworkUpdate={handleArtworkUpdate}
-        />
+        <div className="h-full flex flex-col overflow-hidden">
+          {/* View Toggle */}
+          <div className="flex justify-center h-14 items-center border-b bg-white dark:bg-zinc-950 shrink-0">
+            <div className="inline-flex items-center h-10 p-1 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
+              <button
+                onClick={() => setShowCode(false)}
+                className={`px-4 h-full text-sm font-medium rounded-md transition-all ${!showCode
+                  ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
+                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
+                  }`}
+              >
+                Chat
+              </button>
+              <button
+                onClick={() => setShowCode(true)}
+                className={`px-4 h-full text-sm font-medium rounded-md transition-all ${showCode
+                  ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
+                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
+                  }`}
+              >
+                Code
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-hidden">
+            {!showCode ? (
+              <ChatInterface
+                key={resetKey}
+                projectId={currentProject.id}
+                selectedPageIndex={selectedPageIndex}
+                onArtworkUpdate={handleArtworkUpdate}
+              />
+            ) : (
+              <div className="h-full">
+                <CodeViewer
+                  versions={artworkState.versions}
+                  currentVersion={artworkState.currentVersion}
+                  selectedPageIndex={selectedPageIndex}
+                  onSelectedPageIndexChange={setSelectedPageIndex}
+                />
+              </div>
+            )}
+          </div>
+        </div>
       </ResizablePanel>
 
       <ResizableHandle withHandle />
 
-      {/* Artwork Panel */}
+      {/* Right Panel: Preview (Always visible) */}
       <ResizablePanel defaultSize={50} minSize={30}>
-        <div className="h-full p-4">
+        <div className="h-full">
           <HTMLViewer
             width={artworkState.width}
             height={artworkState.height}

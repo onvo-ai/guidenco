@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Download, ZoomIn, ZoomOut, Maximize2, ChevronLeft, ChevronRight } from 'lucide-react';
 import Handlebars from 'handlebars';
 import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
+import { splitPages } from '@/lib/utils';
 import {
   Dialog,
   DialogContent,
@@ -29,14 +29,6 @@ interface HTMLViewerProps {
   currentVersion: number;
   selectedPageIndex: number;
   onSelectedPageIndexChange: (pageIndex: number) => void;
-}
-
-const PAGE_BREAK = '\n<!-- ARTISTE_PAGE_BREAK -->\n';
-
-function splitPages(html: string): string[] {
-  if (!html) return [''];
-  const parts = html.split(PAGE_BREAK);
-  return parts.length > 0 ? parts : [''];
 }
 
 export function HTMLViewer({
@@ -150,26 +142,35 @@ export function HTMLViewer({
   const buildFullHTML = (compiledHTML: string) => {
     return `
 <!DOCTYPE html>
-<html>
+<html style="background: transparent;">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   ${googleFontsLink}
   <style>
+    /* Ensure absolute transparency */
+    :root {
+      color-scheme: light dark;
+    }
     html, body {
       margin: 0;
       padding: 0;
-      overflow: hidden;
+      width: 100%;
+      height: 100%;
+      background: transparent !important;
+      background-color: transparent !important;
     }
     body {
       width: ${width}px;
       height: ${height}px;
+      overflow: hidden;
     }
   </style>
 </head>
-<body>
+<body style="background: transparent;">
   ${compiledHTML}
 </body>
 </html>
@@ -188,7 +189,7 @@ export function HTMLViewer({
 
     const fullHTML = `
 <!DOCTYPE html>
-<html>
+<html style="background: transparent !important;">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -201,10 +202,14 @@ export function HTMLViewer({
       padding: 0;
       width: ${width}px;
       height: ${height}px;
+      background: transparent !important;
+    }
+    html, body {
+      background: transparent !important;
     }
   </style>
 </head>
-<body>
+<body style="background: transparent !important;">
   ${compiledPages[selectedPageIndex] || ''}
 </body>
 </html>
@@ -465,6 +470,12 @@ export function HTMLViewer({
     if (viewingVersion < versions.length - 1) setViewingVersion((v) => v + 1);
   };
 
+  const handleZoomIn = () => setZoom((z) => Math.min(z * 1.2, 5));
+  const handleZoomOut = () => setZoom((z) => Math.max(z / 1.2, 0.1));
+  const handleResetZoom = () => {
+    setZoom(1);
+  };
+
   if (!template) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500">
@@ -473,14 +484,8 @@ export function HTMLViewer({
     );
   }
 
-  const handleZoomIn = () => setZoom((z) => Math.min(z * 1.2, 5));
-  const handleZoomOut = () => setZoom((z) => Math.max(z / 1.2, 0.1));
-  const handleResetZoom = () => {
-    setZoom(1);
-  };
-
   return (
-    <div className="flex flex-col gap-4 h-full">
+    <div className="h-full flex flex-col overflow-hidden">
       <Dialog
         open={exportModalOpen}
         onOpenChange={(open) => {
@@ -562,67 +567,103 @@ export function HTMLViewer({
         </DialogContent>
       </Dialog>
 
-      <Tabs
-        defaultValue="preview"
-        className="flex flex-col h-full"
-      >
-        <div className="flex items-center justify-between gap-4">
-          {/* Left: Tabs */}
-          <TabsList>
-            <TabsTrigger value="preview">Preview</TabsTrigger>
-            <TabsTrigger value="html">HTML</TabsTrigger>
-          </TabsList>
-
-          {/* Center: Scale selector and zoom controls */}
-          <div className="flex gap-4 items-center">
-            {/* Zoom controls */}
-            <div className="flex gap-2 items-center">
-              <Button size="sm" variant="outline" onClick={handleZoomOut}>
-                <ZoomOut className="h-4 w-4" />
-              </Button>
-              <span className="text-sm px-2 py-1 min-w-[60px] text-center">{Math.round(zoom * 100)}%</span>
-              <Button size="sm" variant="outline" onClick={handleZoomIn}>
-                <ZoomIn className="h-4 w-4" />
-              </Button>
-              <Button size="sm" variant="outline" onClick={handleResetZoom}>
-                <Maximize2 className="h-4 w-4" />
-              </Button>
-            </div>
+      <div className="flex items-center justify-between gap-4 h-14 px-3 border-b bg-white dark:bg-zinc-950 shrink-0">
+        {/* Left: Scale selector and zoom controls */}
+        <div className="flex gap-1.5 items-center">
+          <Button variant="outline" onClick={handleZoomOut} className="h-10 w-10 p-0">
+            <ZoomOut className="h-4 w-4" />
+          </Button>
+          <div className="h-10 flex items-center justify-center px-3 min-w-[64px] bg-background border rounded-md">
+            <span className="text-sm font-medium">{Math.round(zoom * 100)}%</span>
           </div>
-
-          {/* Right: Download dropdown */}
-          <div className="flex gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline">
-                  <Download className="h-4 w-4 mr-2" />
-                  Download
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={downloadPNG}>
-                  Download as PNG
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={downloadPDF}>
-                  Download as PDF
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={downloadSVG}>
-                  Download as SVG
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={downloadHTML}>
-                  Download as HTML
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+          <Button variant="outline" onClick={handleZoomIn} className="h-10 w-10 p-0">
+            <ZoomIn className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" onClick={handleResetZoom} className="h-10 w-10 p-0">
+            <Maximize2 className="h-4 w-4" />
+          </Button>
         </div>
 
-        <TabsContent value="preview" className="flex-1 mt-4 overflow-hidden flex flex-col gap-2">
+        {/* Center: Version timeline */}
+        <div className="flex-1 flex justify-center">
+          {versions.length > 1 && (
+            <div className="flex items-center gap-2 h-10 px-3 border rounded-lg bg-white dark:bg-zinc-900 shadow-sm">
+              <Button
+                variant="ghost"
+                onClick={handlePrevVersion}
+                disabled={!canGoPrev}
+                className="h-10 w-10 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+
+              <div className="flex items-center gap-1 px-1">
+                {versions.map((_, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setViewingVersion(idx)}
+                    className="relative group h-10 flex items-center px-0.5"
+                  >
+                    <div
+                      className={`w-1.5 h-1.5 rounded-full transition-all ${idx === viewingVersion
+                        ? 'bg-blue-600 scale-125'
+                        : 'bg-zinc-300 dark:bg-zinc-600 hover:bg-zinc-400'
+                        }`}
+                    />
+                  </button>
+                ))}
+              </div>
+
+              <Button
+                variant="ghost"
+                onClick={handleNextVersion}
+                disabled={!canGoNext}
+                className="h-10 w-10 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+
+              <span className="text-xs font-medium text-zinc-500 min-w-[45px] text-right">
+                v{viewingVersion + 1}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Right: Download dropdown */}
+        <div className="flex gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="h-10 px-4 gap-2">
+                <Download className="h-4 w-4" />
+                <span className="text-sm font-medium">Download</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={downloadPNG}>
+                Download as PNG
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={downloadPDF}>
+                Download as PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={downloadSVG}>
+                Download as SVG
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={downloadHTML}>
+                Download as HTML
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-hidden">
+        <div className="h-full flex flex-col">
           <div
             ref={containerRef}
-            className="flex-1 overflow-auto border rounded-lg bg-zinc-50 dark:bg-zinc-900 p-4"
+            className="flex-1 overflow-auto bg-zinc-50 dark:bg-zinc-900 p-8"
           >
-            <div className="flex flex-col gap-6 items-center" style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}>
+            <div className="flex flex-col items-center gap-8" style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}>
               {compiledPages.map((compiled, idx) => {
                 const isActive = idx === selectedPageIndex;
                 return (
@@ -630,91 +671,47 @@ export function HTMLViewer({
                     key={idx}
                     type="button"
                     onClick={() => onSelectedPageIndexChange(idx)}
-                    className={`border rounded-lg overflow-hidden bg-white text-left ${isActive ? 'ring-2 ring-blue-500 border-blue-400' : 'border-zinc-200 dark:border-zinc-700'
+                    className={`overflow-hidden text-left relative transition-all rounded-lg shadow-sm border ${isActive ? 'ring-2 ring-blue-500 ring-offset-2 border-blue-500 z-30' : 'border-zinc-200 dark:border-zinc-700 hover:border-zinc-300 dark:hover:border-zinc-600'
                       }`}
                     style={{ width: width }}
                   >
-                    <div className="px-3 py-2 text-xs text-zinc-600 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800">
-                      Page {idx + 1} / {compiledPages.length}
+                    <div
+                      className="px-3 py-1 text-[10px] font-medium text-zinc-700 dark:text-zinc-200 bg-zinc-100/90 dark:bg-zinc-800/90 backdrop-blur-sm absolute top-0 left-0 z-20 border-b border-r border-zinc-300/50 dark:border-zinc-600/50 rounded-br shadow-sm"
+                    >
+                      {idx + 1} / {compiledPages.length}
                     </div>
-                    <iframe
-                      title={`page-${idx + 1}`}
-                      width={width}
-                      height={height}
-                      className="bg-white"
+                    <div
+                      className="relative overflow-hidden"
                       style={{
-                        background: `
-                          repeating-conic-gradient(#e5e5e5 0% 25%, #ffffff 0% 50%) 
-                          50% / 20px 20px
-                        `,
-                        pointerEvents: 'none',
+                        width: width,
+                        height: height,
+                        backgroundColor: '#ffffff',
+                        backgroundImage: 'linear-gradient(45deg, #f0f0f0 25%, transparent 25%), linear-gradient(-45deg, #f0f0f0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f0f0f0 75%), linear-gradient(-45deg, transparent 75%, #f0f0f0 75%)',
+                        backgroundSize: '20px 20px',
+                        backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px'
                       }}
-                      srcDoc={buildFullHTML(compiled)}
-                    />
+                    >
+                      <iframe
+                        title={`page-${idx + 1}`}
+                        width={width}
+                        height={height}
+                        allowTransparency={true}
+                        className="relative z-10 border-none block"
+                        style={{
+                          pointerEvents: 'none',
+                          backgroundColor: 'transparent',
+                          background: 'transparent'
+                        }}
+                        srcDoc={buildFullHTML(compiled)}
+                      />
+                    </div>
                   </button>
                 );
               })}
             </div>
           </div>
-
-          {/* Version timeline */}
-          {versions.length > 1 && (
-            <div className="flex items-center justify-center gap-2 py-2 px-4 border rounded-lg bg-white dark:bg-zinc-900">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={handlePrevVersion}
-                disabled={!canGoPrev}
-                className="h-8 w-8 p-0"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-
-              <div className="flex items-center gap-1 px-2">
-                {versions.map((_, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => setViewingVersion(idx)}
-                    className="relative group"
-                  >
-                    <div
-                      className={`w-2 h-2 rounded-full transition-all ${idx === viewingVersion
-                        ? 'bg-blue-600 scale-125'
-                        : 'bg-zinc-300 dark:bg-zinc-600 hover:bg-zinc-400'
-                        }`}
-                    />
-                    {idx < versions.length - 1 && (
-                      <div className="absolute top-1/2 left-2 w-4 h-0.5 bg-zinc-200 dark:bg-zinc-700 -translate-y-1/2" />
-                    )}
-                  </button>
-                ))}
-              </div>
-
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={handleNextVersion}
-                disabled={!canGoNext}
-                className="h-8 w-8 p-0"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-
-              <span className="text-xs text-zinc-500 ml-2">
-                v{viewingVersion + 1} / {versions.length}
-              </span>
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="html" className="flex-1 mt-4 overflow-hidden">
-          <div className="h-full overflow-auto border rounded-lg bg-zinc-900 p-4">
-            <pre className="text-sm text-zinc-100 font-mono">
-              <code>{pageTemplate || '<!-- No template yet -->'}</code>
-            </pre>
-          </div>
-        </TabsContent>
-      </Tabs>
+        </div>
+      </div>
     </div>
   );
 }

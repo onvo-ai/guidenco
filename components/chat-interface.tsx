@@ -17,7 +17,11 @@ interface ChatInterfaceProps {
   onArtworkUpdate: () => void;
 }
 
-export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }: ChatInterfaceProps) {
+export function ChatInterface({
+  projectId,
+  selectedPageIndex,
+  onArtworkUpdate,
+}: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [attachedImages, setAttachedImages] = useState<Array<{ url: string; file: File }>>([]);
   const [initialMessages, setInitialMessages] = useState<any[]>([]);
@@ -27,13 +31,14 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const transport = useMemo(
     () => new DefaultChatTransport({ api: `/api/chat?projectId=${projectId}&pageIndex=${selectedPageIndex}` }),
     [projectId, selectedPageIndex]
   );
 
-  const { messages, sendMessage, status, setMessages } = useChat({
+  const { messages, sendMessage, status, setMessages, stop } = useChat({
     transport,
   });
 
@@ -57,7 +62,8 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
   }, [projectId, setMessages]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const isLoading = status === 'submitted' && !hasStalled;
+  // Show loading when status is submitted OR when there are streaming messages being processed
+  const isLoading = (status === 'submitted' || status === 'streaming') && !hasStalled;
 
   const appendAssistantError = (text: string) => {
     setMessages((prev: any[]) => [
@@ -71,7 +77,7 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
   };
 
   useEffect(() => {
-    if (status !== 'submitted') {
+    if (status !== 'submitted' && status !== 'streaming') {
       setHasStalled(false);
       if (stallTimerRef.current) {
         clearTimeout(stallTimerRef.current);
@@ -132,6 +138,12 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
           version = output.version ?? version;
           totalVersions = output.totalVersions ?? totalVersions;
           // Also get dimensions if provided
+          if (output.width) artworkWidth = output.width;
+          if (output.height) artworkHeight = output.height;
+        } else if (toolPart.type === 'tool-editHTML' && output) {
+          // editHTML also updates the artwork
+          version = output.version ?? version;
+          totalVersions = output.totalVersions ?? totalVersions;
           if (output.width) artworkWidth = output.width;
           if (output.height) artworkHeight = output.height;
         } else if (toolPart.type === 'tool-writePagesHTML' && output) {
@@ -207,7 +219,23 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!input.trim() && attachedImages.length === 0) || isLoading) return;
+    if (!input.trim() && attachedImages.length === 0) return;
+
+    // If currently loading, stop the current request first
+    if (isLoading) {
+      console.log('Cancelling current request...');
+      stop();
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      setHasStalled(false);
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
+      }
+      // Small delay to ensure cancellation completes
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
 
     const parts: any[] = [];
 
@@ -252,22 +280,70 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
 
     // Send message
     try {
+      abortControllerRef.current = new AbortController();
       await sendMessage({ role: 'user', parts });
     } catch (error) {
       console.error('Error sending message:', error);
       const message = error instanceof Error ? error.message : 'Request failed.';
-      appendAssistantError(`Request failed: ${message}`);
-      setHasStalled(true);
+      if (message !== 'Request aborted') {
+        appendAssistantError(`Request failed: ${message}`);
+        setHasStalled(true);
+      }
+    } finally {
+      abortControllerRef.current = null;
     }
 
     // Cleanup image URLs
     imagesToCleanup.forEach(img => URL.revokeObjectURL(img.url));
   };
 
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      Array.from(files).forEach((file) => {
+        if (file.type.startsWith('image/')) {
+          const url = URL.createObjectURL(file);
+          setAttachedImages((prev) => [...prev, { url, file }]);
+        }
+      });
+    }
+  };
+
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div
+      className="flex flex-col h-full overflow-hidden relative"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragging && (
+        <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center backdrop-blur-[2px] pointer-events-none">
+          <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl shadow-xl flex flex-col items-center gap-2">
+            <ImageIcon className="h-8 w-8 text-blue-500 animate-bounce" />
+            <p className="text-sm font-medium">Drop images to upload</p>
+          </div>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto p-4" ref={scrollRef}>
-        <div className="space-y-4 max-w-3xl mx-auto">
+        <div className="space-y-4 mx-auto">
           {messages.length === 0 && (
             <div className="text-center text-zinc-500 py-12">
               <h2 className="text-2xl font-semibold mb-2">Create Digital Assets with AI</h2>
@@ -302,7 +378,23 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
                           }`;
                       }
                     } else if (toolName === 'writeHTML') {
-                      displayMessage = output?.message || 'Writing HTML...';
+                      const pageIndex = output?.pageIndex;
+                      const pageCount = output?.pageCount;
+                      const version = output?.version;
+                      if (typeof pageIndex === 'number' && typeof pageCount === 'number' && pageCount > 1) {
+                        displayMessage = `HTML updated successfully for page ${pageIndex + 1} ${typeof version === 'number' ? ` (Version ${version + 1})` : ''}`;
+                      } else {
+                        displayMessage = output?.message || 'Writing HTML...';
+                      }
+                    } else if (toolName === 'editHTML') {
+                      const pageIndex = output?.pageIndex;
+                      const pageCount = output?.pageCount;
+                      const version = output?.version;
+                      if (typeof pageIndex === 'number' && typeof pageCount === 'number' && pageCount > 1) {
+                        displayMessage = `HTML edited successfully for page ${pageIndex + 1} ${typeof version === 'number' ? ` (Version ${version + 1})` : ''}`;
+                      } else {
+                        displayMessage = output?.message || 'Editing HTML...';
+                      }
                     } else if (toolName === 'writePagesHTML') {
                       const pageCount = output?.pageCount;
                       if (typeof pageCount === 'number') {
@@ -335,13 +427,17 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
                         displayMessage = 'Searching for images...';
                       }
                     } else if (toolName === 'getArtworkState') {
-                      const requestedPageIndex =
-                        typeof input?.pageIndex === 'number'
-                          ? input.pageIndex
-                          : typeof part.args?.pageIndex === 'number'
-                            ? part.args.pageIndex
-                            : selectedPageIndex;
-                      displayMessage = `Inspecting current artwork (page ${requestedPageIndex + 1})`;
+                      // Use the actual pageIndex from the output (what was actually inspected)
+                      // Fall back to input if output doesn't have it
+                      const actualPageIndex =
+                        typeof output?.pageIndex === 'number'
+                          ? output.pageIndex
+                          : typeof input?.pageIndex === 'number'
+                            ? input.pageIndex
+                            : typeof part.args?.pageIndex === 'number'
+                              ? part.args.pageIndex
+                              : selectedPageIndex;
+                      displayMessage = `Inspecting current artwork (page ${actualPageIndex + 1})`;
                     }
 
                     const hasImage = toolName === 'getArtworkState' && output?.image;
@@ -358,6 +454,7 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
                             <span>
                               {toolName === 'createArtwork' && '🎨'}
                               {toolName === 'writeHTML' && '✏️'}
+                              {toolName === 'editHTML' && '🔧'}
                               {toolName === 'writePagesHTML' && '✏️'}
                               {toolName === 'getArtworkState' && '👁️'}
                               {toolName === 'createPage' && '📄'}
@@ -458,8 +555,9 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
 
           {isLoading && (
             <div className="flex justify-start">
-              <div className="bg-zinc-100 dark:bg-zinc-800 rounded-lg px-4 py-2">
+              <div className="bg-zinc-100 dark:bg-zinc-800 rounded-lg px-4 py-2 flex items-center gap-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-xs text-zinc-600 dark:text-zinc-400">AI is working...</span>
               </div>
             </div>
           )}
@@ -467,7 +565,7 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
       </div>
 
       <div className="border-t p-4">
-        <div className="max-w-3xl mx-auto space-y-2">
+        <div className="mx-auto space-y-1">
           {/* Image previews */}
           {attachedImages.length > 0 && (
             <div className="flex gap-2 flex-wrap">
@@ -505,9 +603,9 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
               size="icon"
               onClick={() => fileInputRef.current?.click()}
               disabled={isLoading}
-              className="mb-0.5"
+              className="h-11 w-11 shrink-0"
             >
-              <ImageIcon className="h-4 w-4" />
+              <ImageIcon className="h-5 w-5" />
             </Button>
             <Textarea
               ref={textareaRef}
@@ -516,7 +614,7 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
               onKeyDown={handleKeyDown}
               placeholder="Ask me to create something... (Shift+Enter for new line)"
               disabled={isLoading}
-              className="flex-1 min-h-[44px] max-h-[200px] resize-none overflow-y-auto"
+              className="flex-1 min-h-[44px] h-[44px] max-h-[200px] resize-none overflow-y-auto py-3"
               rows={1}
               autoComplete="off"
               data-1p-ignore
@@ -524,11 +622,12 @@ export function ChatInterface({ projectId, selectedPageIndex, onArtworkUpdate }:
             />
             <Button
               type="submit"
-              disabled={isLoading || (!input.trim() && attachedImages.length === 0)}
+              disabled={!input.trim() && attachedImages.length === 0}
               size="icon"
-              className="mb-0.5"
+              className="h-11 w-11 shrink-0"
+              title={isLoading ? 'Send (will cancel current request)' : 'Send message'}
             >
-              <Send className="h-4 w-4" />
+              <Send className="h-5 w-5" />
             </Button>
           </form>
         </div>

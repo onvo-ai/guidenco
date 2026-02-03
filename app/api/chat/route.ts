@@ -2,6 +2,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { streamText, convertToModelMessages, UIMessage, tool, stepCountIs } from 'ai';
 import { z } from 'zod';
 import { createOrUpdateArtwork, getProjectArtwork, getProjectMessages, saveMessage } from '@/lib/db/projects-service';
+import { resizeImage } from '@/lib/image-processing';
 
 export const maxDuration = 30;
 
@@ -52,16 +53,24 @@ export async function POST(req: Request) {
   const modelId = (process.env.OPENROUTER_MODEL || '').trim() || 'google/gemini-2.5-pro';
 
   // Manually convert messages to handle images properly
-  const convertedMessages = messages.map((msg: any) => {
+  const convertedMessages = await Promise.all(messages.map(async (msg: any) => {
     const content: any[] = [];
 
     for (const part of msg.parts || []) {
       if (part.type === 'text') {
         content.push({ type: 'text', text: part.text });
       } else if (part.type === 'image') {
+        let imageContent = part.image;
+        try {
+          // Resize uploaded images to save tokens
+          imageContent = await resizeImage(part.image);
+        } catch (e) {
+          console.error('Failed to resize uploaded image:', e);
+        }
+
         content.push({
           type: 'image',
-          image: part.image,
+          image: imageContent,
           mimeType: part.mimeType || 'image/png'
         });
       }
@@ -71,7 +80,7 @@ export async function POST(req: Request) {
       role: msg.role,
       content: content.length > 0 ? content : [{ type: 'text', text: '' }]
     };
-  });
+  }));
 
   const result = streamText({
     model: openrouter(modelId),
@@ -87,8 +96,9 @@ You have access to tools to:
 1. Create an artwork with specific dimensions (container size) and number of pages
 2. Write HTML with Tailwind CSS classes, FontAwesome icons, and Google Fonts (optionally targeting a specific page)
    - For multi-page initial creation, you can write ALL pages at once in a single version using writePagesHTML.
-3. Create/delete pages
-4. View the current artwork state (optionally for a specific page) - this returns BOTH the HTML code AND a rendered image of what it looks like
+3. Make surgical edits to existing HTML by finding and replacing specific parts (editHTML)
+4. Create/delete pages
+5. View the current artwork state (optionally for a specific page) - this returns BOTH the HTML code AND a rendered image of what it looks like
 
 When a user asks you to create something:
 1. First, create an artwork with appropriate dimensions using the createArtwork tool (ONLY call this once per artwork)
@@ -112,9 +122,14 @@ When a user asks you to create something:
 When a user asks you to UPDATE or MODIFY existing artwork:
 - DO NOT call createArtwork again - this will reset the version history
 - First, call getArtworkState (with pageIndex if relevant) to see the current HTML AND the rendered image
-- Then call writeHTML with the updated HTML (with pageIndex if relevant)
-- After writing, call getArtworkState again (with pageIndex if relevant) to verify the changes
-- Each writeHTML call creates a new version automatically
+- For SMALL, TARGETED changes (like changing colors, text, or specific elements):
+  * Use editHTML to make surgical edits by finding and replacing specific parts
+  * This is more efficient and preserves the rest of the code
+  * Example: changing a button color, updating text, modifying a single element
+- For LARGE changes or complete redesigns:
+  * Use writeHTML to rewrite the entire page
+- After editing, call getArtworkState again (with pageIndex if relevant) to verify the changes
+- Each editHTML or writeHTML call creates a new version automatically
 
 Guidelines:
 - Use Tailwind CSS utility classes for all styling (e.g., bg-blue-500, text-white, rounded-lg, flex, etc.)
@@ -122,10 +137,20 @@ Guidelines:
 - Create responsive, modern designs with proper spacing and colors
 - The HTML will be rendered in a container, so use relative units and flexbox/grid for layouts
 - You can use any Tailwind classes and FontAwesome icons
-- IMPORTANT: Each time you call writeHTML, write the COMPLETE HTML from scratch. It will replace the previous version, not append to it.
-- When updating designs, rewrite the entire HTML with all the improvements, don't just add fragments.
+- IMPORTANT: For writeHTML, write the COMPLETE HTML from scratch. It will replace the previous version, not append to it.
+- For small updates, prefer editHTML over writeHTML to make targeted changes without rewriting everything.
+- Use writeHTML for initial creation or major redesigns, use editHTML for tweaks and modifications.
 - You can search for images using the searchImage tool and use the returned URLs in <img> tags
 - Choose dimensions that match the desired output size (e.g., 800x600 for a web banner, 1080x1080 for social media)
+
+CRITICAL COMMUNICATION RULES:
+- ALWAYS provide a text response after using tools to explain what you did and the result
+- After calling createArtwork, explain what you created
+- After calling writeHTML or editHTML, describe the changes you made
+- After calling getArtworkState, comment on what you see in the rendered image
+- Never end your response with just tool calls - always add explanatory text
+- Be conversational and helpful - let the user know you've completed their request
+- If you made changes, briefly describe what changed and why
 
 Always use the tools to create the artwork. The user will see the visual output in real-time.`,
     tools: {
@@ -220,9 +245,15 @@ Always use the tools to create the artwork. The user will see the visual output 
             const storedPages = splitPages(htmlToStore);
             const resolvedPageIndex = typeof pageIndex === 'number' ? clampPageIndex(pageIndex, storedPages.length) : 0;
 
+            // Create message with page info if editing a specific page
+            let message = `HTML updated successfully (Version ${currentVersion + 1})`;
+            if (typeof pageIndex === 'number' && storedPages.length > 1) {
+              message = `HTML updated successfully for page ${resolvedPageIndex + 1} of ${storedPages.length} (Version ${currentVersion + 1})`;
+            }
+
             return {
               success: true,
-              message: `HTML updated successfully (Version ${currentVersion + 1})`,
+              message,
               html: typeof pageIndex === 'number' ? storedPages[resolvedPageIndex] : htmlToStore,
               version: currentVersion,
               totalVersions,
@@ -236,6 +267,98 @@ Always use the tools to create the artwork. The user will see the visual output 
             return {
               success: false,
               error: `Failed to write HTML: ${error.message}`,
+            };
+          }
+        },
+      }),
+      editHTML: tool({
+        description: 'Make surgical edits to existing HTML by finding and replacing specific parts. Use this for targeted changes like updating text, colors, or specific elements without rewriting the entire page. More efficient than writeHTML for small changes.',
+        inputSchema: z.object({
+          findString: z.string().describe('The exact HTML string to find and replace. Must be unique in the page. Include enough context to make it unique.'),
+          replaceString: z.string().describe('The new HTML string to replace it with.'),
+          pageIndex: z.number().int().min(0).optional().describe('If provided, edits only this page (0-based index). Otherwise edits the currently selected page.'),
+        }),
+        execute: async ({
+          findString,
+          replaceString,
+          pageIndex,
+        }: {
+          findString: string;
+          replaceString: string;
+          pageIndex?: number;
+        }) => {
+          try {
+            const artwork = await getProjectArtwork(projectId);
+            if (!artwork) {
+              return {
+                success: false,
+                error: 'No artwork exists. Please create an artwork first using createArtwork.',
+              };
+            }
+
+            const currentHTML = artwork.versions[artwork.currentVersion]?.html || '';
+            const currentFonts = artwork.versions[artwork.currentVersion]?.googleFonts || [];
+            const pages = splitPages(currentHTML);
+
+            // Determine which page to edit
+            const targetPageIndex = typeof pageIndex === 'number'
+              ? clampPageIndex(pageIndex, pages.length)
+              : clampPageIndex(defaultSelectedPageIndex, pages.length);
+
+            const pageHTML = pages[targetPageIndex] || '';
+
+            // Check if findString exists in the page
+            if (!pageHTML.includes(findString)) {
+              return {
+                success: false,
+                error: `Could not find the specified string in page ${targetPageIndex + 1}. Make sure the findString exactly matches the HTML you want to replace.`,
+              };
+            }
+
+            // Check if findString appears multiple times
+            const occurrences = pageHTML.split(findString).length - 1;
+            if (occurrences > 1) {
+              return {
+                success: false,
+                error: `The findString appears ${occurrences} times in the page. Please provide a more specific string that appears only once.`,
+              };
+            }
+
+            // Perform the replacement
+            const updatedPageHTML = pageHTML.replace(findString, replaceString);
+            pages[targetPageIndex] = updatedPageHTML;
+            const htmlToStore = joinPages(pages);
+
+            // Save to database
+            const { currentVersion, totalVersions } = await createOrUpdateArtwork(
+              projectId,
+              artwork.width,
+              artwork.height,
+              htmlToStore,
+              currentFonts
+            );
+
+            // Create message with page info
+            let message = `HTML edited successfully (Version ${currentVersion + 1})`;
+            if (pages.length > 1) {
+              message = `HTML edited successfully for page ${targetPageIndex + 1} of ${pages.length} (Version ${currentVersion + 1})`;
+            }
+
+            return {
+              success: true,
+              message,
+              version: currentVersion,
+              totalVersions,
+              width: artwork.width,
+              height: artwork.height,
+              pageCount: pages.length,
+              pageIndex: targetPageIndex,
+            };
+          } catch (error: any) {
+            console.error('Error in editHTML:', error);
+            return {
+              success: false,
+              error: `Failed to edit HTML: ${error.message}`,
             };
           }
         },
@@ -455,6 +578,16 @@ Always use the tools to create the artwork. The user will see the visual output 
               if (renderResponse.ok) {
                 const renderData = await renderResponse.json();
                 imageData = renderData.image;
+
+                // Resize rendered image to save tokens
+                if (imageData) {
+                  try {
+                    imageData = await resizeImage(imageData);
+                  } catch (e) {
+                    console.error('Failed to resize artwork state image:', e);
+                  }
+                }
+
                 console.log('🖼️ Image rendered for LLM:', imageData ? `${imageData.substring(0, 50)}...` : 'null');
               } else {
                 console.error('Failed to render image:', await renderResponse.text());

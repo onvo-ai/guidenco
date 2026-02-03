@@ -114,6 +114,7 @@ export async function POST(req: Request) {
     const screenshot = await page.screenshot({
       type: "png",
       encoding: format === "base64" ? "base64" : "binary",
+      omitBackground: true,
     });
 
     await browser.close();
