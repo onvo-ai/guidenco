@@ -77,8 +77,8 @@ COPY --from=builder --chown=65532:65532 /app/package.json ./package.json
 EXPOSE 3000
 
 # Health check using wget (distroless base includes wget)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["/nodejs/bin/node", "-e", "require('http').get('http://localhost:3000', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"] || exit 1
+# HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+#  CMD ["/nodejs/bin/node", "-e", "require('http').get('http://localhost:3000', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"] || exit 1
 
 # Runtime command - distroless uses nonroot user by default (UID 65532)
 # User is already set to nonroot in the base image
