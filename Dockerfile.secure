@@ -1,19 +1,20 @@
 # Multi-stage build for maximum security and minimal image size
-# Stage 1: Dependencies builder
-FROM node:20-alpine AS deps
+# Stage 1: Dependencies builder - Use Debian slim for better native module support
+FROM node:20-bookworm-slim AS deps
 
 WORKDIR /app
 
 # Install build dependencies for native modules (canvas, etc.)
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
     g++ \
-    cairo-dev \
-    jpeg-dev \
-    pango-dev \
-    giflib-dev \
-    ca-certificates
+    libcairo2-dev \
+    libjpeg-dev \
+    libpango1.0-dev \
+    libgif-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Copy only dependency files
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
@@ -21,8 +22,8 @@ COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 # Install dependencies with security audit
 RUN npm ci --audit-level=moderate && npm cache clean --force
 
-# Stage 2: Builder
-FROM node:20-alpine AS builder
+# Stage 2: Builder - Use Debian slim for consistency
+FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
