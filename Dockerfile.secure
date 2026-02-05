@@ -1,0 +1,73 @@
+# Multi-stage build for maximum security and minimal image size
+# Stage 1: Dependencies builder
+FROM node:20-alpine AS deps
+
+WORKDIR /app
+
+# Copy only dependency files
+COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
+
+# Install dependencies with security audit
+RUN npm ci --audit-level=moderate && npm cache clean --force
+
+# Stage 2: Builder
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Build arguments
+ARG POSTGRES_URL
+ARG NEXT_PUBLIC_APP_URL
+ARG BETTER_AUTH_SECRET
+
+# Set environment variables
+ENV POSTGRES_URL=${POSTGRES_URL}
+ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
+ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+ENV NODE_ENV=production
+ENV NODE_OPTIONS="--max-old-space-size=1024"
+
+# Copy dependencies from deps stage
+COPY --from=deps /app/node_modules ./node_modules
+
+# Copy package files
+COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
+
+# Copy source code
+COPY . .
+
+# Build the Next.js application
+RUN npm run build && npm prune --production && npm cache clean --force
+
+# Stage 3: Runtime (Distroless - minimal attack surface)
+FROM gcr.io/distroless/nodejs20-debian12:nonroot
+
+WORKDIR /app
+
+# Metadata labels
+LABEL maintainer="guidenco"
+LABEL description="Secure Next.js application with distroless base image"
+LABEL security.distroless="true"
+LABEL security.nonroot="true"
+
+# Set production environment
+ENV NODE_ENV=production
+ENV NODE_OPTIONS="--max-old-space-size=512"
+
+# Copy application files from builder with explicit ownership
+# Distroless uses nonroot user (UID 65532)
+COPY --from=builder --chown=65532:65532 /app/.next ./.next
+COPY --from=builder --chown=65532:65532 /app/public ./public
+COPY --from=builder --chown=65532:65532 /app/node_modules ./node_modules
+COPY --from=builder --chown=65532:65532 /app/package.json ./package.json
+
+# Expose port
+EXPOSE 3000
+
+# Health check using wget (distroless base includes wget)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["/nodejs/bin/node", "-e", "require('http').get('http://localhost:3000', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"] || exit 1
+
+# Runtime command - distroless uses nonroot user by default (UID 65532)
+# User is already set to nonroot in the base image
+CMD ["node_modules/.bin/next", "start"]
