@@ -1,19 +1,16 @@
-# Build stage
+# syntax=docker/dockerfile:1.6
+# ============================================================================
+# HARDENED DOCKERFILE FOR PRODUCTION
+# ============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Builder - Install dependencies and build the application
+# -----------------------------------------------------------------------------
 FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Accept build arguments for environment variables
-ARG POSTGRES_URL
-ARG NEXT_PUBLIC_APP_URL
-ARG BETTER_AUTH_SECRET
-
-# Set environment variables for build
-ENV POSTGRES_URL=${POSTGRES_URL}
-ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
-ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
-
-# Install build dependencies for native modules
+# Install build dependencies for native modules (canvas, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     build-essential \
@@ -21,58 +18,109 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg-dev \
     libpango1.0-dev \
     libgif-dev \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && apt-get clean
 
-# Copy package files
+# Copy only dependency files for better layer caching
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
-# Install all dependencies (including dev)
-ENV NODE_ENV=development
-RUN npm ci
+# Install all dependencies (need devDependencies for build)
+RUN npm ci && \
+    npm audit --audit-level=moderate || true
+
+# Accept build arguments
+ARG POSTGRES_URL
+ARG NEXT_PUBLIC_APP_URL
+ARG BETTER_AUTH_SECRET
+
+# Set environment variables for build
+ENV POSTGRES_URL=${POSTGRES_URL} \
+    NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL} \
+    BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET} \
+    NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    NODE_OPTIONS="--max-old-space-size=1024"
 
 # Copy source code
 COPY . .
 
-# Build the Next.js application
-ENV NODE_ENV=production
+# Build the application
 RUN npm run build
 
-# Prune dev dependencies to reduce image size
-RUN npm prune --production
+# Prune dev dependencies and clean up
+RUN npm prune --production && \
+    npm cache clean --force && \
+    rm -rf .git .gitignore .env* *.md docs/ scripts/ tests/ __tests__/
 
-# Production stage
-FROM node:20-slim
+# -----------------------------------------------------------------------------
+# Stage 2: Production Runtime - Minimal secure image
+# -----------------------------------------------------------------------------
+FROM node:20-slim AS runner
+
+# Metadata labels (OCI standard)
+LABEL org.opencontainers.image.title="Guidenco" \
+      org.opencontainers.image.description="Secure Next.js application" \
+      org.opencontainers.image.vendor="onvo-ai" \
+      org.opencontainers.image.source="https://github.com/onvo-ai/guidenco" \
+      security.hardened="true"
 
 WORKDIR /app
 
-# Install only runtime dependencies for canvas libraries
+# Install only runtime dependencies + security hardening
 RUN apt-get update && apt-get install -y --no-install-recommends \
     dumb-init \
     libcairo2 \
     libjpeg62-turbo \
     libpango-1.0-0 \
     libgif7 \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && apt-get clean \
+    # Remove unnecessary utilities that could be exploited
+    && rm -rf /usr/bin/apt* /usr/bin/dpkg* /usr/bin/wget /usr/bin/curl 2>/dev/null || true \
+    # Remove shell access for added security (comment out if debugging needed)
+    # && rm -rf /bin/sh /bin/bash 2>/dev/null || true \
+    # Set restrictive umask
+    && echo "umask 027" >> /etc/profile
 
-# Copy package files
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
+# Create non-root user with specific UID/GID (no home directory, no shell)
+RUN groupadd --gid 1001 nextjs && \
+    useradd --uid 1001 --gid 1001 --no-create-home --shell /usr/sbin/nologin nextjs
 
-# Copy pre-built node_modules from builder
-COPY --from=builder /app/node_modules ./node_modules
+# Copy built application with proper ownership
+COPY --from=builder --chown=nextjs:nextjs /app/package.json ./package.json
+COPY --from=builder --chown=nextjs:nextjs /app/node_modules ./node_modules
+COPY --from=builder --chown=nextjs:nextjs /app/.next ./.next
+COPY --from=builder --chown=nextjs:nextjs /app/public ./public
 
-# Copy built application from builder
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
+# Set file permissions (readable/executable for user and group)
+RUN chmod -R 550 /app && \
+    # Create and set permissions for Next.js cache directory (writable)
+    mkdir -p /app/.next/cache && \
+    chmod -R 770 /app/.next/cache && \
+    chown -R nextjs:nextjs /app/.next/cache
 
-# Create non-root user for security
-RUN useradd -m -u 1001 nextjs
+# Production environment variables
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    NODE_OPTIONS="--max-old-space-size=512 --no-experimental-fetch"
 
-USER nextjs
+# Drop all capabilities except what's needed
+# Note: This requires --cap-drop=ALL --cap-add=... at runtime
 
+# Switch to non-root user
+USER nextjs:nextjs
+
+# Expose port (non-privileged)
 EXPOSE 3000
 
-# Use dumb-init to properly handle signals
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD node -e "require('http').get('http://localhost:3000/api/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))" || exit 1
+
+# Use dumb-init to properly handle signals (PID 1 zombie reaping)
 ENTRYPOINT ["dumb-init", "--"]
 
-# Start the Next.js application
-CMD ["npm", "start"]
+# Start the application using next directly (more secure than npm)
+CMD ["node", "node_modules/.bin/next", "start"]
