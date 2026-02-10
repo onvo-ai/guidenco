@@ -9,15 +9,9 @@ services:
       context: .
       dockerfile: Dockerfile.secure
       args:
-        COOLIFY_URL: ${COOLIFY_URL}
-        COOLIFY_FQDN: ${COOLIFY_FQDN}
-        NODE_ENV: ${NODE_ENV}
         POSTGRES_URL: ${POSTGRES_URL}
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-        SERVICE_URL_APP: ${SERVICE_URL_APP}
-        SERVICE_FQDN_APP: ${SERVICE_FQDN_APP}
-        COOLIFY_BUILD_SECRETS_HASH: ${COOLIFY_BUILD_SECRETS_HASH}
     container_name: guidenco-app-prod
     env_file:
       - ./.env
