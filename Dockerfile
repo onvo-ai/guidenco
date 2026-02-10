@@ -30,9 +30,15 @@ RUN npm ci && \
     npm audit --audit-level=moderate || true
 
 # Accept build arguments
+ARG COOLIFY_URL
+ARG COOLIFY_FQDN
+ARG NODE_ENV
 ARG POSTGRES_URL
 ARG NEXT_PUBLIC_APP_URL
 ARG BETTER_AUTH_SECRET
+ARG SERVICE_URL_APP
+ARG SERVICE_FQDN_APP
+ARG COOLIFY_BUILD_SECRETS_HASH
 
 # Set environment variables for build
 ENV POSTGRES_URL=${POSTGRES_URL} \
@@ -48,11 +54,6 @@ COPY . .
 # Build the application
 RUN npm run build
 
-# Prune dev dependencies and clean up
-RUN npm prune --production && \
-    npm cache clean --force && \
-    rm -rf .git .gitignore .env* *.md docs/ scripts/ tests/ __tests__/
-
 # -----------------------------------------------------------------------------
 # Stage 2: Production Runtime - Minimal secure image
 # -----------------------------------------------------------------------------
@@ -60,10 +61,10 @@ FROM node:20-slim AS runner
 
 # Metadata labels (OCI standard)
 LABEL org.opencontainers.image.title="Guidenco" \
-      org.opencontainers.image.description="Secure Next.js application" \
-      org.opencontainers.image.vendor="onvo-ai" \
-      org.opencontainers.image.source="https://github.com/onvo-ai/guidenco" \
-      security.hardened="true"
+    org.opencontainers.image.description="Secure Next.js application" \
+    org.opencontainers.image.vendor="onvo-ai" \
+    org.opencontainers.image.source="https://github.com/onvo-ai/guidenco" \
+    security.hardened="true"
 
 WORKDIR /app
 
@@ -88,18 +89,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd --gid 1001 nextjs && \
     useradd --uid 1001 --gid 1001 --no-create-home --shell /usr/sbin/nologin nextjs
 
-# Copy built application with proper ownership
-COPY --from=builder --chown=nextjs:nextjs /app/package.json ./package.json
-COPY --from=builder --chown=nextjs:nextjs /app/node_modules ./node_modules
-COPY --from=builder --chown=nextjs:nextjs /app/.next ./.next
-COPY --from=builder --chown=nextjs:nextjs /app/public ./public
+# Copy built application with proper ownership (using standalone output)
+# Copy standalone build
+COPY --from=builder --chown=nextjs:nextjs /app/.next/standalone /app/.next/standalone
+COPY --from=builder --chown=nextjs:nextjs /app/.next/static /app/.next/static
+COPY --from=builder --chown=nextjs:nextjs /app/public /app/public
 
 # Set file permissions (readable/executable for user and group)
-RUN chmod -R 550 /app && \
-    # Create and set permissions for Next.js cache directory (writable)
-    mkdir -p /app/.next/cache && \
-    chmod -R 770 /app/.next/cache && \
-    chown -R nextjs:nextjs /app/.next/cache
+RUN mkdir -p /app/.next/cache /tmp \
+    && chown -R nextjs:nextjs /app /tmp \
+    && chmod -R 750 /app \
+    && chmod -R 770 /app/.next/cache
 
 # Production environment variables
 ENV NODE_ENV=production \
@@ -122,5 +122,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # Use dumb-init to properly handle signals (PID 1 zombie reaping)
 ENTRYPOINT ["dumb-init", "--"]
 
-# Start the application using next directly (more secure than npm)
-CMD ["node", "node_modules/.bin/next", "start"]
+# Start the application using the standalone server
+CMD ["node", ".next/standalone/server.js"]
