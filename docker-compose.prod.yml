@@ -1,7 +1,14 @@
 version: "3.8"
 
-# Environment: Use .env.docker file
-# Run with: docker compose -f docker-compose.prod.yml --env-file .env.docker up
+# ============================================================================
+# PRODUCTION DOCKER COMPOSE - Secure Configuration
+# ============================================================================
+# Usage:
+#   docker compose -f docker-compose.prod.yml up --build
+#
+# Secrets are loaded from .env file at RUNTIME (not baked into image)
+# Only NEXT_PUBLIC_* vars are passed as build args (they're public anyway)
+# ============================================================================
 
 services:
   app:
@@ -9,31 +16,21 @@ services:
       context: .
       dockerfile: Dockerfile.secure
       args:
-        POSTGRES_URL: ${POSTGRES_URL}
+        # Only public env vars needed at build time (embedded in JS bundle)
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
     container_name: guidenco-app-prod
+    # ✅ Secrets loaded at runtime from env file (not in image layers)
     env_file:
       - ./.env
-    environment:
-      NODE_ENV: ${NODE_ENV}
-      POSTGRES_URL: ${POSTGRES_URL}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
     ports:
       - 3000:3000
     restart: always
-    # healthcheck:
-    #   test:
-    #     [
-    #       "CMD",
-    #       "wget",
-    #       "--quiet",
-    #       "--tries=1",
-    #       "--spider",
-    #       "http://localhost:3000/",
-    #     ]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 40s
+    # Security hardening (optional but recommended)
+    # read_only: true
+    # tmpfs:
+    #   - /tmp:size=64m,noexec,nosuid
+    #   - /app/.next/cache:size=128m,noexec,nosuid
+    # security_opt:
+    #   - no-new-privileges:true
+    # cap_drop:
+    #   - ALL

@@ -41,15 +41,13 @@ FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
-# Build arguments for Next.js build-time env vars
-ARG POSTGRES_URL
+# Build arguments - only for PUBLIC env vars needed at build time
+# NEXT_PUBLIC_* vars are embedded in the JS bundle during build
 ARG NEXT_PUBLIC_APP_URL
-ARG BETTER_AUTH_SECRET
 
-# Environment for build
-ENV POSTGRES_URL=${POSTGRES_URL} \
-    NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL} \
-    BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET} \
+# Environment for build (non-sensitive only)
+# Sensitive vars (POSTGRES_URL, BETTER_AUTH_SECRET) are passed at RUNTIME via env file
+ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL} \
     NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     NODE_OPTIONS="--max-old-space-size=1024"
