@@ -7,7 +7,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.secure
       args:
         COOLIFY_URL: ${COOLIFY_URL}
         COOLIFY_FQDN: ${COOLIFY_FQDN}
