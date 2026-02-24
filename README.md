@@ -156,7 +156,7 @@ guidenco/
 
 ```bash
 npm run build
-npm start
+npm start 
 ```
 
 ### Linting

@@ -1,39 +1,140 @@
 version: "3.8"
 
-# Environment: Use .env.docker file
-# Run with: docker compose -f docker-compose.prod.yml --env-file .env.docker up
+# ============================================================================
+# PRODUCTION DOCKER COMPOSE - Hardened Security Configuration
+# ============================================================================
+# Usage:
+#   docker compose -f docker-compose.prod.yml up --build
+#
+# Security features:
+#   ✅ Read-only root filesystem
+#   ✅ No new privileges
+#   ✅ All capabilities dropped
+#   ✅ Resource limits (memory, CPU, PIDs)
+#   ✅ Secrets loaded at runtime from .env file
+#   ✅ Health checks enabled
+#   ✅ Logging limits to prevent disk exhaustion
+# ============================================================================
 
 services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.secure
       args:
-        POSTGRES_URL: ${POSTGRES_URL}
+        # Only public env vars needed at build time (embedded in JS bundle)
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
     container_name: guidenco-app-prod
+    hostname: guidenco
+
+    # -------------------------------------------------------------------------
+    # Environment & Secrets
+    # -------------------------------------------------------------------------
+    # Secrets loaded at runtime from env file (not baked into image layers)
     env_file:
       - ./.env
-    environment:
-      NODE_ENV: ${NODE_ENV}
-      POSTGRES_URL: ${POSTGRES_URL}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+
+    # -------------------------------------------------------------------------
+    # Network
+    # -------------------------------------------------------------------------
     ports:
-      - 3000:3000
-    restart: always
-    # healthcheck:
-    #   test:
-    #     [
-    #       "CMD",
-    #       "wget",
-    #       "--quiet",
-    #       "--tries=1",
-    #       "--spider",
-    #       "http://localhost:3000/",
-    #     ]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 40s
+      - "3000:3000"
+    # Uncomment for internal-only access (reverse proxy in front)
+    # expose:
+    #   - "3000"
+
+    # -------------------------------------------------------------------------
+    # Security Hardening
+    # -------------------------------------------------------------------------
+    # Read-only root filesystem (prevents runtime modifications)
+    read_only: true
+
+    # Temporary filesystems for directories that need write access
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid
+      - /app/.next/cache:size=128m,mode=0755,noexec,nosuid
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+      # Uncomment for additional seccomp profile (if available)
+      # - seccomp:./seccomp-profile.json
+
+    # Drop ALL Linux capabilities (principle of least privilege)
+    cap_drop:
+      - ALL
+
+    # Run as non-root user (matches Dockerfile USER directive)
+    # user: "10001:10001"
+
+    # -------------------------------------------------------------------------
+    # Resource Limits (prevents DoS and resource exhaustion)
+    # -------------------------------------------------------------------------
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+          pids: 100
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+    # -------------------------------------------------------------------------
+    # Restart Policy
+    # -------------------------------------------------------------------------
+    restart: unless-stopped
+
+    # -------------------------------------------------------------------------
+    # Health Check
+    # -------------------------------------------------------------------------
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # -------------------------------------------------------------------------
+    # Logging (prevents disk exhaustion from log spam)
+    # -------------------------------------------------------------------------
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # -------------------------------------------------------------------------
+    # Additional Hardening (optional)
+    # -------------------------------------------------------------------------
+    # Disable container from gaining additional privileges via setuid/setgid
+    privileged: false
+
+    # Prevent container from writing to /proc/sys, /sys, /proc
+    # sysctls:
+    #   net.ipv4.ip_unprivileged_port_start: 0
+
+# =============================================================================
+# Networks (optional - for multi-container setups)
+# =============================================================================
+# networks:
+#   default:
+#     driver: bridge
+#     driver_opts:
+#       com.docker.network.bridge.enable_icc: "false"
+
+# =============================================================================
+# SECURITY CHECKLIST
+# =============================================================================
+# | Control                     | Status | Notes                            |
+# |-----------------------------|--------|----------------------------------|
+# | Read-only root filesystem   | ✅     | Prevents runtime tampering       |
+# | No new privileges           | ✅     | Blocks privilege escalation      |
+# | All capabilities dropped    | ✅     | Minimal Linux capabilities       |
+# | Resource limits             | ✅     | CPU, memory, PID limits          |
+# | Non-root user               | ✅     | Defined in Dockerfile            |
+# | Health checks               | ✅     | Container health monitoring      |
+# | Log rotation                | ✅     | Prevents disk exhaustion         |
+# | Secrets at runtime          | ✅     | Not baked into image             |
+# | tmpfs for writable dirs     | ✅     | /tmp and .next/cache             |
+# =============================================================================

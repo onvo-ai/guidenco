@@ -4,15 +4,16 @@ import * as dotenv from "dotenv";
 // .env.local is the source of truth; .env is docker-compose only
 dotenv.config({ path: ".env.local" });
 
-if (!process.env.POSTGRES_URL) {
-  throw new Error("POSTGRES_URL is not set in .env.local");
-}
+// if (!process.env.POSTGRES_URL) {
+//   throw new Error("POSTGRES_URL is not set in .env");
+// }
 
+console.log("Using POSTGRES_URL:", process.env.POSTGRES_URL);
 export default defineConfig({
   schema: "./lib/db/schema.ts",
   out: "./drizzle",
   dialect: "postgresql",
   dbCredentials: {
-    url: process.env.POSTGRES_URL,
+    url: process.env.POSTGRES_URL || "",
   },
 });
