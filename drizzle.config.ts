@@ -1,7 +1,7 @@
 import { defineConfig } from "drizzle-kit";
 import * as dotenv from "dotenv";
 
-// Load environment variables from .env.local
+// .env.local is the source of truth; .env is docker-compose only
 dotenv.config({ path: ".env.local" });
 
 if (!process.env.POSTGRES_URL) {

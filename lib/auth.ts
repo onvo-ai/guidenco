@@ -4,7 +4,7 @@ import { db } from '@/lib/db';
 import * as schema from '@/lib/db/schema';
 import * as dotenv from 'dotenv';
 
-// Load environment variables
+// .env.local is the source of truth; .env is docker-compose only
 dotenv.config({ path: '.env.local' });
 
 export const auth = betterAuth({

@@ -8,6 +8,7 @@ import FAQ from '@/components/sections/faq/default';
 import CTA from '@/components/sections/cta/default';
 import Footer from '@/components/sections/footer/default';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import Screenshot from '@/components/ui/screenshot';
 import { Section } from '@/components/ui/section';
 import Glow from '@/components/ui/glow';
@@ -149,7 +150,7 @@ export default function LandingPage() {
               price: 19,
               priceNote: "per month",
               cta: {
-                variant: "default",
+                variant: "outline",
                 label: "Coming Soon",
                 href: "#",
               },
@@ -161,7 +162,7 @@ export default function LandingPage() {
                 "Email support",
                 "Remove watermarks",
               ],
-              variant: "glow-brand",
+              variant: "popular",
             },
             {
               name: "Pro",
@@ -169,7 +170,7 @@ export default function LandingPage() {
               price: 39,
               priceNote: "per month",
               cta: {
-                variant: "default",
+                variant: "outline",
                 label: "Coming Soon",
                 href: "#",
               },
@@ -181,7 +182,7 @@ export default function LandingPage() {
                 "Custom branding",
                 "API access",
               ],
-              variant: "glow",
+              variant: "default",
             },
           ]}
         />
@@ -227,8 +228,8 @@ export default function LandingPage() {
         />
       </div>
 
-      <Section className="group relative overflow-hidden">
-        <div className="max-w-container relative z-10 mx-auto flex flex-col items-center gap-6 text-center sm:gap-8">
+      <Section className="relative overflow-hidden bg-card border">
+        <div className="max-w-container relative z-10 mx-auto flex flex-col items-center gap-8 text-center py-16">
           <h2 className="max-w-[640px] text-3xl leading-tight font-semibold sm:text-5xl sm:leading-tight">
             Ready to Create Something Amazing?
           </h2>
@@ -241,14 +242,13 @@ export default function LandingPage() {
             </p>
           </div>
           <div className="flex justify-center gap-4">
-            <a href="/app" className="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-11 px-8">
-              Get Started for Free
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </a>
+            <Button size="lg" asChild>
+              <a href="/app">
+                Get Started for Free
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </a>
+            </Button>
           </div>
-        </div>
-        <div className="absolute top-0 left-0 h-full w-full translate-y-[1rem] opacity-80 transition-all duration-500 ease-in-out group-hover:translate-y-[-2rem] group-hover:opacity-100">
-          <Glow variant="bottom" />
         </div>
       </Section>
 

@@ -97,6 +97,62 @@ export const artworkVersions = pgTable("artwork_versions", {
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
+// Teams table
+export const teams = pgTable("teams", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  ownerId: text("owner_id")
+    .notNull()
+    .references(() => users.id),
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+});
+
+// Team members (accepted invites)
+export const teamMembers = pgTable("team_members", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  teamId: uuid("team_id")
+    .notNull()
+    .references(() => teams.id, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  role: text("role").notNull().default("member"),
+  joinedAt: timestamp("joined_at", { mode: "date" }).defaultNow().notNull(),
+});
+
+// Pending invites (matched by email on signup)
+export const teamInvites = pgTable("team_invites", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  teamId: uuid("team_id")
+    .notNull()
+    .references(() => teams.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  name: text("name"),
+  invitedBy: text("invited_by")
+    .notNull()
+    .references(() => users.id),
+  status: text("status").notNull().default("pending"), // 'pending' | 'accepted'
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+});
+
+// Design warehouse assets (per-team)
+export const assets = pgTable("assets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  teamId: uuid("team_id")
+    .notNull()
+    .references(() => teams.id, { onDelete: "cascade" }),
+  uploadedBy: text("uploaded_by")
+    .notNull()
+    .references(() => users.id),
+  title: text("title").notNull(),
+  description: text("description").default(""),
+  fileKey: text("file_key").notNull(), // S3/MinIO object key
+  fileUrl: text("file_url").notNull(), // Public or signed URL
+  mimeType: text("mime_type").notNull(),
+  source: text("source").notNull().default("uploaded"), // 'uploaded' | 'chat' | 'generated'
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+});
+
 // Chat messages table
 export const chatMessages = pgTable("chat_messages", {
   id: uuid("id").primaryKey().defaultRandom(),

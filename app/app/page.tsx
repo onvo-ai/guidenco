@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, X, Loader2, Trash2 } from 'lucide-react';
+import { Plus, X, Loader2, Trash2, FileText, History } from 'lucide-react';
 import { Project } from '@/lib/types';
 
 export default function DashboardPage() {
@@ -195,6 +195,22 @@ export default function DashboardPage() {
                 <div className="text-sm text-zinc-500 dark:text-zinc-400 mb-2">
                   Updated {new Date(project.updatedAt).toLocaleDateString()}
                 </div>
+                {((project as any).pageCount > 0 || (project as any).versionCount > 0) && (
+                  <div className="flex items-center gap-2">
+                    {(project as any).pageCount > 0 && (
+                      <span className="inline-flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded-full">
+                        <FileText className="h-3 w-3" />
+                        {(project as any).pageCount} {(project as any).pageCount === 1 ? 'page' : 'pages'}
+                      </span>
+                    )}
+                    {(project as any).versionCount > 0 && (
+                      <span className="inline-flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded-full">
+                        <History className="h-3 w-3" />
+                        {(project as any).versionCount} {(project as any).versionCount === 1 ? 'version' : 'versions'}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <button
                   onClick={(e) => handleDeleteClick(e, project.id)}
                   disabled={deletingProjectId === project.id}

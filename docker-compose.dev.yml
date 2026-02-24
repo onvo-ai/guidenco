@@ -1,29 +1,67 @@
 version: "3.8"
 
 # Environment: Use .env.docker file
-# Run with: docker compose -f docker-compose.dev.yml --env-file .env.docker up
+# Run with: docker compose --env-file .env.docker up
 
 services:
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        POSTGRES_URL: ${POSTGRES_URL}
-        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-    container_name: guidenco-app-dev
+  postgres:
+    image: postgres:18-alpine
+    container_name: guidenco-db
     env_file:
       - .env
     environment:
-      NODE_ENV: ${NODE_ENV}
-      POSTGRES_URL: ${POSTGRES_URL}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-    ports:
-      - "${APP_PORT}:3000"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      - .:/app
-      - /app/node_modules
-      - /app/.next
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - guidenco-network
+
+  minio:
+    image: minio/minio
+    container_name: guidenco-minio
+    command: server /data --console-address ":9001"
+    env_file:
+      - .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - guidenco-network
+
+  stripe:
+    image: stripe/stripe-cli:latest
+    container_name: guidenco-stripe
+    # stripe-cli reads STRIPE_API_KEY — loaded from .env.local via entrypoint wrapper
+    entrypoint: sh -c 'STRIPE_API_KEY="$$STRIPE_SECRET_KEY" stripe listen --device-name guidenco-dev --forward-to http://host.docker.internal:3000/api/webhooks/stripe'
+    env_file:
+      - .env.local
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - guidenco-network
+
+volumes:
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  guidenco-network:
+    driver: bridge

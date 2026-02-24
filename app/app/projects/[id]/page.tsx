@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { ChatInterface } from '@/components/chat-interface';
 import { HTMLViewer } from '@/components/html-viewer';
 import { CodeViewer } from '@/components/code-viewer';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Project } from '@/lib/types';
+import type { SelectedElement } from '@/components/element-selector-overlay';
 
 export default function ProjectPage() {
   const router = useRouter();
@@ -21,6 +22,10 @@ export default function ProjectPage() {
   });
   const [resetKey, setResetKey] = useState(0);
   const [showCode, setShowCode] = useState(false);
+  const [pendingElementPrompt, setPendingElementPrompt] = useState<{
+    prompt: string;
+    element: SelectedElement;
+  } | null>(null);
 
   // Load project by ID
   useEffect(() => {
@@ -81,6 +86,12 @@ export default function ProjectPage() {
     router.push(`/projects/${project.id}`);
   };
 
+  const handleElementPrompt = useCallback((prompt: string, element: SelectedElement) => {
+    // Switch to chat view so the user sees the message being sent
+    setShowCode(false);
+    setPendingElementPrompt({ prompt, element });
+  }, []);
+
   const handleArtworkUpdate = async () => {
     // Reload artwork from API to get latest version with fonts
     if (params.id) {
@@ -134,6 +145,9 @@ export default function ProjectPage() {
                 projectId={currentProject.id}
                 selectedPageIndex={selectedPageIndex}
                 onArtworkUpdate={handleArtworkUpdate}
+                pendingElementPrompt={pendingElementPrompt}
+                onElementPromptSent={() => setPendingElementPrompt(null)}
+                artworkHtml={artworkState.versions[artworkState.currentVersion]?.html ?? ''}
               />
             ) : (
               <div className="h-full">
@@ -161,6 +175,7 @@ export default function ProjectPage() {
             currentVersion={artworkState.currentVersion}
             selectedPageIndex={selectedPageIndex}
             onSelectedPageIndexChange={setSelectedPageIndex}
+            onElementPrompt={handleElementPrompt}
           />
         </div>
       </ResizablePanel>

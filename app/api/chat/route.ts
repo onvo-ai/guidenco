@@ -3,18 +3,33 @@ import { streamText, convertToModelMessages, UIMessage, tool, stepCountIs } from
 import { z } from 'zod';
 import { createOrUpdateArtwork, getProjectArtwork, getProjectMessages, saveMessage } from '@/lib/db/projects-service';
 import { resizeImage } from '@/lib/image-processing';
+import { auth } from '@/lib/auth';
+import { headers } from 'next/headers';
+import { db } from '@/lib/db';
+import { assets, teams, teamMembers } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
+import { getFileBuffer, uploadFile, ensureBucket } from '@/lib/storage';
+import { randomUUID } from 'crypto';
+import { users } from '@/lib/db/schema';
+import sharp from 'sharp';
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 // Temporary state for dimensions during creation
 const tempDimensions = new Map<string, { width: number; height: number }>();
 const tempPageCounts = new Map<string, number>();
 
-const PAGE_BREAK = '\n<!-- GUIDENCO_PAGE_BREAK -->\n';
+const PAGE_BREAK = '\n<!-- PAGE_BREAK -->\n';
+const PAGE_BREAK_LEGACY_GUIDENCO = '\n<!-- GUIDENCO_PAGE_BREAK -->\n';
+const PAGE_BREAK_LEGACY_ARTISTE = '\n<!-- ARTISTE_PAGE_BREAK -->\n';
 
 function splitPages(html: string): string[] {
   if (!html) return [''];
-  const parts = html.split(PAGE_BREAK);
+  // Normalise legacy separators so old artworks split correctly
+  const normalised = html
+    .split(PAGE_BREAK_LEGACY_GUIDENCO).join(PAGE_BREAK)
+    .split(PAGE_BREAK_LEGACY_ARTISTE).join(PAGE_BREAK);
+  const parts = normalised.split(PAGE_BREAK);
   return parts.length > 0 ? parts : [''];
 }
 
@@ -73,6 +88,14 @@ export async function POST(req: Request) {
           image: imageContent,
           mimeType: part.mimeType || 'image/png'
         });
+
+        // If this image was uploaded to the warehouse, tell the LLM its permanent URL
+        if (part.fileUrl) {
+          content.push({
+            type: 'text',
+            text: `[Image uploaded to Design Warehouse. Permanent URL: ${part.fileUrl} — use this URL in <img src="..."> tags when embedding this image in artwork.]`,
+          });
+        }
       }
     }
 
@@ -142,6 +165,31 @@ Guidelines:
 - Use writeHTML for initial creation or major redesigns, use editHTML for tweaks and modifications.
 - You can search for images using the searchImage tool and use the returned URLs in <img> tags
 - Choose dimensions that match the desired output size (e.g., 800x600 for a web banner, 1080x1080 for social media)
+
+ELEMENT EDIT REQUESTS:
+- When a message starts with "[ELEMENT EDIT REQUEST]", the user has selected a specific element in the preview.
+- The message will include the CSS selector, element label, and current outerHTML of the selected element.
+- For these requests:
+  1. Call getArtworkState first to get the full current HTML of the page.
+  2. Use editHTML to make a SURGICAL find/replace that only modifies the specific element identified by the CSS selector and outerHTML provided.
+  3. The find string must match the element's current outerHTML (or a unique fragment of it) EXACTLY as shown in the message.
+  4. The replace string should be the same element with only the requested change applied.
+  5. DO NOT change anything outside of that element.
+  6. After editing, call getArtworkState to verify only the targeted element changed.
+
+DESIGN WAREHOUSE:
+- Your team has a Design Warehouse with uploaded assets (images, PDFs, logos, etc.).
+- Use the listAssets tool to discover available assets. Do this when the user mentions "my logo", "our brand image", "the uploaded file", or anything that suggests they have pre-uploaded content.
+- Use inspectAsset to view an asset's content (returns a rendered image for images/PDFs) so you can understand what it looks like before using it.
+- To embed an asset in artwork, use its proxyUrl (/api/assets/image?id=...) in <img> tags or as CSS background-image values. Always use the actual URL from the asset, not a placeholder.
+- If the user says "use my asset" or references something by name, list assets first, find the matching one, then use its proxyUrl.
+
+SVG CREATION:
+- Use the createSVG tool to generate a custom SVG graphic from scratch using an AI sub-agent.
+- The SVG is automatically saved to the Design Warehouse with source "generated".
+- After creation, use the returned proxyUrl in <img src="..."> tags in artwork — SVGs are perfectly scalable.
+- Great for logos, icons, illustrations, badges, decorative elements, and any vector graphic.
+- Always call createSVG when the user asks to "create a logo", "make an icon", "generate a graphic", or any vector/SVG asset.
 
 CRITICAL COMMUNICATION RULES:
 - ALWAYS provide a text response after using tools to explain what you did and the result
@@ -670,6 +718,219 @@ Always use the tools to create the artwork. The user will see the visual output 
               success: false,
               error: 'Error searching for images',
             };
+          }
+        },
+      }),
+      listAssets: tool({
+        description: 'List all assets in the team\'s Design Warehouse (uploaded images, PDFs, logos, etc.). Use this when the user references "my logo", "our brand image", uploaded files, or any pre-existing assets.',
+        inputSchema: z.object({}),
+        execute: async () => {
+          try {
+            const session = await auth.api.getSession({ headers: await headers() });
+            if (!session) return { success: false, error: 'Not authenticated', assets: [] };
+
+            const userId = session.user.id;
+            const ownedTeam = await db.select({ id: teams.id }).from(teams).where(eq(teams.ownerId, userId)).limit(1);
+            let teamId = ownedTeam[0]?.id;
+
+            if (!teamId) {
+              const membership = await db.select({ teamId: teamMembers.teamId }).from(teamMembers).where(eq(teamMembers.userId, userId)).limit(1);
+              teamId = membership[0]?.teamId;
+            }
+
+            if (!teamId) return { success: true, assets: [], message: 'No team found — no assets available.' };
+
+            const teamAssets = await db.select().from(assets).where(eq(assets.teamId, teamId));
+            return {
+              success: true,
+              assets: teamAssets.map(a => ({
+                id: a.id,
+                title: a.title,
+                description: a.description,
+                fileUrl: a.fileUrl,
+                mimeType: a.mimeType,
+              })),
+            };
+          } catch (error) {
+            return { success: false, error: 'Failed to list assets', assets: [] };
+          }
+        },
+      }),
+      inspectAsset: tool({
+        description: 'Inspect a specific asset from the Design Warehouse. Returns a rendered image of the asset (works for PNG, JPEG, PDF). Use this to see what an asset looks like before embedding it in artwork.',
+        inputSchema: z.object({
+          assetId: z.string().describe('The ID of the asset to inspect (from listAssets)'),
+        }),
+        execute: async ({ assetId }: { assetId: string }) => {
+          try {
+            const asset = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
+            if (!asset.length) return { success: false, error: 'Asset not found' };
+
+            const a = asset[0];
+            const buffer = await getFileBuffer(a.fileKey);
+
+            if (a.mimeType === 'application/pdf') {
+              // Render first page of PDF via the render API
+              const renderResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/render`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pdfBuffer: buffer.toString('base64'), format: 'base64', width: 800, height: 600 }),
+              });
+              if (renderResponse.ok) {
+                const data = await renderResponse.json();
+                return { success: true, title: a.title, description: a.description, mimeType: a.mimeType, fileUrl: a.fileUrl, proxyUrl: `/api/assets/image?id=${a.id}`, image: data.image };
+              }
+              return { success: true, title: a.title, description: a.description, mimeType: a.mimeType, fileUrl: a.fileUrl, proxyUrl: `/api/assets/image?id=${a.id}` };
+            }
+
+            const base64 = buffer.toString('base64');
+            return {
+              success: true,
+              title: a.title,
+              description: a.description,
+              mimeType: a.mimeType,
+              fileUrl: a.fileUrl,
+              proxyUrl: `/api/assets/image?id=${a.id}`,
+              image: `data:${a.mimeType};base64,${base64}`,
+            };
+          } catch (error) {
+            return { success: false, error: 'Failed to inspect asset' };
+          }
+        },
+      }),
+      createSVG: tool({
+        description: 'Generate a custom SVG graphic using an AI sub-agent and save it to the Design Warehouse automatically. Returns the asset ID and a proxyUrl to embed it in artwork. Use for logos, icons, illustrations, badges, and any vector graphic.',
+        inputSchema: z.object({
+          prompt: z.string().describe('Detailed description of the SVG to create, e.g. "a minimalist mountain logo with a purple-to-blue gradient"'),
+          title: z.string().describe('Name for this asset in the Design Warehouse, e.g. "Mountain Logo"'),
+          width: z.number().optional().describe('SVG viewBox width in pixels (default: 400)'),
+          height: z.number().optional().describe('SVG viewBox height in pixels (default: 400)'),
+        }),
+        execute: async ({ prompt, title, width = 400, height = 400 }: { prompt: string; title: string; width?: number; height?: number }) => {
+          try {
+            // ── 1. Call the SVG sub-agent ────────────────────────────────────
+            const svgModelId = (process.env.SVG_MODEL || '').trim() || 'google/gemini-2.5-flash';
+
+            const svgResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                model: svgModelId,
+                messages: [
+                  {
+                    role: 'system',
+                    content: `You are an expert SVG designer. Generate clean, high-quality SVG vector graphics.
+STRICT RULES:
+- Return ONLY the raw SVG code — no markdown fences, no explanation, no extra text
+- Begin with <svg and end with </svg>
+- Always include xmlns="http://www.w3.org/2000/svg" and viewBox="0 0 ${width} ${height}"
+- The SVG must be fully self-contained (no external images, no external fonts)
+- Use fills, gradients, paths, and shapes to create a visually polished, professional result
+- Keep the output under 8000 characters`,
+                  },
+                  {
+                    role: 'user',
+                    content: `Create an SVG graphic: ${prompt}`,
+                  },
+                ],
+                max_tokens: 4096,
+                temperature: 0.7,
+              }),
+            });
+
+            if (!svgResponse.ok) {
+              const errText = await svgResponse.text();
+              console.error('SVG sub-agent error:', errText);
+              return { success: false, error: 'SVG generation failed — sub-agent returned an error' };
+            }
+
+            const svgData = await svgResponse.json();
+            let svgContent: string = svgData.choices?.[0]?.message?.content?.trim() ?? '';
+
+            // Strip markdown fences if the model wrapped the SVG anyway
+            const svgMatch = svgContent.match(/<svg[\s\S]*<\/svg>/i);
+            if (svgMatch) svgContent = svgMatch[0];
+
+            if (!svgContent.toLowerCase().startsWith('<svg')) {
+              return { success: false, error: 'Sub-agent did not return valid SVG content' };
+            }
+
+            // Ensure proper XML namespace
+            if (!svgContent.includes('xmlns')) {
+              svgContent = svgContent.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+
+            // ── 2. Resolve the user's team ───────────────────────────────────
+            const session = await auth.api.getSession({ headers: await headers() });
+            if (!session) return { success: false, error: 'Not authenticated' };
+
+            const userId = session.user.id;
+
+            // Find existing team (owned or member)
+            let teamId: string | undefined;
+            const ownedTeam = await db.select({ id: teams.id }).from(teams).where(eq(teams.ownerId, userId)).limit(1);
+            teamId = ownedTeam[0]?.id;
+
+            if (!teamId) {
+              const membership = await db.select({ teamId: teamMembers.teamId }).from(teamMembers).where(eq(teamMembers.userId, userId)).limit(1);
+              teamId = membership[0]?.teamId;
+            }
+
+            // Lazily create a personal team if none exists
+            if (!teamId) {
+              const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+              const teamName = user[0]?.name ? `${user[0].name}'s Team` : 'My Team';
+              const [newTeam] = await db.insert(teams).values({ name: teamName, ownerId: userId }).returning();
+              teamId = newTeam.id;
+            }
+
+            // ── 3. Store SVG in S3/MinIO ─────────────────────────────────────
+            await ensureBucket();
+            const key = `assets/${teamId}/${randomUUID()}.svg`;
+            const buffer = Buffer.from(svgContent, 'utf-8');
+            const fileUrl = await uploadFile(key, buffer, 'image/svg+xml');
+
+            // ── 4. Persist to assets table ───────────────────────────────────
+            const [asset] = await db
+              .insert(assets)
+              .values({
+                teamId,
+                uploadedBy: userId,
+                title,
+                description: prompt,
+                fileKey: key,
+                fileUrl,
+                mimeType: 'image/svg+xml',
+                source: 'generated',
+              })
+              .returning();
+
+            // Convert SVG to PNG for the inline chat card preview.
+            // SVG data URLs in <img> tags are browser-sandboxed and often broken;
+            // PNG renders universally without any restrictions.
+            let imageDataUrl = `data:image/svg+xml;base64,${buffer.toString('base64')}`;
+            try {
+              const pngBuffer = await sharp(buffer).png().toBuffer();
+              imageDataUrl = `data:image/png;base64,${pngBuffer.toString('base64')}`;
+            } catch (convErr) {
+              console.error('SVG→PNG conversion failed for chat preview, falling back to SVG data URL:', convErr);
+            }
+
+            return {
+              success: true,
+              assetId: asset.id,
+              title: asset.title,
+              proxyUrl: `/api/assets/image?id=${asset.id}`,
+              fileUrl: asset.fileUrl,
+              image: imageDataUrl,
+              message: `SVG "${title}" created and saved to Design Warehouse.`,
+            };
+          } catch (error) {
+            console.error('createSVG error:', error);
+            return { success: false, error: 'Failed to create SVG' };
           }
         },
       }),

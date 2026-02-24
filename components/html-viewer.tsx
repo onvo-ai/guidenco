@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo, type CSSProperties } from 'react';
 import { Button } from '@/components/ui/button';
-import { Download, ZoomIn, ZoomOut, Maximize2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Download, ZoomIn, ZoomOut, Maximize2, ChevronLeft, ChevronRight, MousePointer2, X, Send } from 'lucide-react';
 import Handlebars from 'handlebars';
 import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
@@ -21,6 +21,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { PICKER_SCRIPT, type SelectedElement } from '@/components/element-selector-overlay';
 
 interface HTMLViewerProps {
   width: number;
@@ -29,6 +30,7 @@ interface HTMLViewerProps {
   currentVersion: number;
   selectedPageIndex: number;
   onSelectedPageIndexChange: (pageIndex: number) => void;
+  onElementPrompt?: (prompt: string, element: SelectedElement) => void;
 }
 
 export function HTMLViewer({
@@ -38,6 +40,7 @@ export function HTMLViewer({
   currentVersion,
   selectedPageIndex,
   onSelectedPageIndexChange,
+  onElementPrompt,
 }: HTMLViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
@@ -49,6 +52,41 @@ export function HTMLViewer({
   );
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
   const [exportErrorMessage, setExportErrorMessage] = useState('');
+
+  // Element selector state
+  const [selectorActive, setSelectorActive] = useState(false);
+  const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
+  const [elementPromptText, setElementPromptText] = useState('');
+
+  // Listen for element picks sent from inside the iframe via postMessage
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type !== 'guidenco_element_selected') return;
+      setSelectedElement({
+        selector: e.data.selector,
+        outerHTML: e.data.outerHTML,
+        label: e.data.label,
+        rect: e.data.rect ?? { top: 0, left: 0, width: 0, height: 0 },
+      });
+      setSelectorActive(false);
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  const handleToggleSelector = () => {
+    setSelectorActive((prev) => !prev);
+    setSelectedElement(null);
+    setElementPromptText('');
+  };
+
+  const handleSendElementPrompt = () => {
+    if (!elementPromptText.trim() || !selectedElement || !onElementPrompt) return;
+    onElementPrompt(elementPromptText.trim(), selectedElement);
+    setSelectedElement(null);
+    setElementPromptText('');
+    setSelectorActive(false);
+  };
 
   // Update viewing version when current version changes
   useEffect(() => {
@@ -139,7 +177,7 @@ export function HTMLViewer({
       : '';
   }, [googleFonts]);
 
-  const buildFullHTML = (compiledHTML: string) => {
+  const buildFullHTML = (compiledHTML: string, picking = false) => {
     return `
 <!DOCTYPE html>
 <html style="background: transparent;">
@@ -169,6 +207,7 @@ export function HTMLViewer({
       overflow: hidden;
     }
   </style>
+  ${picking ? PICKER_SCRIPT : ''}
 </head>
 <body style="background: transparent;">
   ${compiledHTML}
@@ -630,13 +669,22 @@ export function HTMLViewer({
           )}
         </div>
 
-        {/* Right: Download dropdown */}
+        {/* Right: Element selector + Download dropdown */}
         <div className="flex gap-2">
+          {onElementPrompt && (
+            <Button
+              variant={selectorActive ? 'default' : 'outline'}
+              onClick={handleToggleSelector}
+              className={`h-10 w-10 p-0 ${selectorActive ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
+              title={selectorActive ? 'Cancel element selection' : 'Select an element to edit'}
+            >
+              <MousePointer2 className="h-4 w-4" />
+            </Button>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="h-10 px-4 gap-2">
+              <Button variant="outline" className="h-10 w-10 p-0">
                 <Download className="h-4 w-4" />
-                <span className="text-sm font-medium">Download</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -666,22 +714,53 @@ export function HTMLViewer({
             <div className="flex flex-col items-center gap-8" style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}>
               {compiledPages.map((compiled, idx) => {
                 const isActive = idx === selectedPageIndex;
+                const isPickingOnThisPage = isActive && selectorActive;
+                const hasSelection = isActive && !!selectedElement;
+
+                // Compute popover position from element rect (in iframe coords)
+                let popoverStyle: CSSProperties = {};
+                if (hasSelection && selectedElement) {
+                  const r = selectedElement.rect;
+                  const POPOVER_H = 100; // rough height of popover
+                  const GAP = 8;
+                  const spaceBelow = height - (r.top + r.height);
+                  if (spaceBelow >= POPOVER_H + GAP) {
+                    // Place below the element
+                    popoverStyle = { top: r.top + r.height + GAP, left: Math.max(8, Math.min(r.left, width - 360)) };
+                  } else {
+                    // Place above the element
+                    popoverStyle = { top: Math.max(8, r.top - POPOVER_H - GAP), left: Math.max(8, Math.min(r.left, width - 360)) };
+                  }
+                }
+
                 return (
-                  <button
+                  <div
                     key={idx}
-                    type="button"
-                    onClick={() => onSelectedPageIndexChange(idx)}
-                    className={`overflow-hidden text-left relative transition-all rounded-lg shadow-sm border ${isActive ? 'ring-2 ring-blue-500 ring-offset-2 border-blue-500 z-30' : 'border-zinc-200 dark:border-zinc-700 hover:border-zinc-300 dark:hover:border-zinc-600'
-                      }`}
+                    className={`overflow-visible text-left relative transition-all rounded-lg shadow-sm border ${
+                      isPickingOnThisPage
+                        ? 'ring-2 ring-blue-500 ring-offset-2 border-blue-500 z-30'
+                        : isActive
+                          ? 'ring-2 ring-blue-500 ring-offset-2 border-blue-500 z-30'
+                          : 'border-zinc-200 dark:border-zinc-700'
+                    }`}
                     style={{ width: width }}
                   >
+                    {/* Page number badge */}
                     <div
                       className="px-3 py-1 text-[10px] font-medium text-zinc-700 dark:text-zinc-200 bg-zinc-100/90 dark:bg-zinc-800/90 backdrop-blur-sm absolute top-0 left-0 z-20 border-b border-r border-zinc-300/50 dark:border-zinc-600/50 rounded-br shadow-sm"
                     >
                       {idx + 1} / {compiledPages.length}
                     </div>
+
+                    {/* Selector-active hint badge */}
+                    {isPickingOnThisPage && (
+                      <div className="absolute top-0 right-0 z-20 px-2 py-1 bg-blue-600 text-white text-[10px] font-medium rounded-bl shadow-sm">
+                        Click an element
+                      </div>
+                    )}
+
                     <div
-                      className="relative overflow-hidden"
+                      className="relative overflow-hidden rounded-lg"
                       style={{
                         width: width,
                         height: height,
@@ -698,14 +777,67 @@ export function HTMLViewer({
                         allowTransparency={true}
                         className="relative z-10 border-none block"
                         style={{
-                          pointerEvents: 'none',
+                          pointerEvents: isPickingOnThisPage ? 'auto' : 'none',
                           backgroundColor: 'transparent',
-                          background: 'transparent'
+                          background: 'transparent',
                         }}
-                        srcDoc={buildFullHTML(compiled)}
+                        srcDoc={buildFullHTML(compiled, isPickingOnThisPage)}
                       />
                     </div>
-                  </button>
+
+                    {/* Element prompt popover — floats over the page near the selected element */}
+                    {hasSelection && selectedElement && (
+                      <div
+                        className="absolute z-40 w-80 rounded-xl border border-blue-200 bg-white/95 dark:bg-zinc-900/95 dark:border-blue-800 shadow-xl backdrop-blur-sm pointer-events-auto"
+                        style={popoverStyle}
+                      >
+                        <div className="px-3 pt-3 pb-2 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="h-2 w-2 rounded-full bg-blue-500 shrink-0" />
+                            <span className="text-xs font-medium text-blue-700 dark:text-blue-300 truncate">
+                              <code className="font-mono">{selectedElement.label}</code>
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => { setSelectedElement(null); setElementPromptText(''); }}
+                            className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-0.5 rounded shrink-0"
+                            title="Clear selection"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        <div className="px-3 pb-3 flex gap-2 items-center">
+                          <input
+                            type="text"
+                            value={elementPromptText}
+                            onChange={(e) => setElementPromptText(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleSendElementPrompt(); }}
+                            placeholder="What should change?"
+                            className="flex-1 h-8 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            autoFocus
+                          />
+                          <Button
+                            onClick={handleSendElementPrompt}
+                            disabled={!elementPromptText.trim()}
+                            size="sm"
+                            className="h-8 w-8 p-0 bg-blue-600 hover:bg-blue-700 text-white shrink-0"
+                          >
+                            <Send className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Click overlay for page selection (only when not picking and no selection active) */}
+                    {!isPickingOnThisPage && !hasSelection && (
+                      <button
+                        type="button"
+                        aria-label={`Select page ${idx + 1}`}
+                        onClick={() => onSelectedPageIndexChange(idx)}
+                        className="absolute inset-0 z-30 w-full h-full bg-transparent"
+                      />
+                    )}
+                  </div>
                 );
               })}
             </div>

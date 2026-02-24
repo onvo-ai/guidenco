@@ -32,13 +32,12 @@ export function SignUpForm({ onSuccess }: { onSuccess?: () => void }) {
         throw error;
       }
 
-      // TODO: Update phone number after sign up via a separate API call
-      // if (phoneNumber) {
-      //   await fetch('/api/user/update', {
-      //     method: 'POST',
-      //     body: JSON.stringify({ phoneNumber }),
-      //   });
-      // }
+      // Match pending team invites by email and join, or create a personal team
+      try {
+        await fetch('/api/auth/after-signup', { method: 'POST' });
+      } catch {
+        // Non-critical; don't block signup
+      }
 
       onSuccess?.();
     } catch (err: any) {
