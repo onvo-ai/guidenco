@@ -9,6 +9,7 @@ import { Project } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Settings2, Loader2 } from 'lucide-react';
+import Editor from '@monaco-editor/react';
 
 interface VideoSettings {
   width: number;
@@ -260,20 +261,38 @@ export default function VideosPage() {
 
           <div className="flex-1 overflow-hidden">
             {showCode ? (
-              <div className="h-full flex flex-col bg-zinc-900">
-                <textarea
-                  value={editedCode}
-                  onChange={(e) => setEditedCode(e.target.value)}
-                  className="flex-1 w-full p-4 text-xs text-zinc-100 font-mono bg-transparent resize-none outline-none leading-relaxed"
-                  spellCheck={false}
-                />
+              <div className="h-full flex flex-col">
+                <div className="flex-1 overflow-hidden bg-[#1e1e1e]">
+                  <Editor
+                    height="100%"
+                    defaultLanguage="typescript"
+                    theme="vs-dark"
+                    value={editedCode || ''}
+                    onChange={(val) => setEditedCode(val ?? '')}
+                    options={{
+                      minimap: { enabled: false },
+                      fontSize: 13,
+                      padding: { top: 8, bottom: 8 },
+                      wordWrap: 'on',
+                      scrollBeyondLastLine: false,
+                      lineNumbers: 'on',
+                      renderLineHighlight: 'all',
+                      scrollbar: {
+                        vertical: 'visible',
+                        horizontal: 'visible',
+                        useShadows: false,
+                        verticalScrollbarSize: 10,
+                        horizontalScrollbarSize: 10,
+                      },
+                    }}
+                  />
+                </div>
                 {hasChanges && (
-                  <div className="p-3 border-t border-zinc-800 flex justify-end gap-2 shrink-0">
+                  <div className="p-3 border-t bg-white dark:bg-zinc-950 flex justify-end gap-2 shrink-0">
                     <Button
                       size="sm"
-                      variant="ghost"
+                      variant="outline"
                       onClick={() => setEditedCode(video?.remotionCode ?? '')}
-                      className="text-zinc-400 hover:text-zinc-200"
                     >
                       Reset
                     </Button>

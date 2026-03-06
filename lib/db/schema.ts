@@ -67,6 +67,7 @@ export const projects = pgTable("projects", {
     .notNull()
     .references(() => users.id), // BetterAuth uses text IDs
   name: text("name").notNull(),
+  type: text("type").notNull().default("artwork"), // 'artwork' | 'asset' | 'video'
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { mode: "date" }).defaultNow().notNull(),
 });
@@ -133,6 +134,17 @@ export const teamInvites = pgTable("team_invites", {
     .references(() => users.id),
   status: text("status").notNull().default("pending"), // 'pending' | 'accepted'
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+});
+
+// Agent settings (per-team)
+export const agentSettings = pgTable("agent_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  teamId: uuid("team_id")
+    .notNull()
+    .references(() => teams.id, { onDelete: "cascade" }),
+  designGuidelines: text("design_guidelines").default(""),
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { mode: "date" }).defaultNow().notNull(),
 });
 
 // Design warehouse assets (per-team)

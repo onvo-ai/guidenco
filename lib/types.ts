@@ -1,6 +1,7 @@
 export interface Project {
   id: string;
   name: string;
+  type: 'artwork' | 'asset' | 'video';
   createdAt: number;
   updatedAt: number;
 }
