@@ -71,7 +71,7 @@ export function SimpleChatInterface({
     const text = input.trim();
     if (!text || isLoading) return;
     setInput('');
-    sendMessage({ role: 'user', content: text });
+    sendMessage({ role: 'user', parts: [{ type: 'text', text }] });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -99,9 +99,7 @@ export function SimpleChatInterface({
           </div>
         )}
         {messages.map((msg) => {
-          const textContent = typeof msg.content === 'string'
-            ? msg.content
-            : (msg.parts || [])
+          const textContent = (msg.parts || [])
                 .filter((p: any) => p.type === 'text')
                 .map((p: any) => p.text)
                 .join('');

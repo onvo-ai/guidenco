@@ -165,5 +165,5 @@ After saving, briefly describe what you created.`,
     },
   });
 
-  return result.toDataStreamResponse();
+  return result.toUIMessageStreamResponse();
 }
