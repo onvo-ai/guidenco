@@ -4,8 +4,20 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, X, Loader2, Trash2, FileText, History } from 'lucide-react';
+import { Plus, X, Loader2, Trash2, FileText, History, LayoutTemplate, Shapes, Film } from 'lucide-react';
 import { Project } from '@/lib/types';
+
+function projectUrl(project: Project) {
+  if (project.type === 'asset') return `/app/projects/${project.id}/assets`;
+  if (project.type === 'video') return `/app/projects/${project.id}/videos`;
+  return `/app/projects/${project.id}`;
+}
+
+const TYPE_META = {
+  artwork: { label: 'Artwork', Icon: LayoutTemplate },
+  asset: { label: 'Asset', Icon: Shapes },
+  video: { label: 'Video', Icon: Film },
+} as const;
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -173,7 +185,7 @@ export default function DashboardPage() {
             {projects.map((project) => (
               <div
                 key={project.id}
-                onClick={() => router.push(`/app/projects/${project.id}`)}
+                onClick={() => router.push(projectUrl(project))}
                 className="group relative cursor-pointer bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-800 p-3 hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors"
               >
                 <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 rounded-md mb-2 flex items-center justify-center overflow-hidden">
@@ -191,6 +203,15 @@ export default function DashboardPage() {
                   <h3 className="text-md font-semibold group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                     {project.name}
                   </h3>
+                  {(() => {
+                    const meta = TYPE_META[project.type] ?? TYPE_META.artwork;
+                    return (
+                      <span className="inline-flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded-full ml-2 shrink-0">
+                        <meta.Icon className="h-3 w-3" />
+                        {meta.label}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <div className="text-sm text-zinc-500 dark:text-zinc-400 mb-2">
                   Updated {new Date(project.updatedAt).toLocaleDateString()}

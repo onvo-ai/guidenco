@@ -10,10 +10,10 @@ export async function getUserProjects(userId: string) {
     .orderBy(desc(projects.updatedAt));
 }
 
-export async function createProject(userId: string, name: string) {
+export async function createProject(userId: string, name: string, type: string = 'artwork') {
   const [newProject] = await db
     .insert(projects)
-    .values({ userId, name })
+    .values({ userId, name, type })
     .returning();
   return newProject;
 }

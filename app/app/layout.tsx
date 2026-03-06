@@ -1,10 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter, usePathname, useParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useSession } from '@/lib/auth-client';
 import { Sidebar } from '@/components/sidebar';
-import { Project } from '@/lib/types';
 
 export default function DashboardLayout({
   children,
@@ -12,41 +10,7 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const pathname = usePathname();
-  const params = useParams();
   const { data: session, isPending, error } = useSession();
-  const [currentProject, setCurrentProject] = useState<Project | null>(null);
-
-  const loadProject = async (projectId: string) => {
-    try {
-      const response = await fetch('/api/projects');
-      if (response.ok) {
-        const projects = await response.json();
-        const project = projects.find((p: Project) => p.id === projectId);
-        if (project) setCurrentProject(project);
-      }
-    } catch (error) {
-      console.error('Error loading project:', error);
-    }
-  };
-
-  const handleProjectChange = (project: Project) => {
-    router.push(`/app/projects/${project.id}`);
-  };
-
-  useEffect(() => {
-    if (!isPending && !session) {
-      // router.push('/auth/sign-in'); // Disabled for debugging
-    }
-  }, [session, isPending, router]);
-
-  useEffect(() => {
-    if (params.id) {
-      loadProject(params.id as string);
-    } else {
-      setCurrentProject(null);
-    }
-  }, [params.id]);
 
   if (isPending) {
     return (
@@ -96,10 +60,7 @@ export default function DashboardLayout({
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar
-        currentProject={currentProject}
-        onProjectChange={handleProjectChange}
-      />
+      <Sidebar />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {children}
       </div>

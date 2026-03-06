@@ -67,6 +67,7 @@ export const projects = pgTable("projects", {
     .notNull()
     .references(() => users.id), // BetterAuth uses text IDs
   name: text("name").notNull(),
+  type: text("type").notNull().default("artwork"), // 'artwork' | 'asset' | 'video'
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { mode: "date" }).defaultNow().notNull(),
 });

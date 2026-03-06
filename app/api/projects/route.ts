@@ -25,6 +25,7 @@ export async function GET() {
       .select({
         id: projects.id,
         name: projects.name,
+        type: projects.type,
         userId: projects.userId,
         createdAt: projects.createdAt,
         updatedAt: projects.updatedAt,
@@ -83,8 +84,8 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { name } = await req.json();
-    const project = await createProject(session.user.id, name);
+    const { name, type = 'artwork' } = await req.json();
+    const project = await createProject(session.user.id, name, type);
     return Response.json(project);
   } catch (error) {
     console.error('Error creating project:', error);
