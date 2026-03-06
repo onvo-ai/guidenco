@@ -1,37 +1,16 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Download, Code2, Loader2 } from 'lucide-react';
+import { useState } from 'react';
+import { Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface AssetViewerProps {
   svgContent: string;
   title?: string;
-  onSave?: (svgContent: string) => Promise<void>;
 }
 
-export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
+export function AssetViewer({ svgContent, title }: AssetViewerProps) {
   const [zoom, setZoom] = useState(1);
-  const [showCode, setShowCode] = useState(false);
-  const [editedCode, setEditedCode] = useState(svgContent);
-  const [isSaving, setIsSaving] = useState(false);
-
-  // Sync edited code when svgContent changes (e.g. LLM generates new SVG)
-  useEffect(() => {
-    setEditedCode(svgContent);
-  }, [svgContent]);
-
-  const hasChanges = editedCode !== svgContent;
-
-  const handleSave = async () => {
-    if (!onSave) return;
-    setIsSaving(true);
-    try {
-      await onSave(editedCode);
-    } finally {
-      setIsSaving(false);
-    }
-  };
 
   const handleDownload = () => {
     const blob = new Blob([svgContent], { type: 'image/svg+xml' });
@@ -69,56 +48,30 @@ export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
           <span className="text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded-full">SVG</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {/* Tab switcher */}
+          {/* Zoom controls */}
           <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
             <button
-              onClick={() => setShowCode(false)}
-              className={`px-3 h-6 flex items-center text-xs font-medium rounded transition-colors ${
-                !showCode
-                  ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-zinc-100'
-                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-              }`}
+              onClick={() => setZoom(z => Math.max(0.25, z - 0.25))}
+              className="w-6 h-6 flex items-center justify-center text-xs font-medium hover:bg-white dark:hover:bg-zinc-700 rounded transition-colors"
             >
-              Preview
+              −
+            </button>
+            <span className="text-xs font-medium px-1 min-w-[3rem] text-center">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button
+              onClick={() => setZoom(z => Math.min(4, z + 0.25))}
+              className="w-6 h-6 flex items-center justify-center text-xs font-medium hover:bg-white dark:hover:bg-zinc-700 rounded transition-colors"
+            >
+              +
             </button>
             <button
-              onClick={() => setShowCode(true)}
-              className={`px-3 h-6 flex items-center text-xs font-medium rounded transition-colors ${
-                showCode
-                  ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-zinc-100'
-                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-              }`}
+              onClick={() => setZoom(1)}
+              className="w-6 h-6 flex items-center justify-center text-xs font-medium hover:bg-white dark:hover:bg-zinc-700 rounded transition-colors"
             >
-              <Code2 className="h-3 w-3 mr-1" />
-              Code
+              ↺
             </button>
           </div>
-          {/* Zoom controls (preview only) */}
-          {!showCode && (
-            <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
-              <button
-                onClick={() => setZoom(z => Math.max(0.25, z - 0.25))}
-                className="w-6 h-6 flex items-center justify-center text-xs font-medium hover:bg-white dark:hover:bg-zinc-700 rounded transition-colors"
-              >
-                −
-              </button>
-              <span className="text-xs font-medium px-1 min-w-[3rem] text-center">
-                {Math.round(zoom * 100)}%
-              </span>
-              <button
-                onClick={() => setZoom(z => Math.min(4, z + 0.25))}
-                className="w-6 h-6 flex items-center justify-center text-xs font-medium hover:bg-white dark:hover:bg-zinc-700 rounded transition-colors"
-              >
-                +
-              </button>
-              <button
-                onClick={() => setZoom(1)}
-                className="w-6 h-6 flex items-center justify-center text-xs font-medium hover:bg-white dark:hover:bg-zinc-700 rounded transition-colors"
-              >
-                ↺
-              </button>
-            </div>
-          )}
           <Button size="sm" variant="outline" onClick={handleDownload} className="gap-1.5">
             <Download className="h-3.5 w-3.5" />
             Download
@@ -126,41 +79,14 @@ export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
         </div>
       </div>
 
-      {/* Content */}
-      {showCode ? (
-        <div className="flex-1 flex flex-col overflow-hidden bg-zinc-900">
-          <textarea
-            value={editedCode}
-            onChange={(e) => setEditedCode(e.target.value)}
-            className="flex-1 w-full p-4 text-xs text-zinc-100 font-mono bg-transparent resize-none outline-none leading-relaxed"
-            spellCheck={false}
-          />
-          {hasChanges && onSave && (
-            <div className="p-3 border-t border-zinc-800 flex justify-end gap-2 shrink-0">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setEditedCode(svgContent)}
-                className="text-zinc-400 hover:text-zinc-200"
-              >
-                Reset
-              </Button>
-              <Button size="sm" onClick={handleSave} disabled={isSaving}>
-                {isSaving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                Save
-              </Button>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="flex-1 overflow-auto bg-[repeating-conic-gradient(#e5e7eb_0%_25%,transparent_0%_50%)] dark:bg-[repeating-conic-gradient(#27272a_0%_25%,transparent_0%_50%)] bg-[length:20px_20px] flex items-center justify-center">
-          <div
-            style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
-            dangerouslySetInnerHTML={{ __html: svgContent }}
-            className="drop-shadow-lg"
-          />
-        </div>
-      )}
+      {/* SVG Preview */}
+      <div className="flex-1 overflow-auto bg-[repeating-conic-gradient(#e5e7eb_0%_25%,transparent_0%_50%)] dark:bg-[repeating-conic-gradient(#27272a_0%_25%,transparent_0%_50%)] bg-[length:20px_20px] flex items-center justify-center">
+        <div
+          style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
+          dangerouslySetInnerHTML={{ __html: svgContent }}
+          className="drop-shadow-lg"
+        />
+      </div>
     </div>
   );
 }

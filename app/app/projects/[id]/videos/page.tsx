@@ -8,7 +8,7 @@ import { VideoViewer } from '@/components/video-viewer';
 import { Project } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Settings2 } from 'lucide-react';
+import { Settings2, Loader2 } from 'lucide-react';
 
 interface VideoSettings {
   width: number;
@@ -34,12 +34,20 @@ export default function VideosPage() {
   const [video, setVideo] = useState<any>(null);
   const [isRendering, setIsRendering] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showCode, setShowCode] = useState(false);
+  const [editedCode, setEditedCode] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
   const [settings, setSettings] = useState<VideoSettings>({
     width: 1920,
     height: 1080,
     durationInFrames: 150,
     fps: 30,
   });
+
+  // Sync editedCode when video code changes (e.g. LLM generates new code)
+  useEffect(() => {
+    if (video?.remotionCode) setEditedCode(video.remotionCode);
+  }, [video?.remotionCode]);
 
   useEffect(() => {
     if (projectId) {
@@ -99,19 +107,23 @@ export default function VideosPage() {
   };
 
   const handleSaveCode = async (remotionCode: string) => {
-    await fetch('/api/project-video', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId, remotionCode }),
-    });
-    setVideo((v: any) => ({ ...v, remotionCode }));
+    setIsSaving(true);
+    try {
+      await fetch('/api/project-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, remotionCode }),
+      });
+      setVideo((v: any) => ({ ...v, remotionCode }));
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleRender = async () => {
     if (!video || isRendering) return;
     setIsRendering(true);
     try {
-      // Update status to rendering optimistically
       setVideo((v: any) => ({ ...v, status: 'rendering' }));
       const res = await fetch('/api/project-video/render', {
         method: 'POST',
@@ -133,6 +145,8 @@ export default function VideosPage() {
     }
   };
 
+  const hasChanges = editedCode !== (video?.remotionCode ?? '');
+
   if (!currentProject) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -143,14 +157,29 @@ export default function VideosPage() {
 
   return (
     <ResizablePanelGroup direction="horizontal" className="flex-1">
-      {/* Left: Chat */}
+      {/* Left: Chat or Code */}
       <ResizablePanel defaultSize={40} minSize={25}>
         <div className="h-full flex flex-col overflow-hidden">
           <div className="flex items-center justify-between h-14 px-4 border-b bg-white dark:bg-zinc-950 shrink-0">
             <div className="inline-flex items-center h-10 p-1 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
-              <span className="px-4 h-full flex items-center text-sm font-medium rounded-md bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100">
+              <button
+                onClick={() => setShowCode(false)}
+                className={`px-4 h-full text-sm font-medium rounded-md transition-all ${!showCode
+                  ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
+                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
+                }`}
+              >
                 Chat
-              </span>
+              </button>
+              <button
+                onClick={() => setShowCode(true)}
+                className={`px-4 h-full text-sm font-medium rounded-md transition-all ${showCode
+                  ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
+                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
+                }`}
+              >
+                Code
+              </button>
             </div>
             <Button
               size="sm"
@@ -230,27 +259,53 @@ export default function VideosPage() {
           )}
 
           <div className="flex-1 overflow-hidden">
-            <SimpleChatInterface
-              projectId={projectId}
-              apiEndpoint="/api/video-chat"
-              onUpdate={handleUpdate}
-              placeholder="Describe the video you want to create..."
-              historyEndpoint={`/api/messages?projectId=${projectId}&section=video`}
-            />
+            {showCode ? (
+              <div className="h-full flex flex-col bg-zinc-900">
+                <textarea
+                  value={editedCode}
+                  onChange={(e) => setEditedCode(e.target.value)}
+                  className="flex-1 w-full p-4 text-xs text-zinc-100 font-mono bg-transparent resize-none outline-none leading-relaxed"
+                  spellCheck={false}
+                />
+                {hasChanges && (
+                  <div className="p-3 border-t border-zinc-800 flex justify-end gap-2 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setEditedCode(video?.remotionCode ?? '')}
+                      className="text-zinc-400 hover:text-zinc-200"
+                    >
+                      Reset
+                    </Button>
+                    <Button size="sm" onClick={() => handleSaveCode(editedCode)} disabled={isSaving}>
+                      {isSaving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+                      Save
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <SimpleChatInterface
+                projectId={projectId}
+                apiEndpoint="/api/video-chat"
+                onUpdate={handleUpdate}
+                placeholder="Describe the video you want to create..."
+                historyEndpoint={`/api/messages?projectId=${projectId}&section=video`}
+              />
+            )}
           </div>
         </div>
       </ResizablePanel>
 
       <ResizableHandle withHandle />
 
-      {/* Right: Video Preview */}
+      {/* Right: Video Preview (always visible) */}
       <ResizablePanel defaultSize={60} minSize={30}>
         <div className="h-full">
           <VideoViewer
             video={video}
             onRender={handleRender}
             isRendering={isRendering}
-            onSave={handleSaveCode}
           />
         </div>
       </ResizablePanel>

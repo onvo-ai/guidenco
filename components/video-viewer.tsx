@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Play, Code2, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import { Play, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface VideoData {
@@ -20,31 +19,9 @@ interface VideoViewerProps {
   video: VideoData | null;
   onRender?: () => void;
   isRendering?: boolean;
-  onSave?: (code: string) => Promise<void>;
 }
 
-export function VideoViewer({ video, onRender, isRendering, onSave }: VideoViewerProps) {
-  const [showCode, setShowCode] = useState(false);
-  const [editedCode, setEditedCode] = useState(video?.remotionCode ?? '');
-  const [isSaving, setIsSaving] = useState(false);
-
-  // Sync when video code changes (e.g. LLM generates new code)
-  useEffect(() => {
-    if (video?.remotionCode) setEditedCode(video.remotionCode);
-  }, [video?.remotionCode]);
-
-  const hasChanges = editedCode !== (video?.remotionCode ?? '');
-
-  const handleSave = async () => {
-    if (!onSave) return;
-    setIsSaving(true);
-    try {
-      await onSave(editedCode);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
+export function VideoViewer({ video, onRender, isRendering }: VideoViewerProps) {
   if (!video || !video.remotionCode) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-zinc-400 gap-3">
@@ -72,29 +49,6 @@ export function VideoViewer({ video, onRender, isRendering, onSave }: VideoViewe
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
-            <button
-              onClick={() => setShowCode(false)}
-              className={`px-3 h-6 flex items-center text-xs font-medium rounded transition-colors ${
-                !showCode
-                  ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-zinc-100'
-                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-              }`}
-            >
-              Preview
-            </button>
-            <button
-              onClick={() => setShowCode(true)}
-              className={`px-3 h-6 flex items-center text-xs font-medium rounded transition-colors ${
-                showCode
-                  ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-zinc-100'
-                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-              }`}
-            >
-              <Code2 className="h-3 w-3 mr-1" />
-              Code
-            </button>
-          </div>
           {video.status !== 'done' && onRender && (
             <Button
               size="sm"
@@ -124,34 +78,9 @@ export function VideoViewer({ video, onRender, isRendering, onSave }: VideoViewe
         </div>
       </div>
 
-      {/* Content */}
+      {/* Video Preview */}
       <div className="flex-1 overflow-hidden bg-zinc-950 flex items-center justify-center relative">
-        {showCode ? (
-          <div className="w-full h-full flex flex-col bg-zinc-900">
-            <textarea
-              value={editedCode}
-              onChange={(e) => setEditedCode(e.target.value)}
-              className="flex-1 w-full p-4 text-xs text-zinc-100 font-mono bg-transparent resize-none outline-none leading-relaxed"
-              spellCheck={false}
-            />
-            {hasChanges && onSave && (
-              <div className="p-3 border-t border-zinc-800 flex justify-end gap-2 shrink-0">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setEditedCode(video.remotionCode)}
-                  className="text-zinc-400 hover:text-zinc-200"
-                >
-                  Reset
-                </Button>
-                <Button size="sm" onClick={handleSave} disabled={isSaving}>
-                  {isSaving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                  Save
-                </Button>
-              </div>
-            )}
-          </div>
-        ) : video.status === 'done' && video.videoUrl ? (
+        {video.status === 'done' && video.videoUrl ? (
           <video
             src={video.videoUrl}
             controls
