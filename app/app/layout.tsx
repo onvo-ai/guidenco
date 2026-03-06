@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, usePathname, useParams } from 'next/navigation';
 import { useSession } from '@/lib/auth-client';
-import { Header } from '@/components/header';
+import { Sidebar } from '@/components/sidebar';
 import { Project } from '@/lib/types';
 
 export default function DashboardLayout({
@@ -17,17 +17,13 @@ export default function DashboardLayout({
   const { data: session, isPending, error } = useSession();
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
 
-  console.log('DashboardLayout: Session state:', { session, isPending, error });
-
   const loadProject = async (projectId: string) => {
     try {
       const response = await fetch('/api/projects');
       if (response.ok) {
         const projects = await response.json();
         const project = projects.find((p: Project) => p.id === projectId);
-        if (project) {
-          setCurrentProject(project);
-        }
+        if (project) setCurrentProject(project);
       }
     } catch (error) {
       console.error('Error loading project:', error);
@@ -38,15 +34,12 @@ export default function DashboardLayout({
     router.push(`/app/projects/${project.id}`);
   };
 
-  // Redirect to auth if not logged in
   useEffect(() => {
     if (!isPending && !session) {
-      console.log('DashboardLayout: No session found');
       // router.push('/auth/sign-in'); // Disabled for debugging
     }
   }, [session, isPending, router]);
 
-  // Load current project if on project page
   useEffect(() => {
     if (params.id) {
       loadProject(params.id as string);
@@ -54,9 +47,6 @@ export default function DashboardLayout({
       setCurrentProject(null);
     }
   }, [params.id]);
-
-  // Check if we're on a project page to show project selector
-  const showProjectSelector = pathname?.startsWith('/app/projects/');
 
   if (isPending) {
     return (
@@ -71,14 +61,14 @@ export default function DashboardLayout({
       <div className="flex flex-col items-center justify-center h-screen gap-6 p-8 bg-zinc-50 dark:bg-zinc-950">
         <div className="max-w-md w-full bg-white dark:bg-zinc-900 p-8 rounded-lg shadow-lg text-center">
           <h1 className="text-2xl font-bold text-red-600 mb-4">Access Denied</h1>
-          <p className="text-zinc-600 dark:text-zinc-400 mb-6">
-            We couldn't detect an active session. This might be because:
-            <ul className="list-disc text-left mt-4 ml-4 space-y-2 text-sm">
-              <li>Cookies are disabled or blocked</li>
-              <li>The session expired</li>
-              <li>There is a configuration mismatch between client/server</li>
-            </ul>
+          <p className="text-zinc-600 dark:text-zinc-400 mb-3">
+            We couldn&apos;t detect an active session. This might be because:
           </p>
+          <ul className="list-disc text-left ml-6 mb-6 space-y-2 text-sm text-zinc-600 dark:text-zinc-400">
+            <li>Cookies are disabled or blocked</li>
+            <li>The session expired</li>
+            <li>There is a configuration mismatch between client/server</li>
+          </ul>
 
           <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded text-left text-xs font-mono mb-6 overflow-auto">
             <p><strong>Error:</strong> {error ? error.message : 'None'}</p>
@@ -105,13 +95,14 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="flex flex-col h-screen">
-      <Header
-        showProjectSelector={showProjectSelector}
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar
         currentProject={currentProject}
         onProjectChange={handleProjectChange}
       />
-      {children}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {children}
+      </div>
     </div>
   );
 }
