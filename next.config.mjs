@@ -2,7 +2,14 @@
 
 const nextConfig = {
   output: "standalone",
-  /* config options here */
+  serverExternalPackages: [
+    "remotion",
+    "@remotion/bundler",
+    "@remotion/renderer",
+    "@remotion/compositor-darwin-arm64",
+    "esbuild",
+    "@esbuild/darwin-arm64",
+  ],
 };
 
 export default nextConfig;
