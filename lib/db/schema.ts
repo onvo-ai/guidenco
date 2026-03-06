@@ -135,6 +135,17 @@ export const teamInvites = pgTable("team_invites", {
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
+// Agent settings (per-team)
+export const agentSettings = pgTable("agent_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  teamId: uuid("team_id")
+    .notNull()
+    .references(() => teams.id, { onDelete: "cascade" }),
+  designGuidelines: text("design_guidelines").default(""),
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { mode: "date" }).defaultNow().notNull(),
+});
+
 // Design warehouse assets (per-team)
 export const assets = pgTable("assets", {
   id: uuid("id").primaryKey().defaultRandom(),
