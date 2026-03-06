@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Download, Code2, Loader2 } from 'lucide-react';
+import { Download, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import Editor from '@monaco-editor/react';
 
 interface AssetViewerProps {
   svgContent: string;
@@ -16,7 +17,6 @@ export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
   const [editedCode, setEditedCode] = useState(svgContent);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Sync edited code when svgContent changes (e.g. LLM generates new SVG)
   useEffect(() => {
     setEditedCode(svgContent);
   }, [svgContent]);
@@ -43,21 +43,6 @@ export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
     URL.revokeObjectURL(url);
   };
 
-  if (!svgContent) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-zinc-400 gap-3">
-        <div className="w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-8 h-8">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z" />
-          </svg>
-        </div>
-        <p className="text-sm">No SVG asset yet</p>
-        <p className="text-xs text-zinc-500">Use the chat to generate an SVG</p>
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
@@ -70,12 +55,12 @@ export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {/* Tab switcher */}
-          <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
+          <div className="inline-flex items-center h-8 p-1 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
             <button
               onClick={() => setShowCode(false)}
-              className={`px-3 h-6 flex items-center text-xs font-medium rounded transition-colors ${
+              className={`px-3 h-full text-xs font-medium rounded-md transition-all ${
                 !showCode
-                  ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-zinc-100'
+                  ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
                   : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
               }`}
             >
@@ -83,18 +68,17 @@ export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
             </button>
             <button
               onClick={() => setShowCode(true)}
-              className={`px-3 h-6 flex items-center text-xs font-medium rounded transition-colors ${
+              className={`px-3 h-full text-xs font-medium rounded-md transition-all ${
                 showCode
-                  ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-zinc-100'
+                  ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
                   : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
               }`}
             >
-              <Code2 className="h-3 w-3 mr-1" />
               Code
             </button>
           </div>
           {/* Zoom controls (preview only) */}
-          {!showCode && (
+          {!showCode && svgContent && (
             <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
               <button
                 onClick={() => setZoom(z => Math.max(0.25, z - 0.25))}
@@ -119,29 +103,50 @@ export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
               </button>
             </div>
           )}
-          <Button size="sm" variant="outline" onClick={handleDownload} className="gap-1.5">
-            <Download className="h-3.5 w-3.5" />
-            Download
-          </Button>
+          {svgContent && (
+            <Button size="sm" variant="outline" onClick={handleDownload} className="gap-1.5">
+              <Download className="h-3.5 w-3.5" />
+              Download
+            </Button>
+          )}
         </div>
       </div>
 
       {/* Content */}
       {showCode ? (
-        <div className="flex-1 flex flex-col overflow-hidden bg-zinc-900">
-          <textarea
-            value={editedCode}
-            onChange={(e) => setEditedCode(e.target.value)}
-            className="flex-1 w-full p-4 text-xs text-zinc-100 font-mono bg-transparent resize-none outline-none leading-relaxed"
-            spellCheck={false}
-          />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 overflow-hidden bg-[#1e1e1e]">
+            <Editor
+              height="100%"
+              defaultLanguage="xml"
+              theme="vs-dark"
+              value={editedCode || ''}
+              onChange={(val) => setEditedCode(val ?? '')}
+              options={{
+                readOnly: false,
+                minimap: { enabled: false },
+                fontSize: 13,
+                padding: { top: 8, bottom: 8 },
+                wordWrap: 'on',
+                scrollBeyondLastLine: false,
+                lineNumbers: 'on',
+                renderLineHighlight: 'all',
+                scrollbar: {
+                  vertical: 'visible',
+                  horizontal: 'visible',
+                  useShadows: false,
+                  verticalScrollbarSize: 10,
+                  horizontalScrollbarSize: 10,
+                },
+              }}
+            />
+          </div>
           {hasChanges && onSave && (
-            <div className="p-3 border-t border-zinc-800 flex justify-end gap-2 shrink-0">
+            <div className="p-3 border-t bg-white dark:bg-zinc-950 flex justify-end gap-2 shrink-0">
               <Button
                 size="sm"
-                variant="ghost"
+                variant="outline"
                 onClick={() => setEditedCode(svgContent)}
-                className="text-zinc-400 hover:text-zinc-200"
               >
                 Reset
               </Button>
@@ -151,6 +156,17 @@ export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
               </Button>
             </div>
           )}
+        </div>
+      ) : !svgContent ? (
+        <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 gap-3">
+          <div className="w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-8 h-8">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z" />
+            </svg>
+          </div>
+          <p className="text-sm">No SVG asset yet</p>
+          <p className="text-xs text-zinc-500">Use the chat to generate an SVG</p>
         </div>
       ) : (
         <div className="flex-1 overflow-auto bg-[repeating-conic-gradient(#e5e7eb_0%_25%,transparent_0%_50%)] dark:bg-[repeating-conic-gradient(#27272a_0%_25%,transparent_0%_50%)] bg-[length:20px_20px] flex items-center justify-center">

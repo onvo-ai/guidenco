@@ -208,10 +208,11 @@ export function Sidebar() {
                   {sectionProjects.map((project) => {
                     const isActive = project.id === currentProjectId;
                     return (
-                      <button
+                      <div
                         key={project.id}
                         onClick={() => router.push(projectUrl(project))}
-                        className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-sm transition-colors group ${
+                        role="button"
+                        className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-sm transition-colors group cursor-pointer ${
                           isActive
                             ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
                             : 'text-zinc-500 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-100'
@@ -228,7 +229,7 @@ export function Sidebar() {
                             <Trash2 className="h-3 w-3" />
                           </Button>
                         )}
-                      </button>
+                      </div>
                     );
                   })}
 

@@ -104,5 +104,5 @@ CRITICAL: Always end with a text explanation of what you created/changed.`,
     },
   });
 
-  return result.toDataStreamResponse();
+  return result.toUIMessageStreamResponse();
 }
