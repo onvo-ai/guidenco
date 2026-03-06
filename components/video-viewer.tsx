@@ -1,9 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import { Play, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import Editor from '@monaco-editor/react';
 
 interface VideoData {
   id: string;
@@ -21,30 +19,9 @@ interface VideoViewerProps {
   video: VideoData | null;
   onRender?: () => void;
   isRendering?: boolean;
-  onSave?: (code: string) => Promise<void>;
 }
 
-export function VideoViewer({ video, onRender, isRendering, onSave }: VideoViewerProps) {
-  const [showCode, setShowCode] = useState(false);
-  const [editedCode, setEditedCode] = useState(video?.remotionCode ?? '');
-  const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    if (video?.remotionCode) setEditedCode(video.remotionCode);
-  }, [video?.remotionCode]);
-
-  const hasChanges = editedCode !== (video?.remotionCode ?? '');
-
-  const handleSave = async () => {
-    if (!onSave) return;
-    setIsSaving(true);
-    try {
-      await onSave(editedCode);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
+export function VideoViewer({ video, onRender, isRendering }: VideoViewerProps) {
   const duration = video ? (video.durationInFrames / video.fps).toFixed(1) : null;
 
   return (
@@ -62,28 +39,6 @@ export function VideoViewer({ video, onRender, isRendering, onSave }: VideoViewe
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <div className="inline-flex items-center h-8 p-1 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
-            <button
-              onClick={() => setShowCode(false)}
-              className={`px-3 h-full text-xs font-medium rounded-md transition-all ${
-                !showCode
-                  ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
-                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-              }`}
-            >
-              Preview
-            </button>
-            <button
-              onClick={() => setShowCode(true)}
-              className={`px-3 h-full text-xs font-medium rounded-md transition-all ${
-                showCode
-                  ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
-                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-              }`}
-            >
-              Code
-            </button>
-          </div>
           {video && video.status !== 'done' && onRender && (
             <Button
               size="sm"
@@ -114,51 +69,7 @@ export function VideoViewer({ video, onRender, isRendering, onSave }: VideoViewe
       </div>
 
       {/* Content */}
-      {showCode ? (
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-hidden bg-[#1e1e1e]">
-            <Editor
-              height="100%"
-              defaultLanguage="typescript"
-              theme="vs-dark"
-              value={editedCode || ''}
-              onChange={(val) => setEditedCode(val ?? '')}
-              options={{
-                readOnly: false,
-                minimap: { enabled: false },
-                fontSize: 13,
-                padding: { top: 8, bottom: 8 },
-                wordWrap: 'on',
-                scrollBeyondLastLine: false,
-                lineNumbers: 'on',
-                renderLineHighlight: 'all',
-                scrollbar: {
-                  vertical: 'visible',
-                  horizontal: 'visible',
-                  useShadows: false,
-                  verticalScrollbarSize: 10,
-                  horizontalScrollbarSize: 10,
-                },
-              }}
-            />
-          </div>
-          {hasChanges && onSave && (
-            <div className="p-3 border-t bg-white dark:bg-zinc-950 flex justify-end gap-2 shrink-0">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setEditedCode(video?.remotionCode ?? '')}
-              >
-                Reset
-              </Button>
-              <Button size="sm" onClick={handleSave} disabled={isSaving}>
-                {isSaving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                Save
-              </Button>
-            </div>
-          )}
-        </div>
-      ) : !video || !video.remotionCode ? (
+      {!video || !video.remotionCode ? (
         <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 gap-3 bg-zinc-950">
           <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center">
             <Play className="w-7 h-7 ml-1 text-zinc-400" />

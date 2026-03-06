@@ -1,37 +1,16 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Download, Loader2 } from 'lucide-react';
+import { useState } from 'react';
+import { Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import Editor from '@monaco-editor/react';
 
 interface AssetViewerProps {
   svgContent: string;
   title?: string;
-  onSave?: (svgContent: string) => Promise<void>;
 }
 
-export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
+export function AssetViewer({ svgContent, title }: AssetViewerProps) {
   const [zoom, setZoom] = useState(1);
-  const [showCode, setShowCode] = useState(false);
-  const [editedCode, setEditedCode] = useState(svgContent);
-  const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    setEditedCode(svgContent);
-  }, [svgContent]);
-
-  const hasChanges = editedCode !== svgContent;
-
-  const handleSave = async () => {
-    if (!onSave) return;
-    setIsSaving(true);
-    try {
-      await onSave(editedCode);
-    } finally {
-      setIsSaving(false);
-    }
-  };
 
   const handleDownload = () => {
     const blob = new Blob([svgContent], { type: 'image/svg+xml' });
@@ -54,31 +33,7 @@ export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
           <span className="text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded-full">SVG</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {/* Tab switcher */}
-          <div className="inline-flex items-center h-8 p-1 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
-            <button
-              onClick={() => setShowCode(false)}
-              className={`px-3 h-full text-xs font-medium rounded-md transition-all ${
-                !showCode
-                  ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
-                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-              }`}
-            >
-              Preview
-            </button>
-            <button
-              onClick={() => setShowCode(true)}
-              className={`px-3 h-full text-xs font-medium rounded-md transition-all ${
-                showCode
-                  ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
-                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-              }`}
-            >
-              Code
-            </button>
-          </div>
-          {/* Zoom controls (preview only) */}
-          {!showCode && svgContent && (
+          {svgContent && (
             <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
               <button
                 onClick={() => setZoom(z => Math.max(0.25, z - 0.25))}
@@ -113,51 +68,7 @@ export function AssetViewer({ svgContent, title, onSave }: AssetViewerProps) {
       </div>
 
       {/* Content */}
-      {showCode ? (
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-hidden bg-[#1e1e1e]">
-            <Editor
-              height="100%"
-              defaultLanguage="xml"
-              theme="vs-dark"
-              value={editedCode || ''}
-              onChange={(val) => setEditedCode(val ?? '')}
-              options={{
-                readOnly: false,
-                minimap: { enabled: false },
-                fontSize: 13,
-                padding: { top: 8, bottom: 8 },
-                wordWrap: 'on',
-                scrollBeyondLastLine: false,
-                lineNumbers: 'on',
-                renderLineHighlight: 'all',
-                scrollbar: {
-                  vertical: 'visible',
-                  horizontal: 'visible',
-                  useShadows: false,
-                  verticalScrollbarSize: 10,
-                  horizontalScrollbarSize: 10,
-                },
-              }}
-            />
-          </div>
-          {hasChanges && onSave && (
-            <div className="p-3 border-t bg-white dark:bg-zinc-950 flex justify-end gap-2 shrink-0">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setEditedCode(svgContent)}
-              >
-                Reset
-              </Button>
-              <Button size="sm" onClick={handleSave} disabled={isSaving}>
-                {isSaving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                Save
-              </Button>
-            </div>
-          )}
-        </div>
-      ) : !svgContent ? (
+      {!svgContent ? (
         <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 gap-3">
           <div className="w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-8 h-8">
