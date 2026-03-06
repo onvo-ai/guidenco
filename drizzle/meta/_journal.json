@@ -15,6 +15,13 @@
       "when": 1769150844631,
       "tag": "0001_curvy_blackheart",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1771969046044,
+      "tag": "0002_sharp_skrulls",
+      "breakpoints": true
     }
   ]
 }

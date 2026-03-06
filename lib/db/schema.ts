@@ -163,3 +163,14 @@ export const chatMessages = pgTable("chat_messages", {
   content: jsonb("content").notNull(), // Store parts array as JSON
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
+
+// Agent settings table (per-team)
+export const agentSettings = pgTable("agent_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  teamId: uuid("team_id")
+    .notNull()
+    .references(() => teams.id, { onDelete: "cascade" }),
+  designGuidelines: text("design_guidelines").default(""), // User-provided design guidelines
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { mode: "date" }).defaultNow().notNull(),
+});

@@ -5,6 +5,10 @@ import { useSession, signOut } from '@/lib/auth-client';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { MarkdownEditor } from '@/components/ui/markdown-editor';
+import { VisualMarkdownEditor } from '@/components/ui/visual-markdown-editor';
+import { WysiwygMarkdownEditor } from '@/components/ui/wysiwyg-markdown-editor';
 import {
   User,
   Users,
@@ -20,9 +24,10 @@ import {
   X,
   FileImage,
   FileText,
+  Bot,
 } from 'lucide-react';
 
-type Section = 'profile' | 'team' | 'billing' | 'warehouse';
+type Section = 'profile' | 'team' | 'billing' | 'warehouse' | 'agent';
 
 interface TeamData {
   team: { id: string; name: string; ownerId: string };
@@ -51,7 +56,8 @@ const NAV_ITEMS: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'profile', label: 'Profile', icon: <User className="h-4 w-4" /> },
   { id: 'team', label: 'Team', icon: <Users className="h-4 w-4" /> },
   { id: 'billing', label: 'Billing', icon: <CreditCard className="h-4 w-4" /> },
-  { id: 'warehouse', label: 'Design Warehouse', icon: <Package className="h-4 w-4" /> },
+  { id: 'warehouse', label: 'Assets', icon: <Package className="h-4 w-4" /> },
+  { id: 'agent', label: 'Agent', icon: <Bot className="h-4 w-4" /> },
 ];
 
 // ─── Profile Section ──────────────────────────────────────────────────────────
@@ -437,7 +443,7 @@ function WarehouseSection() {
   return (
     <div className="h-full flex flex-col gap-0">
       <div className="mb-5">
-        <h2 className="text-lg font-semibold">Design Warehouse</h2>
+        <h2 className="text-lg font-semibold">Assets</h2>
         <p className="text-sm text-zinc-500">Upload assets your team can use in artworks</p>
       </div>
 
@@ -658,6 +664,192 @@ function WarehouseSection() {
   );
 }
 
+// ─── Agent Section ───────────────────────────────────────────────────────────────
+
+function AgentSection() {
+  const { data: session } = useSession();
+  const [designGuidelines, setDesignGuidelines] = useState('');
+  const [url, setUrl] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  const loadAgentSettings = async () => {
+    try {
+      const res = await fetch('/api/settings/agent');
+      if (res.ok) {
+        const data = await res.json();
+        setDesignGuidelines(data.designGuidelines || '');
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  useEffect(() => { loadAgentSettings(); }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/settings/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ designGuidelines }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to save agent settings');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAnalyzeUrl = async () => {
+    if (!url) return;
+    setError('');
+    setIsAnalyzing(true);
+    try {
+      const res = await fetch('/api/settings/agent/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to analyze website');
+
+      // Prepend the analysis to existing guidelines or replace if empty
+      const analysis = json.analysis;
+      const updatedGuidelines = designGuidelines ? `${analysis}\n\n${designGuidelines}` : analysis;
+      setDesignGuidelines(updatedGuidelines);
+      setUrl('');
+
+      // Auto-save after successful analysis
+      await saveGuidelines(updatedGuidelines);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const saveGuidelines = async (guidelines: string) => {
+    try {
+      const res = await fetch('/api/settings/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ designGuidelines: guidelines }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+    } catch (err: any) {
+      console.error('Auto-save failed:', err.message);
+    }
+  };
+
+  return (
+    <div className="h-full flex flex-col gap-0">
+      <div className="mb-5">
+        <h2 className="text-lg font-semibold">Agent</h2>
+        <p className="text-sm text-zinc-500">Configure design guidelines and website analysis for your AI agent</p>
+      </div>
+
+      <div className="flex-1 min-w-0 flex flex-col gap-6">
+        {/* URL Analysis Section */}
+        <div className="border rounded-xl p-4">
+          <h3 className="text-sm font-semibold mb-3">Analyze Website Design</h3>
+          <div className="flex gap-2">
+            <Input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="Enter website URL (e.g., https://example.com)"
+              disabled={isAnalyzing}
+              className="flex-1"
+            />
+            <Button
+              onClick={handleAnalyzeUrl}
+              disabled={!url || isAnalyzing}
+              className="gap-2"
+              type="button"
+            >
+              {isAnalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {isAnalyzing ? 'Analyzing...' : 'Analyze'}
+            </Button>
+          </div>
+          <p className="text-xs text-zinc-500 mt-2">
+            The agent will analyze the website's design elements, colors, fonts, spacing, and other visual characteristics. Results will be auto-saved.
+          </p>
+        </div>
+
+        {/* Design Guidelines Section */}
+        <div className="flex-1 flex flex-col gap-3 min-h-0">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Design Guidelines</h3>
+            <form onSubmit={handleSave} className="flex gap-2">
+              {error && <p className="text-sm text-red-500">{error}</p>}
+              <Button
+                type="submit"
+                disabled={isLoading}
+                className="gap-2"
+                size="sm"
+              >
+                {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : null}
+                {saved ? 'Saved!' : 'Save'}
+              </Button>
+            </form>
+          </div>
+          <WysiwygMarkdownEditor
+            value={designGuidelines}
+            onChange={setDesignGuidelines}
+            placeholder="## Design Guidelines
+
+Enter your design guidelines here. Use the toolbar to format text with headers, bold, italic, links, lists, and more.
+
+### Examples:
+
+#### Colors
+- **Primary**: `#3B82F6` (Blue)
+- **Secondary**: `#10B981` (Green) 
+- **Accent**: `#F59E0B` (Amber)
+
+#### Typography
+- **Headings**: Inter font, bold
+- **Body**: Inter font, regular
+- **Code**: `Fira Code` monospace
+
+#### Spacing
+- **Base unit**: 4px
+- **Small gaps**: 8px
+- **Medium gaps**: 16px
+- **Large gaps**: 24px
+
+#### Layout
+- **CSS Grid** for main layouts
+- **Flexbox** for component alignment
+- **Mobile-first** responsive design
+
+#### Brand Guidelines
+- **Consistent color palette**
+- **8px rounded corners**
+- **Subtle shadows for depth**
+- **Clean, minimal aesthetic"
+            disabled={isLoading}
+            height="400px"
+          />
+          <p className="text-xs text-zinc-500 mb-4">
+            These guidelines will be automatically included in the AI agent's system prompt when generating designs. Use Markdown formatting for better organization.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Modal ───────────────────────────────────────────────────────────────
 
 export function SettingsModal({ open, onOpenChange, defaultSection = 'profile' }: SettingsModalProps) {
@@ -699,6 +891,7 @@ export function SettingsModal({ open, onOpenChange, defaultSection = 'profile' }
             {section === 'team' && <TeamSection />}
             {section === 'billing' && <BillingSection />}
             {section === 'warehouse' && <WarehouseSection />}
+            {section === 'agent' && <AgentSection />}
           </div>
         </div>
       </DialogContent>

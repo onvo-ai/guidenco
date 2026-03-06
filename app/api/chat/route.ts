@@ -6,7 +6,7 @@ import { resizeImage } from '@/lib/image-processing';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
-import { assets, teams, teamMembers } from '@/lib/db/schema';
+import { assets, teams, teamMembers, agentSettings } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { getFileBuffer, uploadFile, ensureBucket } from '@/lib/storage';
 import { randomUUID } from 'crypto';
@@ -42,6 +42,54 @@ function clampPageIndex(pageIndex: number, pageCount: number): number {
   return Math.min(Math.max(0, pageIndex), pageCount - 1);
 }
 
+async function getUserTeamAndAgentSettings(userId: string) {
+  // Check if user is a team owner
+  const ownedTeam = await db
+    .select()
+    .from(teams)
+    .where(eq(teams.ownerId, userId))
+    .limit(1);
+
+  let team;
+  if (ownedTeam.length > 0) {
+    team = ownedTeam[0];
+  } else {
+    // Check if user is a member of a team
+    const membership = await db
+      .select({ team: teams })
+      .from(teamMembers)
+      .innerJoin(teams, eq(teamMembers.teamId, teams.id))
+      .where(eq(teamMembers.userId, userId))
+      .limit(1);
+
+    if (membership.length > 0) {
+      team = membership[0].team;
+    } else {
+      // Create a default team for this user
+      const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      const teamName = user[0]?.name ? `${user[0].name}'s Team` : 'My Team';
+
+      const [newTeam] = await db
+        .insert(teams)
+        .values({ name: teamName, ownerId: userId })
+        .returning();
+      team = newTeam;
+    }
+  }
+
+  // Get agent settings for this team
+  const agentData = await db
+    .select()
+    .from(agentSettings)
+    .where(eq(agentSettings.teamId, team.id))
+    .limit(1);
+
+  return {
+    team,
+    designGuidelines: agentData[0]?.designGuidelines || ''
+  };
+}
+
 export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
   const projectId = searchParams.get('projectId');
@@ -66,6 +114,14 @@ export async function POST(req: Request) {
   });
 
   const modelId = (process.env.OPENROUTER_MODEL || '').trim() || 'google/gemini-2.5-pro';
+
+  // Get session and agent settings
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  const { designGuidelines } = await getUserTeamAndAgentSettings(session.user.id);
 
   // Manually convert messages to handle images properly
   const convertedMessages = await Promise.all(messages.map(async (msg: any) => {
@@ -113,7 +169,12 @@ export async function POST(req: Request) {
 
 Current context:
 - The user currently has pageIndex=${defaultSelectedPageIndex} selected in the UI.
-- If the user asks to edit or inspect a page without specifying which one, prefer using this selected pageIndex.
+- If the user asks to edit or inspect a page without specifying which one, prefer using this selectedPageIndex.
+
+${designGuidelines ? `TEAM DESIGN GUIDELINES:
+${designGuidelines}
+
+IMPORTANT: Follow these design guidelines closely when creating or modifying artwork. They represent your team's brand standards and design preferences.` : ''}
 
 You have access to tools to:
 1. Create an artwork with specific dimensions (container size) and number of pages

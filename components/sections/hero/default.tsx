@@ -62,7 +62,7 @@ export default function Hero({
     {
       href: "https://www.launchuicomponents.com/",
       text: "Github",
-      variant: "glow",
+      variant: "outline",
       icon: <Github className="mr-2 size-4" />,
     },
   ],

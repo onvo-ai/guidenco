@@ -22,7 +22,7 @@ export default function Pricing({
       price: 0,
       priceNote: "Free and open-source forever.",
       cta: {
-        variant: "glow",
+        variant: "default",
         label: "Get started for free",
         href: "/docs/getting-started/introduction",
       },
@@ -52,7 +52,7 @@ export default function Pricing({
         `$1000 illustrations`,
         `$1000 custom animations`,
       ],
-      variant: "glow-brand",
+      variant: "popular",
     },
     {
       name: "Pro Team",
@@ -68,7 +68,7 @@ export default function Pricing({
       features: [
         "All the templates, components and sections available for your entire team",
       ],
-      variant: "glow",
+      variant: "default",
     },
   ],
   className = "",

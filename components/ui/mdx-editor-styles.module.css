@@ -1,0 +1,396 @@
+/* MDX Editor Dark Theme Styles */
+
+/* Main editor */
+.mdx-editor {
+  background-color: white !important;
+  min-height: 400px;
+}
+
+.dark .mdx-editor {
+  background-color: #27272a !important;
+}
+
+/* Toolbar */
+.mdx-editor .toolbar {
+  background-color: #fafafa !important;
+  border-bottom: 1px solid #e5e7eb !important;
+  padding: 8px;
+}
+
+.dark .mdx-editor .toolbar {
+  background-color: #27272a !important;
+  border-bottom: 1px solid #404040 !important;
+}
+
+/* Toolbar buttons */
+.mdx-editor .toolbar-button {
+  background-color: white !important;
+  color: #374151 !important;
+  border: 1px solid #e5e7eb !important;
+  padding: 6px 8px;
+  margin: 0 2px;
+  border-radius: 4px;
+}
+
+.mdx-editor .toolbar-button:hover {
+  background-color: #f3f4f6 !important;
+}
+
+.mdx-editor .toolbar-button[data-active="true"] {
+  background-color: #e5e7eb !important;
+}
+
+.dark .mdx-editor .toolbar-button {
+  background-color: #404040 !important;
+  color: #d1d5db !important;
+  border: 1px solid #52525b !important;
+}
+
+.dark .mdx-editor .toolbar-button:hover {
+  background-color: #52525b !important;
+}
+
+.dark .mdx-editor .toolbar-button[data-active="true"] {
+  background-color: #52525b !important;
+}
+
+/* Separators */
+.mdx-editor .separator {
+  background-color: #e5e7eb !important;
+  width: 1px;
+  height: 24px;
+  margin: 0 4px;
+}
+
+.dark .mdx-editor .separator {
+  background-color: #52525b !important;
+}
+
+/* Block type select */
+.mdx-editor .block-type-select {
+  background-color: white !important;
+  color: #374151 !important;
+  border: 1px solid #e5e7eb !important;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+
+.mdx-editor .block-type-select:hover {
+  background-color: #f3f4f6 !important;
+}
+
+.dark .mdx-editor .block-type-select {
+  background-color: #404040 !important;
+  color: #d1d5db !important;
+  border: 1px solid #52525b !important;
+}
+
+.dark .mdx-editor .block-type-select:hover {
+  background-color: #52525b !important;
+}
+
+/* Block type select options */
+.mdx-editor .block-type-select-option {
+  background-color: white !important;
+  color: #374151 !important;
+  padding: 6px 12px;
+}
+
+.mdx-editor .block-type-select-option:hover {
+  background-color: #f3f4f6 !important;
+}
+
+.dark .mdx-editor .block-type-select-option {
+  background-color: #404040 !important;
+  color: #d1d5db !important;
+}
+
+.dark .mdx-editor .block-type-select-option:hover {
+  background-color: #52525b !important;
+}
+
+/* Dialogs */
+.mdx-editor .dialog {
+  background-color: white !important;
+  color: #111827 !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.dark .mdx-editor .dialog {
+  background-color: #27272a !important;
+  color: #f9fafb !important;
+  border: 1px solid #404040 !important;
+}
+
+.mdx-editor .dialog-title {
+  color: #111827 !important;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.dark .mdx-editor .dialog-title {
+  color: #f9fafb !important;
+}
+
+.mdx-editor .dialog-content {
+  color: #374151 !important;
+  margin-bottom: 16px;
+}
+
+.dark .mdx-editor .dialog-content {
+  color: #d1d5db !important;
+}
+
+/* Inputs */
+.mdx-editor .input {
+  background-color: white !important;
+  color: #111827 !important;
+  border: 1px solid #d1d5db !important;
+  padding: 8px 12px;
+  border-radius: 4px;
+  width: 100%;
+}
+
+.mdx-editor .input:focus {
+  border-color: #3b82f6 !important;
+  outline: none;
+}
+
+.dark .mdx-editor .input {
+  background-color: #404040 !important;
+  color: #f9fafb !important;
+  border: 1px solid #52525b !important;
+}
+
+.dark .mdx-editor .input:focus {
+  border-color: #60a5fa !important;
+}
+
+/* Buttons */
+.mdx-editor .button {
+  background-color: #f3f4f6 !important;
+  color: #374151 !important;
+  border: 1px solid #d1d5db !important;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.mdx-editor .button:hover {
+  background-color: #e5e7eb !important;
+}
+
+.dark .mdx-editor .button {
+  background-color: #404040 !important;
+  color: #d1d5db !important;
+  border: 1px solid #52525b !important;
+}
+
+.dark .mdx-editor .button:hover {
+  background-color: #52525b !important;
+}
+
+/* Content area */
+.mdx-editor .contenteditable {
+  padding: 24px !important;
+  min-height: 350px !important;
+  overflow-y: auto !important;
+}
+
+/* Content area text colors - FORCE DARK MODE */
+.mdx-editor .prose {
+  color: #374151 !important;
+  line-height: 1.6 !important;
+}
+
+.dark .mdx-editor .prose {
+  color: #d1d5db !important;
+}
+
+.dark .mdx-editor .prose * {
+  color: #d1d5db !important;
+}
+
+.dark .mdx-editor .prose h1,
+.dark .mdx-editor .prose h2,
+.dark .mdx-editor .prose h3,
+.dark .mdx-editor .prose h4,
+.dark .mdx-editor .prose h5,
+.dark .mdx-editor .prose h6 {
+  color: #f9fafb !important;
+  font-weight: 600;
+  margin-top: 24px;
+  margin-bottom: 16px;
+}
+
+.mdx-editor .prose h1,
+.mdx-editor .prose h2,
+.mdx-editor .prose h3,
+.mdx-editor .prose h4,
+.mdx-editor .prose h5,
+.mdx-editor .prose h6 {
+  color: #111827 !important;
+  font-weight: 600;
+  margin-top: 24px;
+  margin-bottom: 16px;
+}
+
+.mdx-editor .prose p {
+  margin-bottom: 16px !important;
+  color: #374151 !important;
+}
+
+.dark .mdx-editor .prose p {
+  color: #d1d5db !important;
+}
+
+.mdx-editor .prose strong {
+  color: #111827 !important;
+  font-weight: 600;
+}
+
+.dark .mdx-editor .prose strong {
+  color: #f9fafb !important;
+}
+
+.mdx-editor .prose em {
+  color: #374151 !important;
+  font-style: italic;
+}
+
+.dark .mdx-editor .prose em {
+  color: #e5e7eb !important;
+}
+
+.mdx-editor .prose code {
+  color: #374151 !important;
+  background-color: #f3f4f6 !important;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.dark .mdx-editor .prose code {
+  color: #e5e7eb !important;
+  background-color: #374151 !important;
+}
+
+.mdx-editor .prose pre {
+  color: #374151 !important;
+  background-color: #f3f4f6 !important;
+  padding: 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin-bottom: 16px;
+}
+
+.dark .mdx-editor .prose pre {
+  color: #e5e7eb !important;
+  background-color: #374151 !important;
+}
+
+.mdx-editor .prose blockquote {
+  color: #6b7280 !important;
+  border-left: 4px solid #d1d5db !important;
+  padding-left: 16px;
+  margin: 16px 0;
+  font-style: italic;
+}
+
+.dark .mdx-editor .prose blockquote {
+  color: #9ca3af !important;
+  border-left-color: #4b5563 !important;
+}
+
+.mdx-editor .prose a {
+  color: #2563eb !important;
+  text-decoration: underline;
+}
+
+.dark .mdx-editor .prose a {
+  color: #60a5fa !important;
+}
+
+.mdx-editor .prose ul,
+.mdx-editor .prose ol {
+  margin-bottom: 16px !important;
+  padding-left: 24px;
+  color: #374151 !important;
+}
+
+.dark .mdx-editor .prose ul,
+.dark .mdx-editor .prose ol {
+  color: #d1d5db !important;
+}
+
+.mdx-editor .prose li {
+  margin-bottom: 4px;
+  color: #374151 !important;
+}
+
+.dark .mdx-editor .prose li {
+  color: #d1d5db !important;
+}
+
+/* Placeholder */
+.mdx-editor .placeholder {
+  color: #9ca3af !important;
+  font-style: italic;
+}
+
+.dark .mdx-editor .placeholder {
+  color: #6b7280 !important;
+}
+
+/* Force dark mode text colors */
+.dark .mdx-editor .contenteditable {
+  color: #d1d5db !important;
+}
+
+.dark .mdx-editor .contenteditable * {
+  color: #d1d5db !important;
+}
+
+.dark .mdx-editor .contenteditable h1,
+.dark .mdx-editor .contenteditable h2,
+.dark .mdx-editor .contenteditable h3,
+.dark .mdx-editor .contenteditable h4,
+.dark .mdx-editor .contenteditable h5,
+.dark .mdx-editor .contenteditable h6 {
+  color: #f9fafb !important;
+}
+
+.dark .mdx-editor .contenteditable strong {
+  color: #f9fafb !important;
+}
+
+.dark .mdx-editor .contenteditable em {
+  color: #e5e7eb !important;
+}
+
+.dark .mdx-editor .contenteditable code {
+  color: #e5e7eb !important;
+}
+
+.dark .mdx-editor .contenteditable pre {
+  color: #e5e7eb !important;
+}
+
+.dark .mdx-editor .contenteditable blockquote {
+  color: #9ca3af !important;
+}
+
+.dark .mdx-editor .contenteditable a {
+  color: #60a5fa !important;
+}
+
+.dark .mdx-editor .contenteditable ul,
+.dark .mdx-editor .contenteditable ol {
+  color: #d1d5db !important;
+}
+
+.dark .mdx-editor .contenteditable li {
+  color: #d1d5db !important;
+}
