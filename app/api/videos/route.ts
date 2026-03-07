@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
-import { getProjectVideo, upsertProjectVideo } from '@/lib/db/projects-service';
+import { getVideoById, upsertVideo } from '@/lib/db/entities-service';
 
 export async function GET(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const projectId = req.nextUrl.searchParams.get('projectId');
-  if (!projectId) return NextResponse.json({ error: 'projectId required' }, { status: 400 });
+  const videoId = req.nextUrl.searchParams.get('videoId');
+  if (!videoId) return NextResponse.json({ error: 'videoId required' }, { status: 400 });
 
-  const video = await getProjectVideo(projectId);
+  const video = await getVideoById(videoId);
   if (!video) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
   return NextResponse.json(video);
@@ -21,9 +21,9 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const body = await req.json();
-  const { projectId, ...data } = body;
-  if (!projectId) return NextResponse.json({ error: 'projectId required' }, { status: 400 });
+  const { videoId, ...data } = body;
+  if (!videoId) return NextResponse.json({ error: 'videoId required' }, { status: 400 });
 
-  const video = await upsertProjectVideo(projectId, data);
+  const video = await upsertVideo(videoId, data);
   return NextResponse.json(video);
 }

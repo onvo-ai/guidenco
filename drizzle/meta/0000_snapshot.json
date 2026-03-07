@@ -111,8 +111,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.artwork_versions": {
-      "name": "artwork_versions",
+    "public.document_versions": {
+      "name": "document_versions",
       "schema": "",
       "columns": {
         "id": {
@@ -122,8 +122,8 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "artwork_id": {
-          "name": "artwork_id",
+        "document_id": {
+          "name": "document_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
@@ -156,12 +156,12 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "artwork_versions_artwork_id_artworks_id_fk": {
-          "name": "artwork_versions_artwork_id_artworks_id_fk",
-          "tableFrom": "artwork_versions",
-          "tableTo": "artworks",
+        "document_versions_document_id_documents_id_fk": {
+          "name": "document_versions_document_id_documents_id_fk",
+          "tableFrom": "document_versions",
+          "tableTo": "documents",
           "columnsFrom": [
-            "artwork_id"
+            "document_id"
           ],
           "columnsTo": [
             "id"
@@ -176,8 +176,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.artworks": {
-      "name": "artworks",
+    "public.documents": {
+      "name": "documents",
       "schema": "",
       "columns": {
         "id": {
@@ -235,9 +235,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "artworks_project_id_projects_id_fk": {
-          "name": "artworks_project_id_projects_id_fk",
-          "tableFrom": "artworks",
+        "documents_project_id_projects_id_fk": {
+          "name": "documents_project_id_projects_id_fk",
+          "tableFrom": "documents",
           "tableTo": "projects",
           "columnsFrom": [
             "project_id"
@@ -255,8 +255,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.chat_messages": {
-      "name": "chat_messages",
+    "public.document_chat_messages": {
+      "name": "document_chat_messages",
       "schema": "",
       "columns": {
         "id": {
@@ -294,9 +294,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "chat_messages_project_id_projects_id_fk": {
-          "name": "chat_messages_project_id_projects_id_fk",
-          "tableFrom": "chat_messages",
+        "document_chat_messages_project_id_projects_id_fk": {
+          "name": "document_chat_messages_project_id_projects_id_fk",
+          "tableFrom": "document_chat_messages",
           "tableTo": "projects",
           "columnsFrom": [
             "project_id"

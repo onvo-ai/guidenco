@@ -14,27 +14,27 @@ import {
 import { Button } from '@/components/ui/button';
 import { useSession } from '@/lib/auth-client';
 import { Input } from '@/components/ui/input';
-import { Project } from '@/lib/types';
+import { EntitySummary } from '@/lib/types';
 import { SettingsModal } from '@/components/settings-modal';
 
-type SectionType = 'artwork' | 'asset' | 'video';
+type SectionType = 'document' | 'asset' | 'video';
 
 const SECTIONS: { type: SectionType; label: string; icon: React.ElementType }[] = [
-  { type: 'artwork', label: 'Artworks', icon: LayoutTemplate },
   { type: 'asset', label: 'Assets', icon: Shapes },
+  { type: 'document', label: 'Documents', icon: LayoutTemplate },
   { type: 'video', label: 'Videos', icon: Film },
 ];
 
-function projectUrl(project: Project) {
-  if (project.type === 'asset') return `/app/projects/${project.id}/assets`;
-  if (project.type === 'video') return `/app/projects/${project.id}/videos`;
-  return `/app/projects/${project.id}`;
+function entityUrl(entity: EntitySummary) {
+  if (entity.type === 'asset') return `/app/assets/${entity.id}`;
+  if (entity.type === 'video') return `/app/videos/${entity.id}`;
+  return `/app/documents/${entity.id}`;
 }
 
 function activeSectionFromPath(pathname: string | null): SectionType | null {
-  if (pathname?.endsWith('/assets')) return 'asset';
-  if (pathname?.endsWith('/videos')) return 'video';
-  if (pathname?.includes('/projects/')) return 'artwork';
+  if (pathname?.includes('/assets/')) return 'asset';
+  if (pathname?.includes('/videos/')) return 'video';
+  if (pathname?.includes('/documents/')) return 'document';
   return null;
 }
 
@@ -44,16 +44,16 @@ export function Sidebar() {
   const params = useParams();
   const { data: session } = useSession();
 
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [expanded, setExpanded] = useState<Set<SectionType>>(new Set(['artwork']));
+  const [entities, setEntities] = useState<EntitySummary[]>([]);
+  const [expanded, setExpanded] = useState<Set<SectionType>>(new Set(['document']));
   // creatingIn tracks which section has the inline create input open
   const [creatingIn, setCreatingIn] = useState<SectionType | null>(null);
-  const [newProjectName, setNewProjectName] = useState('');
-  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [newEntityName, setNewEntityName] = useState('');
+  const [isCreatingEntity, setIsCreatingEntity] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const currentProjectId = params?.id as string | undefined;
+  const currentEntityId = params?.id as string | undefined;
 
   // Auto-expand the section matching the current URL
   useEffect(() => {
@@ -67,7 +67,7 @@ export function Sidebar() {
   }, [pathname]);
 
   useEffect(() => {
-    loadProjects();
+    loadEntities();
   }, []);
 
   useEffect(() => {
@@ -76,12 +76,12 @@ export function Sidebar() {
     }
   }, [creatingIn]);
 
-  const loadProjects = async () => {
+  const loadEntities = async () => {
     try {
-      const res = await fetch('/api/projects');
-      if (res.ok) setProjects(await res.json());
+      const res = await fetch('/api/entities');
+      if (res.ok) setEntities(await res.json());
     } catch (e) {
-      console.error('Error loading projects:', e);
+      console.error('Error loading entities:', e);
     }
   };
 
@@ -93,7 +93,7 @@ export function Sidebar() {
         // close create input if open in this section
         if (creatingIn === type) {
           setCreatingIn(null);
-          setNewProjectName('');
+          setNewEntityName('');
         }
       } else {
         next.add(type);
@@ -102,47 +102,47 @@ export function Sidebar() {
     });
   };
 
-  const handleCreateProject = async (type: SectionType) => {
-    if (!newProjectName.trim() || isCreatingProject) return;
-    setIsCreatingProject(true);
+  const handleCreateEntity = async (type: SectionType) => {
+    if (!newEntityName.trim() || isCreatingEntity) return;
+    setIsCreatingEntity(true);
     try {
-      const res = await fetch('/api/projects', {
+      const res = await fetch('/api/entities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newProjectName.trim(), type }),
+        body: JSON.stringify({ name: newEntityName.trim(), type }),
       });
       if (res.ok) {
-        const project = await res.json();
-        await loadProjects();
-        router.push(projectUrl({ ...project, type }));
-        setNewProjectName('');
+        const entity = await res.json();
+        await loadEntities();
+        router.push(entityUrl(entity));
+        setNewEntityName('');
         setCreatingIn(null);
       }
     } catch (e) {
-      console.error('Error creating project:', e);
+      console.error('Error creating entity:', e);
     } finally {
-      setIsCreatingProject(false);
+      setIsCreatingEntity(false);
     }
   };
 
-  const handleDeleteProject = async (
-    project: Project,
-    sectionProjects: Project[],
+  const handleDeleteEntity = async (
+    entity: EntitySummary,
+    sectionEntities: EntitySummary[],
     e: React.MouseEvent
   ) => {
     e.stopPropagation();
-    if (sectionProjects.length <= 1) return;
+    if (sectionEntities.length <= 1) return;
     try {
-      const res = await fetch(`/api/projects/${project.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/entities/${entity.id}`, { method: 'DELETE' });
       if (res.ok) {
-        await loadProjects();
-        if (currentProjectId === project.id) {
-          const remaining = sectionProjects.filter((p) => p.id !== project.id);
-          router.push(remaining.length > 0 ? projectUrl(remaining[0]) : '/app');
+        await loadEntities();
+        if (currentEntityId === entity.id) {
+          const remaining = sectionEntities.filter((e) => e.id !== entity.id);
+          router.push(remaining.length > 0 ? entityUrl(remaining[0]) : '/app');
         }
       }
     } catch (e) {
-      console.error('Error deleting project:', e);
+      console.error('Error deleting entity:', e);
     }
   };
 
@@ -173,31 +173,29 @@ export function Sidebar() {
         {SECTIONS.map(({ type, label, icon: Icon }) => {
           const isExpanded = expanded.has(type);
           const isActiveSection = currentSection === type;
-          const sectionProjects = projects.filter((p) => p.type === type);
+          const sectionEntities = entities.filter((e) => e.type === type);
           const isCreatingHere = creatingIn === type;
-          const singularLabel = label.slice(0, -1); // 'Artworks' → 'Artwork'
+          const singularLabel = label.slice(0, -1); // 'Documents' → 'Document'
 
           return (
             <div key={type}>
               {/* Section header */}
               <button
                 onClick={() => toggleSection(type)}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                  isActiveSection
-                    ? 'text-zinc-900 dark:text-zinc-100'
-                    : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-900'
-                }`}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActiveSection
+                  ? 'text-zinc-900 dark:text-zinc-100'
+                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-900'
+                  }`}
               >
                 <ChevronRight
-                  className={`h-3.5 w-3.5 shrink-0 transition-transform ${
-                    isExpanded ? 'rotate-90' : ''
-                  }`}
+                  className={`h-3.5 w-3.5 shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''
+                    }`}
                 />
                 <Icon className="h-4 w-4 shrink-0" />
                 <span className="flex-1 text-left">{label}</span>
-                {sectionProjects.length > 0 && (
+                {sectionEntities.length > 0 && (
                   <span className="text-xs text-zinc-400 tabular-nums">
-                    {sectionProjects.length}
+                    {sectionEntities.length}
                   </span>
                 )}
               </button>
@@ -205,26 +203,25 @@ export function Sidebar() {
               {/* Section content */}
               {isExpanded && (
                 <div className="ml-3 mt-0.5 space-y-0.5 border-l border-zinc-100 dark:border-zinc-800 pl-2">
-                  {sectionProjects.map((project) => {
-                    const isActive = project.id === currentProjectId;
+                  {sectionEntities.map((entity) => {
+                    const isActive = entity.id === currentEntityId;
                     return (
                       <div
-                        key={project.id}
-                        onClick={() => router.push(projectUrl(project))}
+                        key={entity.id}
+                        onClick={() => router.push(entityUrl(entity))}
                         role="button"
-                        className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-sm transition-colors group cursor-pointer ${
-                          isActive
-                            ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
-                            : 'text-zinc-500 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-100'
-                        }`}
+                        className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-sm transition-colors group cursor-pointer ${isActive
+                          ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
+                          : 'text-zinc-500 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-100'
+                          }`}
                       >
-                        <span className="truncate text-left">{project.name}</span>
-                        {sectionProjects.length > 1 && (
+                        <span className="truncate text-left">{entity.name}</span>
+                        {sectionEntities.length > 1 && (
                           <Button
                             variant="ghost"
                             size="sm"
                             className="h-4 w-4 p-0 shrink-0 opacity-0 group-hover:opacity-100"
-                            onClick={(e) => handleDeleteProject(project, sectionProjects, e)}
+                            onClick={(e) => handleDeleteEntity(entity, sectionEntities, e)}
                           >
                             <Trash2 className="h-3 w-3" />
                           </Button>
@@ -239,13 +236,13 @@ export function Sidebar() {
                       <Input
                         ref={inputRef}
                         placeholder={`${singularLabel} name`}
-                        value={newProjectName}
-                        onChange={(e) => setNewProjectName(e.target.value)}
+                        value={newEntityName}
+                        onChange={(e) => setNewEntityName(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleCreateProject(type);
+                          if (e.key === 'Enter') handleCreateEntity(type);
                           else if (e.key === 'Escape') {
                             setCreatingIn(null);
-                            setNewProjectName('');
+                            setNewEntityName('');
                           }
                           e.stopPropagation();
                         }}
@@ -255,10 +252,10 @@ export function Sidebar() {
                         <Button
                           size="sm"
                           className="flex-1 h-6 text-xs"
-                          onClick={() => handleCreateProject(type)}
-                          disabled={isCreatingProject || !newProjectName.trim()}
+                          onClick={() => handleCreateEntity(type)}
+                          disabled={isCreatingEntity || !newEntityName.trim()}
                         >
-                          {isCreatingProject ? (
+                          {isCreatingEntity ? (
                             <Loader2 className="h-3 w-3 animate-spin" />
                           ) : (
                             'Create'
@@ -270,7 +267,7 @@ export function Sidebar() {
                           className="flex-1 h-6 text-xs"
                           onClick={() => {
                             setCreatingIn(null);
-                            setNewProjectName('');
+                            setNewEntityName('');
                           }}
                         >
                           Cancel
@@ -281,7 +278,7 @@ export function Sidebar() {
                     <button
                       onClick={() => {
                         setCreatingIn(type);
-                        setNewProjectName('');
+                        setNewEntityName('');
                       }}
                       className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
                     >

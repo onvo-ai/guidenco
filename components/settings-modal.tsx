@@ -365,17 +365,7 @@ function BillingSection() {
 
 // ─── Warehouse Section ────────────────────────────────────────────────────────
 
-type WarehouseTab = 'all' | 'uploaded' | 'chat' | 'generated';
-
-const WAREHOUSE_TABS: { id: WarehouseTab; label: string }[] = [
-  { id: 'all', label: 'All' },
-  { id: 'uploaded', label: 'Uploaded' },
-  { id: 'chat', label: 'Chat' },
-  { id: 'generated', label: 'Generated' },
-];
-
 function WarehouseSection() {
-  const [activeTab, setActiveTab] = useState<WarehouseTab>('all');
   const [assets, setAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -444,51 +434,23 @@ function WarehouseSection() {
     <div className="h-full flex flex-col gap-0">
       <div className="mb-5">
         <h2 className="text-lg font-semibold">Assets</h2>
-        <p className="text-sm text-zinc-500">Upload assets your team can use in artworks</p>
+        <p className="text-sm text-zinc-500">Upload assets your team can use in documents</p>
       </div>
 
       <div className="flex-1 min-w-0 flex flex-col gap-3">
-        {/* Tab bar - full width */}
-        <div className="flex gap-1 border-b pb-0">
-          {WAREHOUSE_TABS.map((tab) => {
-            const count = tab.id === 'all' ? assets.length : assets.filter(a => a.source === tab.id).length;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`px-3 py-1.5 text-sm font-medium rounded-t-md -mb-px border-b-2 transition-colors ${activeTab === tab.id
-                  ? 'border-zinc-900 dark:border-zinc-100 text-zinc-900 dark:text-zinc-100'
-                  : 'border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-                  }`}
-              >
-                {tab.label}
-                {count > 0 && (
-                  <span className="ml-1.5 text-[10px] bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 px-1.5 py-0.5 rounded-full">
-                    {count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
         {/* Asset grid + upload card */}
         <div className="flex-1 overflow-y-auto pr-1">
           {(() => {
-            const filtered = activeTab === 'all' ? assets : assets.filter(a => a.source === activeTab);
             if (loading) return (
               <div className="flex items-center gap-2 text-zinc-500 pt-4"><Loader2 className="h-4 w-4 animate-spin" /> Loading assets...</div>
             );
-            if (filtered.length === 0 && (activeTab === 'all' || activeTab === 'uploaded')) {
-              // Empty state for tabs that show upload card
+            if (assets.length === 0) {
               return (
                 <div className="grid grid-cols-3 gap-3">
-                  {/* Upload Asset Card - show as the only card */}
                   <div className="border rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-800/40 flex flex-col">
                     <div className="p-4 flex-1 flex flex-col gap-3">
                       <h3 className="text-sm font-semibold">Upload Asset</h3>
                       <form onSubmit={handleUpload} className="flex flex-col gap-3">
-                        {/* Dropzone */}
                         <div
                           onClick={() => fileInputRef.current?.click()}
                           className="border-2 border-dashed border-zinc-200 dark:border-zinc-700 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition-colors"
@@ -531,38 +493,17 @@ function WarehouseSection() {
                       </form>
                     </div>
                   </div>
-                  {/* Empty state cards */}
-                  <div className="border rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-800/40 flex flex-col items-center justify-center p-4">
+                  <div className="border rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-800/40 flex flex-col items-center justify-center p-4 col-span-2">
                     <Package className="h-8 w-8 text-zinc-300 mb-2" />
-                    <p className="text-xs text-zinc-400 text-center">No assets yet</p>
+                    <p className="text-xs text-zinc-400 text-center">No assets yet. Upload your first asset.</p>
                   </div>
-                  <div className="border rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-800/40 flex flex-col items-center justify-center p-4">
-                    <Package className="h-8 w-8 text-zinc-300 mb-2" />
-                    <p className="text-xs text-zinc-400 text-center">No assets yet</p>
-                  </div>
-                </div>
-              );
-            }
-            if (filtered.length === 0) {
-              // Empty state for chat and generated tabs (no upload card)
-              return (
-                <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
-                  <Package className="h-10 w-10 mb-2 opacity-40" />
-                  <p className="text-sm">
-                    {activeTab === 'all' ? 'No assets yet. Upload your first asset.' :
-                      activeTab === 'uploaded' ? 'No manually uploaded assets.' :
-                        activeTab === 'chat' ? 'No images shared in chat yet.' :
-                          'No AI-generated assets yet.'}
-                  </p>
                 </div>
               );
             }
             return (
               <div className="grid grid-cols-3 gap-3">
-                {/* Asset cards */}
-                {filtered.map((asset) => (
+                {assets.map((asset) => (
                   <div key={asset.id} className="border rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-800/40 flex flex-col">
-                    {/* Preview */}
                     <div className="h-24 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center overflow-hidden">
                       {isImage(asset.mimeType) ? (
                         <img src={`/api/assets/image?id=${asset.id}`} alt={asset.title} className="h-full w-full object-cover" />
@@ -570,17 +511,14 @@ function WarehouseSection() {
                         <FileText className="h-9 w-9 text-zinc-400" />
                       )}
                     </div>
-                    {/* Info */}
                     <div className="p-2.5 flex-1 flex flex-col gap-1">
                       <div className="flex items-start justify-between gap-1">
                         <p className="text-xs font-semibold truncate flex-1">{asset.title}</p>
                         <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0 ${asset.source === 'uploaded'
                           ? 'bg-green-100 text-green-600 dark:bg-green-900/40 dark:text-green-400'
-                          : asset.source === 'chat'
-                            ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400'
-                            : 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400'
+                          : 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400'
                           }`}>
-                          {asset.source.toUpperCase()}
+                          {asset.source === 'uploaded' ? 'UPLOADED' : 'CHAT'}
                         </span>
                       </div>
                       {asset.description && <p className="text-[11px] text-zinc-500 line-clamp-2 leading-snug">{asset.description}</p>}
@@ -605,56 +543,52 @@ function WarehouseSection() {
                   </div>
                 ))}
 
-                {/* Upload Asset Card - only show in 'all' and 'uploaded' tabs */}
-                {(activeTab === 'all' || activeTab === 'uploaded') && (
-                  <div className="border rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-800/40 flex flex-col">
-                    <div className="p-4 flex-1 flex flex-col gap-3">
-                      <h3 className="text-sm font-semibold">Upload Asset</h3>
-                      <form onSubmit={handleUpload} className="flex flex-col gap-3">
-                        {/* Dropzone */}
-                        <div
-                          onClick={() => fileInputRef.current?.click()}
-                          className="border-2 border-dashed border-zinc-200 dark:border-zinc-700 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition-colors"
-                        >
-                          <Upload className="h-6 w-6 text-zinc-400 mx-auto mb-1" />
-                          {selectedFile ? (
-                            <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300 break-all">{selectedFile.name}</p>
-                          ) : (
-                            <>
-                              <p className="text-xs text-zinc-500">Click to select a file</p>
-                              <p className="text-[10px] text-zinc-400 mt-0.5">PNG, JPEG, WebP, PDF</p>
-                            </>
-                          )}
-                          <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf"
-                            onChange={handleFileSelect}
-                            className="hidden"
-                          />
-                        </div>
-                        <Input
-                          value={title}
-                          onChange={(e) => setTitle(e.target.value)}
-                          placeholder="Title"
-                          required
-                          disabled={uploading}
-                          className="text-xs"
+                <div className="border rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-800/40 flex flex-col">
+                  <div className="p-4 flex-1 flex flex-col gap-3">
+                    <h3 className="text-sm font-semibold">Upload Asset</h3>
+                    <form onSubmit={handleUpload} className="flex flex-col gap-3">
+                      <div
+                        onClick={() => fileInputRef.current?.click()}
+                        className="border-2 border-dashed border-zinc-200 dark:border-zinc-700 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition-colors"
+                      >
+                        <Upload className="h-6 w-6 text-zinc-400 mx-auto mb-1" />
+                        {selectedFile ? (
+                          <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300 break-all">{selectedFile.name}</p>
+                        ) : (
+                          <>
+                            <p className="text-xs text-zinc-500">Click to select a file</p>
+                            <p className="text-[10px] text-zinc-400 mt-0.5">PNG, JPEG, WebP, PDF</p>
+                          </>
+                        )}
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf"
+                          onChange={handleFileSelect}
+                          className="hidden"
                         />
-                        {uploadError && <p className="text-xs text-red-500">{uploadError}</p>}
-                        <Button
-                          type="submit"
-                          disabled={!selectedFile || !title || uploading}
-                          className="gap-2 w-full text-xs"
-                          size="sm"
-                        >
-                          {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
-                          {uploading ? 'Uploading…' : 'Upload'}
-                        </Button>
-                      </form>
-                    </div>
+                      </div>
+                      <Input
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="Title"
+                        required
+                        disabled={uploading}
+                        className="text-xs"
+                      />
+                      {uploadError && <p className="text-xs text-red-500">{uploadError}</p>}
+                      <Button
+                        type="submit"
+                        disabled={!selectedFile || !title || uploading}
+                        className="gap-2 w-full text-xs"
+                        size="sm"
+                      >
+                        {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+                        {uploading ? 'Uploading…' : 'Upload'}
+                      </Button>
+                    </form>
                   </div>
-                )}
+                </div>
               </div>
             );
           })()}

@@ -34,8 +34,8 @@ This will create the following tables:
 - `accounts` - OAuth provider accounts
 - `verification_tokens` - Email verification and password reset tokens
 - `projects` - User projects
-- `artworks` - Artwork metadata (dimensions, versions)
-- `artwork_versions` - HTML versions for each artwork
+- `documents` - Document metadata (dimensions, versions)
+- `document_versions` - HTML versions for each document
 - `chat_messages` - Chat history for each project
 
 ### 4. Optional: View Database
@@ -63,7 +63,7 @@ npm run db:studio
 - `created_at` (timestamp)
 - `updated_at` (timestamp)
 
-### Artworks Table
+### Documents Table
 - `id` (UUID, primary key)
 - `project_id` (UUID, foreign key to projects)
 - `width` (integer)
@@ -72,9 +72,9 @@ npm run db:studio
 - `created_at` (timestamp)
 - `updated_at` (timestamp)
 
-### Artwork Versions Table
+### Document Versions Table
 - `id` (UUID, primary key)
-- `artwork_id` (UUID, foreign key to artworks)
+- `document_id` (UUID, foreign key to documents)
 - `version` (integer)
 - `html` (text)
 - `created_at` (timestamp)

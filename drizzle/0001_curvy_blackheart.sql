@@ -1,1 +1,1 @@
-ALTER TABLE "users" ADD COLUMN "phone_number" text;
+SELECT 1;

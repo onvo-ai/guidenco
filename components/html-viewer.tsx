@@ -518,7 +518,7 @@ export function HTMLViewer({
   if (!template) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500">
-        No artwork created yet. Ask the AI to create one!
+        No document created yet. Ask the AI to create one!
       </div>
     );
   }

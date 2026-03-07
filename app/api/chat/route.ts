@@ -1,17 +1,15 @@
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { streamText, convertToModelMessages, UIMessage, tool, stepCountIs } from 'ai';
 import { z } from 'zod';
-import { createOrUpdateArtwork, getProjectArtwork, getProjectMessages, saveMessage } from '@/lib/db/projects-service';
+import { createOrUpdateDocument, getDocumentById, saveDocumentMessage } from '@/lib/db/entities-service';
 import { resizeImage } from '@/lib/image-processing';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
-import { assets, teams, teamMembers, agentSettings } from '@/lib/db/schema';
+import { brandAssets, teams, teamMembers, agentSettings } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
-import { getFileBuffer, uploadFile, ensureBucket } from '@/lib/storage';
-import { randomUUID } from 'crypto';
+import { getFileBuffer } from '@/lib/storage';
 import { users } from '@/lib/db/schema';
-import sharp from 'sharp';
 
 export const maxDuration = 60;
 
@@ -23,9 +21,14 @@ const PAGE_BREAK = '\n<!-- PAGE_BREAK -->\n';
 const PAGE_BREAK_LEGACY_GUIDENCO = '\n<!-- GUIDENCO_PAGE_BREAK -->\n';
 const PAGE_BREAK_LEGACY_ARTISTE = '\n<!-- ARTISTE_PAGE_BREAK -->\n';
 
+function toDataUri(image: string, mimeType: string) {
+  if (!image) return image;
+  return image.startsWith('data:') ? image : `data:${mimeType};base64,${image}`;
+}
+
 function splitPages(html: string): string[] {
   if (!html) return [''];
-  // Normalise legacy separators so old artworks split correctly
+  // Normalise legacy separators so old documents split correctly
   const normalised = html
     .split(PAGE_BREAK_LEGACY_GUIDENCO).join(PAGE_BREAK)
     .split(PAGE_BREAK_LEGACY_ARTISTE).join(PAGE_BREAK);
@@ -92,13 +95,13 @@ async function getUserTeamAndAgentSettings(userId: string) {
 
 export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
-  const projectId = searchParams.get('projectId');
+  const documentId = searchParams.get('documentId');
   const selectedPageIndexParam = searchParams.get('pageIndex');
   const selectedPageIndex = selectedPageIndexParam ? Number(selectedPageIndexParam) : 0;
   const defaultSelectedPageIndex = Number.isFinite(selectedPageIndex) && selectedPageIndex >= 0 ? selectedPageIndex : 0;
 
-  if (!projectId) {
-    return new Response('Project ID required', { status: 400 });
+  if (!documentId) {
+    return new Response('Document ID required', { status: 400 });
   }
 
   const { messages }: { messages: UIMessage[] } = await req.json();
@@ -106,7 +109,7 @@ export async function POST(req: Request) {
   // Save the last user message to database
   const lastUserMessage = messages[messages.length - 1];
   if (lastUserMessage && lastUserMessage.role === 'user') {
-    await saveMessage(projectId, 'user', lastUserMessage.parts || []);
+    await saveDocumentMessage(documentId, 'user', lastUserMessage.parts || []);
   }
 
   const openrouter = createOpenRouter({
@@ -131,10 +134,30 @@ export async function POST(req: Request) {
       if (part.type === 'text') {
         content.push({ type: 'text', text: part.text });
       } else if (part.type === 'image') {
-        let imageContent = part.image;
+        const mimeType = part.mimeType || 'image/png';
+
+        if (mimeType === 'image/svg+xml') {
+          content.push({
+            type: 'text',
+            text: part.fileUrl
+              ? `[SVG reference provided. Use this asset URL if needed: ${part.fileUrl}]`
+              : '[SVG reference provided in chat context. Treat it as a referenced vector asset rather than an inline vision image.]',
+          });
+
+          if (typeof part.image === 'string' && part.image.length > 0) {
+            content.push({
+              type: 'text',
+              text: `[SVG content preview]\n\n${part.image.slice(0, 4000)}`,
+            });
+          }
+
+          continue;
+        }
+
+        let imageContent = toDataUri(part.image, mimeType);
         try {
           // Resize uploaded images to save tokens
-          imageContent = await resizeImage(part.image);
+          imageContent = await resizeImage(imageContent);
         } catch (e) {
           console.error('Failed to resize uploaded image:', e);
         }
@@ -142,14 +165,14 @@ export async function POST(req: Request) {
         content.push({
           type: 'image',
           image: imageContent,
-          mimeType: part.mimeType || 'image/png'
+          mimeType,
         });
 
         // If this image was uploaded to the warehouse, tell the LLM its permanent URL
         if (part.fileUrl) {
           content.push({
             type: 'text',
-            text: `[Image uploaded to Design Warehouse. Permanent URL: ${part.fileUrl} — use this URL in <img src="..."> tags when embedding this image in artwork.]`,
+            text: `[Image uploaded to Design Warehouse. Permanent URL: ${part.fileUrl} — use this URL in <img src="..."> tags when embedding this image in document.]`,
           });
         }
       }
@@ -174,18 +197,18 @@ Current context:
 ${designGuidelines ? `TEAM DESIGN GUIDELINES:
 ${designGuidelines}
 
-IMPORTANT: Follow these design guidelines closely when creating or modifying artwork. They represent your team's brand standards and design preferences.` : ''}
+IMPORTANT: Follow these design guidelines closely when creating or modifying document. They represent your team's brand standards and design preferences.` : ''}
 
 You have access to tools to:
-1. Create an artwork with specific dimensions (container size) and number of pages
+1. Create an document with specific dimensions (container size) and number of pages
 2. Write HTML with Tailwind CSS classes, FontAwesome icons, and Google Fonts (optionally targeting a specific page)
    - For multi-page initial creation, you can write ALL pages at once in a single version using writePagesHTML.
 3. Make surgical edits to existing HTML by finding and replacing specific parts (editHTML)
 4. Create/delete pages
-5. View the current artwork state (optionally for a specific page) - this returns BOTH the HTML code AND a rendered image of what it looks like
+5. View the current document state (optionally for a specific page) - this returns BOTH the HTML code AND a rendered image of what it looks like
 
 When a user asks you to create something:
-1. First, create an artwork with appropriate dimensions using the createArtwork tool (ONLY call this once per artwork)
+1. First, create an document with appropriate dimensions using the createDocument tool (ONLY call this once per document)
    - If the user needs multiple pages, set pageCount accordingly.
 2. Then, write HTML:
    - If there are multiple pages, prefer using writePagesHTML ONCE to write all pages in a single version.
@@ -197,22 +220,22 @@ When a user asks you to create something:
    - Google Fonts by specifying the googleFonts parameter (e.g., ["Roboto", "Playfair Display"])
    - Use font-family CSS or Tailwind's arbitrary values to apply fonts: style="font-family: 'Roboto'" or class="font-['Roboto']"
    - If there are multiple pages, pass pageIndex to writeHTML to edit a specific page.
-4. After writing HTML, ALWAYS call getArtworkState (with pageIndex if relevant) to verify the output matches the user's requirements
-   - The getArtworkState tool will show you an IMAGE of the rendered artwork
+4. After writing HTML, ALWAYS call getDocumentState (with pageIndex if relevant) to verify the output matches the user's requirements
+   - The getDocumentState tool will show you an IMAGE of the rendered document
    - LOOK AT THE IMAGE carefully to verify it matches what the user requested
-   - The image field contains a base64-encoded PNG showing exactly what the artwork looks like
+   - The image field contains a base64-encoded PNG showing exactly what the document looks like
 4. If the rendered image doesn't match requirements, call writeHTML again with corrections
 
-When a user asks you to UPDATE or MODIFY existing artwork:
-- DO NOT call createArtwork again - this will reset the version history
-- First, call getArtworkState (with pageIndex if relevant) to see the current HTML AND the rendered image
+When a user asks you to UPDATE or MODIFY existing document:
+- DO NOT call createDocument again - this will reset the version history
+- First, call getDocumentState (with pageIndex if relevant) to see the current HTML AND the rendered image
 - For SMALL, TARGETED changes (like changing colors, text, or specific elements):
   * Use editHTML to make surgical edits by finding and replacing specific parts
   * This is more efficient and preserves the rest of the code
   * Example: changing a button color, updating text, modifying a single element
 - For LARGE changes or complete redesigns:
   * Use writeHTML to rewrite the entire page
-- After editing, call getArtworkState again (with pageIndex if relevant) to verify the changes
+- After editing, call getDocumentState again (with pageIndex if relevant) to verify the changes
 - Each editHTML or writeHTML call creates a new version automatically
 
 Guidelines:
@@ -231,52 +254,45 @@ ELEMENT EDIT REQUESTS:
 - When a message starts with "[ELEMENT EDIT REQUEST]", the user has selected a specific element in the preview.
 - The message will include the CSS selector, element label, and current outerHTML of the selected element.
 - For these requests:
-  1. Call getArtworkState first to get the full current HTML of the page.
+  1. Call getDocumentState first to inspect the current rendered page.
   2. Use editHTML to make a SURGICAL find/replace that only modifies the specific element identified by the CSS selector and outerHTML provided.
   3. The find string must match the element's current outerHTML (or a unique fragment of it) EXACTLY as shown in the message.
   4. The replace string should be the same element with only the requested change applied.
   5. DO NOT change anything outside of that element.
-  6. After editing, call getArtworkState to verify only the targeted element changed.
+  6. After editing, call getDocumentState to verify only the targeted element changed.
 
 DESIGN WAREHOUSE:
 - Your team has a Design Warehouse with uploaded assets (images, PDFs, logos, etc.).
 - Use the listAssets tool to discover available assets. Do this when the user mentions "my logo", "our brand image", "the uploaded file", or anything that suggests they have pre-uploaded content.
 - Use inspectAsset to view an asset's content (returns a rendered image for images/PDFs) so you can understand what it looks like before using it.
-- To embed an asset in artwork, use its proxyUrl (/api/assets/image?id=...) in <img> tags or as CSS background-image values. Always use the actual URL from the asset, not a placeholder.
+- To embed an asset in document, use its proxyUrl (/api/assets/image?id=...) in <img> tags or as CSS background-image values. Always use the actual URL from the asset, not a placeholder.
 - If the user says "use my asset" or references something by name, list assets first, find the matching one, then use its proxyUrl.
-
-SVG CREATION:
-- Use the createSVG tool to generate a custom SVG graphic from scratch using an AI sub-agent.
-- The SVG is automatically saved to the Design Warehouse with source "generated".
-- After creation, use the returned proxyUrl in <img src="..."> tags in artwork — SVGs are perfectly scalable.
-- Great for logos, icons, illustrations, badges, decorative elements, and any vector graphic.
-- Always call createSVG when the user asks to "create a logo", "make an icon", "generate a graphic", or any vector/SVG asset.
 
 CRITICAL COMMUNICATION RULES:
 - ALWAYS provide a text response after using tools to explain what you did and the result
-- After calling createArtwork, explain what you created
+- After calling createDocument, explain what you created
 - After calling writeHTML or editHTML, describe the changes you made
-- After calling getArtworkState, comment on what you see in the rendered image
+- After calling getDocumentState, comment on what you see in the rendered image
 - Never end your response with just tool calls - always add explanatory text
 - Be conversational and helpful - let the user know you've completed their request
 - If you made changes, briefly describe what changed and why
 
-Always use the tools to create the artwork. The user will see the visual output in real-time.`,
+Always use the tools to create the document. The user will see the visual output in real-time.`,
     tools: {
-      createArtwork: tool({
-        description: 'Create a new artwork container with specified width and height.',
+      createDocument: tool({
+        description: 'Create a new document container with specified width and height.',
         inputSchema: z.object({
-          width: z.number().describe('Width of the artwork in pixels'),
-          height: z.number().describe('Height of the artwork in pixels'),
+          width: z.number().describe('Width of the document in pixels'),
+          height: z.number().describe('Height of the document in pixels'),
           pageCount: z.number().int().min(1).max(50).optional().describe('How many pages to create (default: 1)'),
         }),
         execute: async ({ width, height, pageCount = 1 }: { width: number; height: number; pageCount?: number }) => {
           // Store dimensions temporarily for writeHTML
-          tempDimensions.set(projectId, { width, height });
-          tempPageCounts.set(projectId, pageCount);
+          tempDimensions.set(documentId, { width, height });
+          tempPageCounts.set(documentId, pageCount);
           return {
             success: true,
-            message: `Artwork created with dimensions ${width}x${height}`,
+            message: `Document created with dimensions ${width}x${height}`,
             width,
             height,
             pageCount,
@@ -300,32 +316,30 @@ Always use the tools to create the artwork. The user will see the visual output 
           pageIndex?: number;
         }) => {
           try {
-            // Get dimensions from temp storage or existing artwork
-            let dimensions = tempDimensions.get(projectId);
-            const requestedPageCount = tempPageCounts.get(projectId);
+            let dimensions = tempDimensions.get(documentId);
+            const requestedPageCount = tempPageCounts.get(documentId);
+            let existingDocument = await getDocumentById(documentId);
 
             if (!dimensions) {
-              const existingArtwork = await getProjectArtwork(projectId);
-              if (existingArtwork) {
-                dimensions = { width: existingArtwork.width, height: existingArtwork.height };
+              if (existingDocument) {
+                dimensions = { width: existingDocument.width, height: existingDocument.height };
               } else {
                 return {
                   success: false,
-                  error: 'No artwork exists. Please create an artwork first using createArtwork.',
+                  error: 'No document exists. Please create an document first using createDocument.',
                 };
               }
             }
 
             let htmlToStore = html;
             if (typeof pageIndex === 'number') {
-              const existingArtwork = await getProjectArtwork(projectId);
-              const existingFullHTML = existingArtwork
-                ? existingArtwork.versions[existingArtwork.currentVersion]?.html || ''
+              const existingFullHTML = existingDocument
+                ? existingDocument.versions[existingDocument.currentVersion]?.html || ''
                 : '';
 
               let pages = splitPages(existingFullHTML);
 
-              if ((!existingArtwork || pages.length === 1) && requestedPageCount && requestedPageCount > 1) {
+              if ((!existingDocument || pages.length === 1) && requestedPageCount && requestedPageCount > 1) {
                 pages = Array.from({ length: requestedPageCount }, () => '');
               }
 
@@ -338,23 +352,21 @@ Always use the tools to create the artwork. The user will see the visual output 
               htmlToStore = joinPages(pages);
             }
 
-            // Save to database
-            const { currentVersion, totalVersions } = await createOrUpdateArtwork(
-              projectId,
+            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+              documentId,
+              existingDocument?.title ?? 'Untitled Document',
               dimensions.width,
               dimensions.height,
               htmlToStore,
               googleFonts || []
             );
 
-            // Clear temp dimensions
-            tempDimensions.delete(projectId);
-            tempPageCounts.delete(projectId);
+            tempDimensions.delete(documentId);
+            tempPageCounts.delete(documentId);
 
             const storedPages = splitPages(htmlToStore);
             const resolvedPageIndex = typeof pageIndex === 'number' ? clampPageIndex(pageIndex, storedPages.length) : 0;
 
-            // Create message with page info if editing a specific page
             let message = `HTML updated successfully (Version ${currentVersion + 1})`;
             if (typeof pageIndex === 'number' && storedPages.length > 1) {
               message = `HTML updated successfully for page ${resolvedPageIndex + 1} of ${storedPages.length} (Version ${currentVersion + 1})`;
@@ -397,26 +409,23 @@ Always use the tools to create the artwork. The user will see the visual output 
           pageIndex?: number;
         }) => {
           try {
-            const artwork = await getProjectArtwork(projectId);
-            if (!artwork) {
+            const document = await getDocumentById(documentId);
+            if (!document) {
               return {
                 success: false,
-                error: 'No artwork exists. Please create an artwork first using createArtwork.',
+                error: 'No document exists. Please create an document first using createDocument.',
               };
             }
 
-            const currentHTML = artwork.versions[artwork.currentVersion]?.html || '';
-            const currentFonts = artwork.versions[artwork.currentVersion]?.googleFonts || [];
+            const currentHTML = document.versions[document.currentVersion]?.html || '';
+            const currentFonts = document.versions[document.currentVersion]?.googleFonts || [];
             const pages = splitPages(currentHTML);
-
-            // Determine which page to edit
             const targetPageIndex = typeof pageIndex === 'number'
               ? clampPageIndex(pageIndex, pages.length)
               : clampPageIndex(defaultSelectedPageIndex, pages.length);
 
             const pageHTML = pages[targetPageIndex] || '';
 
-            // Check if findString exists in the page
             if (!pageHTML.includes(findString)) {
               return {
                 success: false,
@@ -424,7 +433,6 @@ Always use the tools to create the artwork. The user will see the visual output 
               };
             }
 
-            // Check if findString appears multiple times
             const occurrences = pageHTML.split(findString).length - 1;
             if (occurrences > 1) {
               return {
@@ -433,21 +441,19 @@ Always use the tools to create the artwork. The user will see the visual output 
               };
             }
 
-            // Perform the replacement
             const updatedPageHTML = pageHTML.replace(findString, replaceString);
             pages[targetPageIndex] = updatedPageHTML;
             const htmlToStore = joinPages(pages);
 
-            // Save to database
-            const { currentVersion, totalVersions } = await createOrUpdateArtwork(
-              projectId,
-              artwork.width,
-              artwork.height,
+            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+              documentId,
+              document.title,
+              document.width,
+              document.height,
               htmlToStore,
               currentFonts
             );
 
-            // Create message with page info
             let message = `HTML edited successfully (Version ${currentVersion + 1})`;
             if (pages.length > 1) {
               message = `HTML edited successfully for page ${targetPageIndex + 1} of ${pages.length} (Version ${currentVersion + 1})`;
@@ -458,8 +464,8 @@ Always use the tools to create the artwork. The user will see the visual output 
               message,
               version: currentVersion,
               totalVersions,
-              width: artwork.width,
-              height: artwork.height,
+              width: document.width,
+              height: document.height,
               pageCount: pages.length,
               pageIndex: targetPageIndex,
             };
@@ -473,7 +479,7 @@ Always use the tools to create the artwork. The user will see the visual output 
         },
       }),
       writePagesHTML: tool({
-        description: 'Write ALL pages of a multi-page artwork in a SINGLE version. Use this for initial multi-page creation when you want one version to contain the full document.',
+        description: 'Write ALL pages of a multi-page document in a SINGLE version. Use this for initial multi-page creation when you want one version to contain the full document.',
         inputSchema: z.object({
           pages: z.array(z.string()).min(1).max(50).describe('Array of page HTML strings, in order. Each entry is the COMPLETE HTML for that page.'),
           googleFonts: z.array(z.string()).optional().describe('Array of Google Font family names to load (e.g., ["Roboto", "Open Sans", "Playfair Display"]). These will be automatically loaded from Google Fonts.'),
@@ -486,18 +492,17 @@ Always use the tools to create the artwork. The user will see the visual output 
           googleFonts?: string[];
         }) => {
           try {
-            // Get dimensions from temp storage or existing artwork
-            let dimensions = tempDimensions.get(projectId);
-            const requestedPageCount = tempPageCounts.get(projectId);
+            let dimensions = tempDimensions.get(documentId);
+            const requestedPageCount = tempPageCounts.get(documentId);
+            let existingDocument = await getDocumentById(documentId);
 
             if (!dimensions) {
-              const existingArtwork = await getProjectArtwork(projectId);
-              if (existingArtwork) {
-                dimensions = { width: existingArtwork.width, height: existingArtwork.height };
+              if (existingDocument) {
+                dimensions = { width: existingDocument.width, height: existingDocument.height };
               } else {
                 return {
                   success: false,
-                  error: 'No artwork exists. Please create an artwork first using createArtwork.',
+                  error: 'No document exists. Please create an document first using createDocument.',
                 };
               }
             }
@@ -506,16 +511,17 @@ Always use the tools to create the artwork. The user will see the visual output 
             const normalizedPages = Array.from({ length: desiredCount }, (_, idx) => pages[idx] ?? '');
             const htmlToStore = joinPages(normalizedPages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateArtwork(
-              projectId,
+            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+              documentId,
+              existingDocument?.title ?? 'Untitled Document',
               dimensions.width,
               dimensions.height,
               htmlToStore,
               googleFonts || []
             );
 
-            tempDimensions.delete(projectId);
-            tempPageCounts.delete(projectId);
+            tempDimensions.delete(documentId);
+            tempPageCounts.delete(documentId);
 
             return {
               success: true,
@@ -536,34 +542,33 @@ Always use the tools to create the artwork. The user will see the visual output 
         },
       }),
       createPage: tool({
-        description: 'Create a new blank page in the current artwork. By default it appends a page to the end. This creates a new version.',
+        description: 'Create a new blank page in the current document. By default it appends a page to the end. This creates a new version.',
         inputSchema: z.object({
           afterPageIndex: z.number().int().min(-1).optional().describe('Insert the new page after this 0-based index. Use -1 to insert at the beginning. Defaults to append.'),
         }),
         execute: async ({ afterPageIndex }: { afterPageIndex?: number }) => {
           try {
-            const artwork = await getProjectArtwork(projectId);
-            if (!artwork) {
+            const document = await getDocumentById(documentId);
+            if (!document) {
               return {
                 success: false,
-                error: 'No artwork exists yet. Create one first using createArtwork.',
+                error: 'No document exists yet. Create one first using createDocument.',
               };
             }
 
-            const currentHTML = artwork.versions[artwork.currentVersion]?.html || '';
-            const currentFonts = artwork.versions[artwork.currentVersion]?.googleFonts || [];
-
+            const currentHTML = document.versions[document.currentVersion]?.html || '';
+            const currentFonts = document.versions[document.currentVersion]?.googleFonts || [];
             const pages = splitPages(currentHTML);
             const insertAfter = typeof afterPageIndex === 'number' ? afterPageIndex : pages.length - 1;
             const insertAt = Math.min(Math.max(insertAfter + 1, 0), pages.length);
-
             const nextPages = [...pages.slice(0, insertAt), '', ...pages.slice(insertAt)];
             const nextHTML = joinPages(nextPages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateArtwork(
-              projectId,
-              artwork.width,
-              artwork.height,
+            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+              documentId,
+              document.title,
+              document.width,
+              document.height,
               nextHTML,
               currentFonts
             );
@@ -586,22 +591,22 @@ Always use the tools to create the artwork. The user will see the visual output 
         },
       }),
       deletePage: tool({
-        description: 'Delete a page from the current artwork by 0-based pageIndex. This creates a new version. You cannot delete the last remaining page.',
+        description: 'Delete a page from the current document by 0-based pageIndex. This creates a new version. You cannot delete the last remaining page.',
         inputSchema: z.object({
           pageIndex: z.number().int().min(0).describe('0-based index of the page to delete.'),
         }),
         execute: async ({ pageIndex }: { pageIndex: number }) => {
           try {
-            const artwork = await getProjectArtwork(projectId);
-            if (!artwork) {
+            const document = await getDocumentById(documentId);
+            if (!document) {
               return {
                 success: false,
-                error: 'No artwork exists yet. Create one first using createArtwork.',
+                error: 'No document exists yet. Create one first using createDocument.',
               };
             }
 
-            const currentHTML = artwork.versions[artwork.currentVersion]?.html || '';
-            const currentFonts = artwork.versions[artwork.currentVersion]?.googleFonts || [];
+            const currentHTML = document.versions[document.currentVersion]?.html || '';
+            const currentFonts = document.versions[document.currentVersion]?.googleFonts || [];
 
             const pages = splitPages(currentHTML);
             if (pages.length <= 1) {
@@ -621,10 +626,11 @@ Always use the tools to create the artwork. The user will see the visual output 
             const nextPages = pages.filter((_, idx) => idx !== pageIndex);
             const nextHTML = joinPages(nextPages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateArtwork(
-              projectId,
-              artwork.width,
-              artwork.height,
+            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+              documentId,
+              document.title,
+              document.width,
+              document.height,
               nextHTML,
               currentFonts
             );
@@ -646,23 +652,23 @@ Always use the tools to create the artwork. The user will see the visual output 
           }
         },
       }),
-      getArtworkState: tool({
-        description: 'Get the current state of the artwork including dimensions, HTML code, and a rendered image. Use this to see what has been created so far and make improvements.',
+      getDocumentState: tool({
+        description: 'Get the current rendered state of the document as an image plus basic page metadata. Use this to visually inspect what has been created so far and make improvements.',
         inputSchema: z.object({
           pageIndex: z.number().int().min(0).optional().describe('If provided, returns state for this specific page (0-based).'),
         }),
         execute: async ({ pageIndex }: { pageIndex?: number }) => {
           try {
-            const artwork = await getProjectArtwork(projectId);
-            if (!artwork) {
+            const document = await getDocumentById(documentId);
+            if (!document) {
               return {
                 success: false,
-                error: 'No artwork exists yet. Create one first using createArtwork.',
+                error: 'No document exists yet. Create one first using createDocument.',
               };
             }
 
-            const currentHTML = artwork.versions[artwork.currentVersion]?.html || '';
-            const currentFonts = artwork.versions[artwork.currentVersion]?.googleFonts || [];
+            const currentHTML = document.versions[document.currentVersion]?.html || '';
+            const currentFonts = document.versions[document.currentVersion]?.googleFonts || [];
 
             const pages = splitPages(currentHTML);
             const requestedIndex = typeof pageIndex === 'number' ? pageIndex : defaultSelectedPageIndex;
@@ -677,8 +683,8 @@ Always use the tools to create the artwork. The user will see the visual output 
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   template: pageHTML,
-                  width: artwork.width,
-                  height: artwork.height,
+                  width: document.width,
+                  height: document.height,
                   format: 'base64',
                   googleFonts: currentFonts,
                 }),
@@ -693,7 +699,7 @@ Always use the tools to create the artwork. The user will see the visual output 
                   try {
                     imageData = await resizeImage(imageData);
                   } catch (e) {
-                    console.error('Failed to resize artwork state image:', e);
+                    console.error('Failed to resize document state image:', e);
                   }
                 }
 
@@ -707,28 +713,26 @@ Always use the tools to create the artwork. The user will see the visual output 
 
             const result = {
               success: true,
-              width: artwork.width,
-              height: artwork.height,
-              html: pageHTML,
-              fullHtml: currentHTML,
+              width: document.width,
+              height: document.height,
               image: imageData,
-              version: artwork.currentVersion,
-              totalVersions: artwork.versions.length,
+              version: document.currentVersion,
+              totalVersions: document.versions.length,
               pageCount: pages.length,
               pageIndex: resolvedPageIndex,
             };
 
-            console.log('📊 getArtworkState returning:', {
+            console.log('📊 getDocumentState returning:', {
               ...result,
               image: result.image ? `${result.image.substring(0, 50)}... (${result.image.length} chars)` : 'null',
             });
 
             return result;
           } catch (error: any) {
-            console.error('Error in getArtworkState:', error);
+            console.error('Error in getDocumentState:', error);
             return {
               success: false,
-              error: `Error getting artwork state: ${error.message}`,
+              error: `Error getting document state: ${error.message}`,
             };
           }
         },
@@ -801,7 +805,7 @@ Always use the tools to create the artwork. The user will see the visual output 
 
             if (!teamId) return { success: true, assets: [], message: 'No team found — no assets available.' };
 
-            const teamAssets = await db.select().from(assets).where(eq(assets.teamId, teamId));
+            const teamAssets = await db.select().from(brandAssets).where(eq(brandAssets.teamId, teamId));
             return {
               success: true,
               assets: teamAssets.map(a => ({
@@ -818,20 +822,19 @@ Always use the tools to create the artwork. The user will see the visual output 
         },
       }),
       inspectAsset: tool({
-        description: 'Inspect a specific asset from the Design Warehouse. Returns a rendered image of the asset (works for PNG, JPEG, PDF). Use this to see what an asset looks like before embedding it in artwork.',
+        description: 'Inspect a specific asset from the Design Warehouse. Returns a rendered image of the asset (works for PNG, JPEG, PDF). Use this to see what an asset looks like before embedding it in document.',
         inputSchema: z.object({
           assetId: z.string().describe('The ID of the asset to inspect (from listAssets)'),
         }),
         execute: async ({ assetId }: { assetId: string }) => {
           try {
-            const asset = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
+            const asset = await db.select().from(brandAssets).where(eq(brandAssets.id, assetId)).limit(1);
             if (!asset.length) return { success: false, error: 'Asset not found' };
 
             const a = asset[0];
             const buffer = await getFileBuffer(a.fileKey);
 
             if (a.mimeType === 'application/pdf') {
-              // Render first page of PDF via the render API
               const renderResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/render`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -856,142 +859,6 @@ Always use the tools to create the artwork. The user will see the visual output 
             };
           } catch (error) {
             return { success: false, error: 'Failed to inspect asset' };
-          }
-        },
-      }),
-      createSVG: tool({
-        description: 'Generate a custom SVG graphic using an AI sub-agent and save it to the Design Warehouse automatically. Returns the asset ID and a proxyUrl to embed it in artwork. Use for logos, icons, illustrations, badges, and any vector graphic.',
-        inputSchema: z.object({
-          prompt: z.string().describe('Detailed description of the SVG to create, e.g. "a minimalist mountain logo with a purple-to-blue gradient"'),
-          title: z.string().describe('Name for this asset in the Design Warehouse, e.g. "Mountain Logo"'),
-          width: z.number().optional().describe('SVG viewBox width in pixels (default: 400)'),
-          height: z.number().optional().describe('SVG viewBox height in pixels (default: 400)'),
-        }),
-        execute: async ({ prompt, title, width = 400, height = 400 }: { prompt: string; title: string; width?: number; height?: number }) => {
-          try {
-            // ── 1. Call the SVG sub-agent ────────────────────────────────────
-            const svgModelId = (process.env.SVG_MODEL || '').trim() || 'google/gemini-2.5-flash';
-
-            const svgResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                model: svgModelId,
-                messages: [
-                  {
-                    role: 'system',
-                    content: `You are an expert SVG designer. Generate clean, high-quality SVG vector graphics.
-STRICT RULES:
-- Return ONLY the raw SVG code — no markdown fences, no explanation, no extra text
-- Begin with <svg and end with </svg>
-- Always include xmlns="http://www.w3.org/2000/svg" and viewBox="0 0 ${width} ${height}"
-- The SVG must be fully self-contained (no external images, no external fonts)
-- Use fills, gradients, paths, and shapes to create a visually polished, professional result
-- Keep the output under 8000 characters`,
-                  },
-                  {
-                    role: 'user',
-                    content: `Create an SVG graphic: ${prompt}`,
-                  },
-                ],
-                max_tokens: 4096,
-                temperature: 0.7,
-              }),
-            });
-
-            if (!svgResponse.ok) {
-              const errText = await svgResponse.text();
-              console.error('SVG sub-agent error:', errText);
-              return { success: false, error: 'SVG generation failed — sub-agent returned an error' };
-            }
-
-            const svgData = await svgResponse.json();
-            let svgContent: string = svgData.choices?.[0]?.message?.content?.trim() ?? '';
-
-            // Strip markdown fences if the model wrapped the SVG anyway
-            const svgMatch = svgContent.match(/<svg[\s\S]*<\/svg>/i);
-            if (svgMatch) svgContent = svgMatch[0];
-
-            if (!svgContent.toLowerCase().startsWith('<svg')) {
-              return { success: false, error: 'Sub-agent did not return valid SVG content' };
-            }
-
-            // Ensure proper XML namespace
-            if (!svgContent.includes('xmlns')) {
-              svgContent = svgContent.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
-            }
-
-            // ── 2. Resolve the user's team ───────────────────────────────────
-            const session = await auth.api.getSession({ headers: await headers() });
-            if (!session) return { success: false, error: 'Not authenticated' };
-
-            const userId = session.user.id;
-
-            // Find existing team (owned or member)
-            let teamId: string | undefined;
-            const ownedTeam = await db.select({ id: teams.id }).from(teams).where(eq(teams.ownerId, userId)).limit(1);
-            teamId = ownedTeam[0]?.id;
-
-            if (!teamId) {
-              const membership = await db.select({ teamId: teamMembers.teamId }).from(teamMembers).where(eq(teamMembers.userId, userId)).limit(1);
-              teamId = membership[0]?.teamId;
-            }
-
-            // Lazily create a personal team if none exists
-            if (!teamId) {
-              const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-              const teamName = user[0]?.name ? `${user[0].name}'s Team` : 'My Team';
-              const [newTeam] = await db.insert(teams).values({ name: teamName, ownerId: userId }).returning();
-              teamId = newTeam.id;
-            }
-
-            // ── 3. Store SVG in S3/MinIO ─────────────────────────────────────
-            await ensureBucket();
-            const key = `assets/${teamId}/${randomUUID()}.svg`;
-            const buffer = Buffer.from(svgContent, 'utf-8');
-            const fileUrl = await uploadFile(key, buffer, 'image/svg+xml');
-
-            // ── 4. Persist to assets table ───────────────────────────────────
-            const [asset] = await db
-              .insert(assets)
-              .values({
-                teamId,
-                uploadedBy: userId,
-                title,
-                description: prompt,
-                fileKey: key,
-                fileUrl,
-                mimeType: 'image/svg+xml',
-                source: 'generated',
-              })
-              .returning();
-
-            // Convert SVG to PNG for the inline chat card preview.
-            // SVG data URLs in <img> tags are browser-sandboxed and often broken;
-            // PNG renders universally without any restrictions.
-            let imageDataUrl = `data:image/svg+xml;base64,${buffer.toString('base64')}`;
-            try {
-              const pngBuffer = await sharp(buffer).png().toBuffer();
-              imageDataUrl = `data:image/png;base64,${pngBuffer.toString('base64')}`;
-            } catch (convErr) {
-              console.error('SVG→PNG conversion failed for chat preview, falling back to SVG data URL:', convErr);
-            }
-
-            return {
-              success: true,
-              assetId: asset.id,
-              title: asset.title,
-              proxyUrl: `/api/assets/image?id=${asset.id}`,
-              fileUrl: asset.fileUrl,
-              image: imageDataUrl,
-              message: `SVG "${title}" created and saved to Design Warehouse.`,
-            };
-          } catch (error) {
-            console.error('createSVG error:', error);
-            return { success: false, error: 'Failed to create SVG' };
           }
         },
       }),
@@ -1022,14 +889,12 @@ STRICT RULES:
           }
         }
 
-        // Add text content
         if (text) {
           parts.push({ type: 'text', text });
         }
 
-        // Save this step as a separate message
         if (parts.length > 0) {
-          await saveMessage(projectId, 'assistant', parts);
+          await saveDocumentMessage(documentId, 'assistant', parts);
           console.log('✅ Step saved with', parts.length, 'parts');
         }
       } catch (error) {

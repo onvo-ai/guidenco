@@ -12,27 +12,33 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { ChevronDown, Plus, Trash2, Loader2 } from 'lucide-react';
-import { Project } from '@/lib/types';
+import { EntitySummary } from '@/lib/types';
 import { UserMenu } from '@/components/user-menu';
 
+function entityUrl(entity: EntitySummary) {
+  if (entity.type === 'asset') return `/app/assets/${entity.id}`;
+  if (entity.type === 'video') return `/app/videos/${entity.id}`;
+  return `/app/documents/${entity.id}`;
+}
+
 interface HeaderProps {
-  currentProject?: Project | null;
-  onProjectChange?: (project: Project) => void;
+  currentEntity?: EntitySummary | null;
+  onEntityChange?: (entity: EntitySummary) => void;
   showProjectSelector?: boolean;
 }
 
-export function Header({ currentProject, onProjectChange, showProjectSelector = true }: HeaderProps) {
+export function Header({ currentEntity, onEntityChange, showProjectSelector = true }: HeaderProps) {
   const router = useRouter();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [entities, setEntities] = useState<EntitySummary[]>([]);
   const [isCreating, setIsCreating] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('');
+  const [newEntityName, setNewEntityName] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [isCreatingEntity, setIsCreatingEntity] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (showProjectSelector) {
-      loadProjects();
+      loadEntities();
     }
   }, [showProjectSelector]);
 
@@ -46,76 +52,74 @@ export function Header({ currentProject, onProjectChange, showProjectSelector = 
     }
   }, [isCreating]);
 
-  const loadProjects = async () => {
+  const loadEntities = async () => {
     try {
-      const response = await fetch('/api/projects');
+      const response = await fetch('/api/entities');
       if (response.ok) {
         const data = await response.json();
-        setProjects(data);
+        setEntities(data);
       }
     } catch (error) {
-      console.error('Error loading projects:', error);
+      console.error('Error loading entities:', error);
     }
   };
 
-  const handleCreateProject = async () => {
-    if (newProjectName.trim() && !isCreatingProject) {
-      setIsCreatingProject(true);
+  const handleCreateEntity = async () => {
+    if (newEntityName.trim() && !isCreatingEntity) {
+      setIsCreatingEntity(true);
       try {
-        const response = await fetch('/api/projects', {
+        const response = await fetch('/api/entities', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: newProjectName.trim() }),
+          body: JSON.stringify({ name: newEntityName.trim(), type: 'document' }),
         });
         if (response.ok) {
-          const project = await response.json();
-          await loadProjects();
-          if (onProjectChange) {
-            onProjectChange(project);
+          const entity = await response.json();
+          await loadEntities();
+          if (onEntityChange) {
+            onEntityChange(entity);
           } else {
-            router.push(`/app/projects/${project.id}`);
+            router.push(entityUrl(entity));
           }
-          setNewProjectName('');
+          setNewEntityName('');
           setIsCreating(false);
           setDropdownOpen(false);
         }
       } catch (error) {
-        console.error('Error creating project:', error);
-        setIsCreatingProject(false);
+        console.error('Error creating entity:', error);
+        setIsCreatingEntity(false);
       }
     }
   };
 
-  const handleSelectProject = (project: Project) => {
-    if (onProjectChange) {
-      onProjectChange(project);
+  const handleSelectEntity = (entity: EntitySummary) => {
+    if (onEntityChange) {
+      onEntityChange(entity);
     } else {
-      router.push(`/app/projects/${project.id}`);
+      router.push(entityUrl(entity));
     }
     setDropdownOpen(false);
   };
 
-  const handleDeleteProject = async (id: string, e: React.MouseEvent) => {
+  const handleDeleteEntity = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (projects.length > 1) {
+    if (entities.length > 1) {
       try {
-        const response = await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+        const response = await fetch(`/api/entities/${id}`, { method: 'DELETE' });
         if (response.ok) {
-          // Reload projects list
-          await loadProjects();
+          await loadEntities();
 
-          // If we deleted the current project, navigate to another one or dashboard
-          if (currentProject?.id === id) {
-            const updatedProjects = projects.filter(p => p.id !== id);
-            if (updatedProjects.length > 0 && onProjectChange) {
-              onProjectChange(updatedProjects[0]);
+          if (currentEntity?.id === id) {
+            const updatedEntities = entities.filter(e => e.id !== id);
+            if (updatedEntities.length > 0 && onEntityChange) {
+              onEntityChange(updatedEntities[0]);
             } else {
               router.push('/app');
             }
           }
         }
       } catch (error) {
-        console.error('Error deleting project:', error);
+        console.error('Error deleting entity:', error);
       }
     }
   };
@@ -134,27 +138,27 @@ export function Header({ currentProject, onProjectChange, showProjectSelector = 
           <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" className="gap-2">
-                {currentProject?.name || 'Select Project'}
+                {currentEntity?.name || 'Select Entity'}
                 <ChevronDown className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-80 p-0 overflow-hidden shadow-xl border-zinc-200 dark:border-zinc-800">
               <div className="max-h-[70vh] flex flex-col">
                 <div className="p-1 overflow-y-auto">
-                  {projects.length > 0 ? (
-                    projects.map((project) => (
+                  {entities.length > 0 ? (
+                    entities.map((entity) => (
                       <DropdownMenuItem
-                        key={project.id}
-                        onClick={() => handleSelectProject(project)}
+                        key={entity.id}
+                        onClick={() => handleSelectEntity(entity)}
                         className="flex items-center justify-between group"
                       >
-                        <span className="flex-1 truncate mr-2">{project.name}</span>
-                        {projects.length > 1 && (
+                        <span className="flex-1 truncate mr-2">{entity.name}</span>
+                        {entities.length > 1 && (
                           <Button
                             variant="ghost"
                             size="sm"
                             className="h-6 w-6 p-0 shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100"
-                            onClick={(e) => handleDeleteProject(project.id, e)}
+                            onClick={(e) => handleDeleteEntity(entity.id, e)}
                           >
                             <Trash2 className="h-3 w-3" />
                           </Button>
@@ -163,7 +167,7 @@ export function Header({ currentProject, onProjectChange, showProjectSelector = 
                     ))
                   ) : (
                     <div className="px-3 py-2 text-sm text-zinc-500 italic text-center">
-                      No projects found
+                      No entities found
                     </div>
                   )}
                 </div>
@@ -175,15 +179,15 @@ export function Header({ currentProject, onProjectChange, showProjectSelector = 
                     <div className="space-y-2">
                       <Input
                         ref={inputRef}
-                        placeholder="Project name"
-                        value={newProjectName}
-                        onChange={(e) => setNewProjectName(e.target.value)}
+                        placeholder="Entity name"
+                        value={newEntityName}
+                        onChange={(e) => setNewEntityName(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
-                            handleCreateProject();
+                            handleCreateEntity();
                           } else if (e.key === 'Escape') {
                             setIsCreating(false);
-                            setNewProjectName('');
+                            setNewEntityName('');
                           }
                           e.stopPropagation();
                         }}
@@ -197,11 +201,11 @@ export function Header({ currentProject, onProjectChange, showProjectSelector = 
                         className="flex-1 h-9"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleCreateProject();
+                          handleCreateEntity();
                         }}
-                        disabled={isCreatingProject || !newProjectName.trim()}
+                        disabled={isCreatingEntity || !newEntityName.trim()}
                       >
-                        {isCreatingProject ? (
+                        {isCreatingEntity ? (
                           <>
                             <Loader2 className="h-3 w-3 mr-2 animate-spin" />
                             Creating...
@@ -217,9 +221,9 @@ export function Header({ currentProject, onProjectChange, showProjectSelector = 
                         onClick={(e) => {
                           e.stopPropagation();
                           setIsCreating(false);
-                          setNewProjectName('');
+                          setNewEntityName('');
                         }}
-                        disabled={isCreatingProject}
+                        disabled={isCreatingEntity}
                       >
                         Cancel
                       </Button>
@@ -236,7 +240,7 @@ export function Header({ currentProject, onProjectChange, showProjectSelector = 
                       className="text-blue-600 dark:text-blue-400 focus:text-blue-600 dark:focus:text-blue-400"
                     >
                       <Plus className="h-4 w-4 mr-2" />
-                      New Project
+                      New Entity
                     </DropdownMenuItem>
                   </div>
                 )}

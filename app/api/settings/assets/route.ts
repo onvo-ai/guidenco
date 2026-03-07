@@ -69,21 +69,21 @@ async function generateDescription(title: string, base64Jpeg: string | null): Pr
       role: 'user',
       content: base64Jpeg
         ? [
-            {
-              type: 'image_url',
-              image_url: { url: `data:image/jpeg;base64,${base64Jpeg}` },
-            },
-            {
-              type: 'text',
-              text: `Write a concise 1-2 sentence description for this design asset titled "${title}". Focus on what it depicts and how it might be used in design work. Reply with just the description, no preamble.`,
-            },
-          ]
+          {
+            type: 'image_url',
+            image_url: { url: `data:image/jpeg;base64,${base64Jpeg}` },
+          },
+          {
+            type: 'text',
+            text: `Write a concise 1-2 sentence description for this design asset titled "${title}". Focus on what it depicts and how it might be used in design work. Reply with just the description, no preamble.`,
+          },
+        ]
         : [
-            {
-              type: 'text',
-              text: `Write a concise 1-2 sentence description for a design asset titled "${title}". Focus on what it likely contains and how it might be used in design work. Reply with just the description, no preamble.`,
-            },
-          ],
+          {
+            type: 'text',
+            text: `Write a concise 1-2 sentence description for a design asset titled "${title}". Focus on what it likely contains and how it might be used in design work. Reply with just the description, no preamble.`,
+          },
+        ],
     },
   ];
 
@@ -118,7 +118,7 @@ export async function GET() {
       .where(eq(assets.teamId, teamId))
       .orderBy(assets.createdAt);
 
-    return NextResponse.json(teamAssets);
+    return NextResponse.json(teamAssets.filter((asset) => asset.source !== 'generated'));
   } catch (error) {
     console.error('Error fetching assets:', error);
     return NextResponse.json({ error: 'Failed to fetch assets' }, { status: 500 });
@@ -166,7 +166,7 @@ export async function POST(req: Request) {
         fileKey: key,
         fileUrl,
         mimeType: file.type,
-        source: ['uploaded', 'chat', 'generated'].includes(source) ? source : 'uploaded',
+        source: ['uploaded', 'chat'].includes(source) ? source : 'uploaded',
       })
       .returning();
 

@@ -102,11 +102,11 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 1. **Sign Up/Sign In**: Create an account or sign in to get started
 2. **Create a Project**: Click "New Project" in the header
 3. **Chat with AI**: Type your request in the chat interface, for example:
-   - "Create a 800x600 artwork with a blue gradient background"
+   - "Create a 800x600 document with a blue gradient background"
    - "Design a social media banner for a tech startup"
    - "Make a poster with the text 'Summer Sale' using a fun font"
    - "Create a flag design with stars and stripes"
-4. **View Results**: The artwork updates in real-time as the AI generates HTML
+4. **View Results**: The document updates in real-time as the AI generates HTML
 5. **Version History**: Browse through all versions using the version selector
 6. **Download**: Export as PNG image or HTML file
 
@@ -114,12 +114,12 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 The AI system has access to several tools:
 
-1. **createArtwork**: Creates a new artwork with specified dimensions
+1. **createDocument**: Creates a new document with specified dimensions
 2. **writeHTML**: Writes Handlebars template with Tailwind CSS, FontAwesome icons, and Google Fonts
-3. **getArtworkState**: Views the current HTML and rendered image of the artwork
+3. **getDocumentState**: Views the current HTML and rendered image of the document
 4. **searchImage**: Searches for images on Unsplash to use in designs
 
-The AI can take multiple turns to refine the artwork, viewing the current state and making adjustments as needed. Each modification creates a new version that's saved in the database.
+The AI can take multiple turns to refine the document, viewing the current state and making adjustments as needed. Each modification creates a new version that's saved in the database.
 
 ## Project Structure
 
@@ -130,7 +130,7 @@ guidenco/
 │   │   ├── auth/              # Authentication endpoints
 │   │   ├── chat/              # AI chat endpoint with tools
 │   │   ├── projects/          # Project CRUD operations
-│   │   ├── artwork/           # Artwork CRUD operations
+│   │   ├── document/           # Document CRUD operations
 │   │   └── render/            # Server-side rendering for exports
 │   ├── auth/                  # Auth pages
 │   ├── app/                   # Main app routes (dashboard, projects)

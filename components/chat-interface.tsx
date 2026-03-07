@@ -41,6 +41,35 @@ function MentionHighlightedText({ value }: { value: string }) {
   return <>{nodes}</>;
 }
 
+function MentionBubbleText({ value, inverted = false }: { value: string; inverted?: boolean }) {
+  const segments = value.split(/(@\[[^\]]+\])/g);
+
+  return (
+    <>
+      {segments.map((seg, i) => {
+        const m = seg.match(/^@\[([^\]]+)\]$/);
+        if (m) {
+          return (
+            <span
+              key={i}
+              className={[
+                'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium mx-0.5 align-middle border',
+                inverted
+                  ? 'bg-white/15 border-white/25 text-white'
+                  : 'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-950/40 dark:border-blue-800 dark:text-blue-300',
+              ].join(' ')}
+            >
+              @{m[1]}
+            </span>
+          );
+        }
+
+        return <Fragment key={i}>{seg}</Fragment>;
+      })}
+    </>
+  );
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface AssetRecord {
@@ -50,12 +79,21 @@ interface AssetRecord {
   fileKey: string;
   fileUrl: string;
   mimeType: string;
-  source: string;
+  source?: string;
+}
+
+interface ProjectRecord {
+  id: string;
+  name: string;
+  type: 'document' | 'asset' | 'video';
 }
 
 type MentionItem =
   | { type: 'page'; id: string; label: string; pageIndex: number; html: string }
-  | { type: 'asset'; id: string; label: string; asset: AssetRecord };
+  | { type: 'asset'; id: string; label: string; asset: AssetRecord }
+  | { type: 'document-entity'; id: string; label: string; entity: ProjectRecord }
+  | { type: 'asset-entity'; id: string; label: string; entity: ProjectRecord }
+  | { type: 'video-entity'; id: string; label: string; entity: ProjectRecord };
 
 // Split HTML on any page-break comment variant
 const PAGE_BREAK_RE = /<!--\s*(?:PAGE_BREAK|GUIDENCO_PAGE_BREAK|ARTISTE_PAGE_BREAK)\s*-->/g;
@@ -67,24 +105,42 @@ function splitHtmlIntoPages(html: string): string[] {
 // ── Props ────────────────────────────────────────────────────────────────────
 
 interface ChatInterfaceProps {
-  projectId: string;
-  selectedPageIndex: number;
-  onArtworkUpdate: () => void;
+  entityId: string;
+  entityType?: 'document' | 'asset' | 'video';
+  selectedPageIndex?: number;
+  onDocumentUpdate?: () => void;
+  onUpdate?: () => void;
+  apiEndpoint?: string;
+  historyEndpoint?: string;
+  placeholder?: string;
+  emptyStateTitle?: string;
+  emptyStateDescription?: string;
+  enableMentions?: boolean;
+  enableImageUploads?: boolean;
   pendingElementPrompt?: { prompt: string; element: SelectedElement } | null;
   onElementPromptSent?: () => void;
   /** Current version's full HTML (with PAGE_BREAK markers). Used to populate page mentions. */
-  artworkHtml?: string;
+  documentHtml?: string;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function ChatInterface({
-  projectId,
-  selectedPageIndex,
-  onArtworkUpdate,
+  entityId,
+  entityType = 'document',
+  selectedPageIndex = 0,
+  onDocumentUpdate,
+  onUpdate,
+  apiEndpoint,
+  historyEndpoint,
+  placeholder = 'Describe what you want to create...',
+  emptyStateTitle = 'Create Digital Assets with AI',
+  emptyStateDescription = 'Ask me to create graphics, illustrations, or any visual content using canvas!',
+  enableMentions = true,
+  enableImageUploads = true,
   pendingElementPrompt,
   onElementPromptSent,
-  artworkHtml = '',
+  documentHtml = '',
 }: ChatInterfaceProps) {
   // ── Existing state ──
   const [input, setInput] = useState('');
@@ -101,26 +157,38 @@ export function ChatInterface({
 
   // ── Mention state ──
   const [availableAssets, setAvailableAssets] = useState<AssetRecord[]>([]);
+  const [availableProjects, setAvailableProjects] = useState<ProjectRecord[]>([]);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionAtIndex, setMentionAtIndex] = useState(-1);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const mentionDropdownRef = useRef<HTMLDivElement>(null);
 
-  // ── Derived: pages from artworkHtml ──
-  const pages = useMemo(() => splitHtmlIntoPages(artworkHtml), [artworkHtml]);
+  // ── Derived: pages from documentHtml ──
+  const pages = useMemo(() => splitHtmlIntoPages(documentHtml), [documentHtml]);
 
-  // ── Derived: all mention items (pages + assets) ──
+  // ── Derived: all mention items (pages + documents + assets + videos) ──
   const allMentionItems = useMemo<MentionItem[]>(() => {
+    if (!enableMentions) return [];
     const items: MentionItem[] = [];
     pages.forEach((html, idx) => {
       items.push({ type: 'page', id: `page-${idx}`, label: `Page ${idx + 1}`, pageIndex: idx, html });
     });
+    availableProjects
+      .filter((project) => project.id !== entityId && (project.type === 'document' || project.type === 'asset' || project.type === 'video'))
+      .forEach((project) => {
+        items.push({
+          type: project.type === 'document' ? 'document-entity' : project.type === 'asset' ? 'asset-entity' : 'video-entity',
+          id: project.id,
+          label: project.name,
+          entity: project,
+        });
+      });
     availableAssets.forEach(asset => {
       items.push({ type: 'asset', id: asset.id, label: asset.title, asset });
     });
     return items;
-  }, [pages, availableAssets]);
+  }, [pages, availableAssets, availableProjects, entityId]);
 
   const filteredMentionItems = useMemo<MentionItem[]>(() => {
     if (!mentionQuery) return allMentionItems;
@@ -131,8 +199,8 @@ export function ChatInterface({
 
   // ── Transport / chat ──
   const transport = useMemo(
-    () => new DefaultChatTransport({ api: `/api/chat?projectId=${projectId}&pageIndex=${selectedPageIndex}` }),
-    [projectId, selectedPageIndex]
+    () => new DefaultChatTransport({ api: apiEndpoint ?? `/api/chat?documentId=${entityId}&pageIndex=${selectedPageIndex}` }),
+    [apiEndpoint, entityId, selectedPageIndex]
   );
 
   const { messages, sendMessage, status, setMessages, stop } = useChat({ transport });
@@ -144,29 +212,48 @@ export function ChatInterface({
 
   // Load chat history
   useEffect(() => {
+    let cancelled = false;
+
     const loadHistory = async () => {
       try {
-        const response = await fetch(`/api/messages?projectId=${projectId}`);
+        const response = await fetch(historyEndpoint ?? `/api/messages?${entityType}Id=${entityId}`);
         if (response.ok) {
           const history = await response.json();
-          setMessages(history);
+          if (!cancelled) {
+            setMessages((currentMessages: any[]) => (currentMessages.length > 0 ? currentMessages : history));
+          }
         }
       } catch (error) {
         console.error('Error loading chat history:', error);
       } finally {
-        setIsLoadingHistory(false);
+        if (!cancelled) {
+          setIsLoadingHistory(false);
+        }
       }
     };
     loadHistory();
-  }, [projectId, setMessages]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [entityId, entityType, historyEndpoint, setMessages]);
 
   // Fetch design warehouse assets
   useEffect(() => {
+    if (!enableMentions) return;
     fetch('/api/settings/assets')
       .then(r => r.json())
       .then(data => { if (Array.isArray(data)) setAvailableAssets(data); })
-      .catch(() => {}); // non-fatal
-  }, []);
+      .catch(() => { }); // non-fatal
+  }, [enableMentions]);
+
+  useEffect(() => {
+    if (!enableMentions) return;
+    fetch('/api/entities')
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setAvailableProjects(data); })
+      .catch(() => { });
+  }, [enableMentions]);
 
   // Stall timer
   useEffect(() => {
@@ -230,15 +317,23 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
         console.error('Error sending element prompt:', error);
       }
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingElementPrompt]);
 
-  // Extract artwork updates from messages
+  // Extract document updates from messages
   useEffect(() => {
+    if (!onUpdate && !onDocumentUpdate) return;
+    if (onUpdate && status === 'ready' && messages.length > 0) {
+      onUpdate();
+    }
+  }, [messages.length, onUpdate, onDocumentUpdate, status]);
+
+  useEffect(() => {
+    if (!onDocumentUpdate) return;
     if (messages.length === 0) return;
-    let artworkWidth = 0;
-    let artworkHeight = 0;
-    let artworkHTML = '';
+    let documentWidth = 0;
+    let documentHeight = 0;
+    let documentHTML = '';
     let version = 0;
     let totalVersions = 0;
     for (const message of messages) {
@@ -246,29 +341,29 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
       for (const part of message.parts) {
         const toolPart = part as any;
         const output = toolPart.output?.output || toolPart.output;
-        if (toolPart.type === 'tool-createArtwork' && output) {
-          artworkWidth = output.width;
-          artworkHeight = output.height;
+        if (toolPart.type === 'tool-createDocument' && output) {
+          documentWidth = output.width;
+          documentHeight = output.height;
         } else if (toolPart.type === 'tool-writeHTML' && output) {
-          artworkHTML = output.html;
+          documentHTML = output.html;
           version = output.version ?? version;
           totalVersions = output.totalVersions ?? totalVersions;
-          if (output.width) artworkWidth = output.width;
-          if (output.height) artworkHeight = output.height;
+          if (output.width) documentWidth = output.width;
+          if (output.height) documentHeight = output.height;
         } else if (toolPart.type === 'tool-editHTML' && output) {
           version = output.version ?? version;
           totalVersions = output.totalVersions ?? totalVersions;
-          if (output.width) artworkWidth = output.width;
-          if (output.height) artworkHeight = output.height;
+          if (output.width) documentWidth = output.width;
+          if (output.height) documentHeight = output.height;
         } else if (toolPart.type === 'tool-writePagesHTML' && output) {
           version = output.version ?? version;
           totalVersions = output.totalVersions ?? totalVersions;
-          if (output.width) artworkWidth = output.width;
-          if (output.height) artworkHeight = output.height;
-        } else if (toolPart.type === 'tool-getArtworkState' && output) {
-          if (output.width) artworkWidth = output.width;
-          if (output.height) artworkHeight = output.height;
-          if (output.html) artworkHTML = output.html;
+          if (output.width) documentWidth = output.width;
+          if (output.height) documentHeight = output.height;
+        } else if (toolPart.type === 'tool-getDocumentState' && output) {
+          if (output.width) documentWidth = output.width;
+          if (output.height) documentHeight = output.height;
+          if (output.html) documentHTML = output.html;
           version = output.version ?? version;
           totalVersions = output.totalVersions ?? totalVersions;
         } else if (toolPart.type === 'tool-createPage' && output) {
@@ -280,25 +375,93 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
         }
       }
     }
-    const currentState = `${artworkWidth}-${artworkHeight}-${artworkHTML}-${version}`;
-    if (artworkWidth && artworkHeight && currentState !== lastProcessedState.current) {
+    const currentState = `${documentWidth}-${documentHeight}-${documentHTML}-${version}`;
+    if (documentWidth && documentHeight && currentState !== lastProcessedState.current) {
       lastProcessedState.current = currentState;
-      onArtworkUpdate();
+      onDocumentUpdate();
     }
-  }, [messages, onArtworkUpdate]);
+  }, [messages, onDocumentUpdate]);
 
   // ── Helpers ──
 
   const appendAssistantError = (text: string) => {
-    setMessages((prev: any[]) => [
+    setMessages((prev) => ([
       ...prev,
-      {
-        id: `local-error-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        role: 'assistant',
-        parts: [{ type: 'text', text }],
-      },
-    ]);
+      { id: crypto.randomUUID(), role: 'assistant', parts: [{ type: 'text', text }] },
+    ]));
   };
+
+  const svgToPngDataUrl = async (svgContent: string, width: number, height: number) => {
+    if (!svgContent) return null;
+
+    const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(svgContent, 'image/svg+xml');
+      const svgElement = doc.documentElement;
+      const widthAttr = Number(svgElement.getAttribute('width'));
+      const heightAttr = Number(svgElement.getAttribute('height'));
+      const viewBox = svgElement.getAttribute('viewBox')?.split(/\s+/).map(Number) ?? [];
+
+      const image = new Image();
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = () => reject(new Error('Failed to load SVG preview'));
+        image.src = objectUrl;
+      });
+
+      const resolvedWidth = Number.isFinite(widthAttr) && widthAttr > 0
+        ? widthAttr
+        : (viewBox.length === 4 && Number.isFinite(viewBox[2]) && viewBox[2] > 0 ? viewBox[2] : (image.width || width || 1024));
+      const resolvedHeight = Number.isFinite(heightAttr) && heightAttr > 0
+        ? heightAttr
+        : (viewBox.length === 4 && Number.isFinite(viewBox[3]) && viewBox[3] > 0 ? viewBox[3] : (image.height || height || 1024));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(resolvedWidth));
+      canvas.height = Math.max(1, Math.round(resolvedHeight));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/png');
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  };
+
+  const htmlToPngDataUrl = async (html: string, width: number, height: number) => {
+    if (!html || !width || !height) return null;
+
+    try {
+      const response = await fetch('/api/render', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template: html, width, height, format: 'base64', scale: 0.5 }),
+      });
+
+      if (!response.ok) return null;
+      const data = await response.json();
+      return typeof data?.image === 'string' ? data.image : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const normalizeImageSrc = (image: string, mimeType?: string) => {
+    if (!image) return '';
+    return image.startsWith('data:') ? image : `data:${mimeType || 'image/png'};base64,${image}`;
+  };
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
+    return `${Math.round(bytes / (1024 * 102.4)) / 10} MB`;
+  };
+
+  const isHiddenContextPart = (text: string) => text.startsWith('[Context – ');
 
   // ── Mention handlers ──
 
@@ -325,6 +488,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
   };
 
   const handleAtButtonClick = () => {
+    if (!enableMentions) return;
     const pos = textareaRef.current?.selectionStart ?? input.length;
     const before = input.slice(0, pos);
     const after = input.slice(pos);
@@ -343,6 +507,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
   // ── Input / keyboard handlers ──
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!enableImageUploads) return;
     const files = e.target.files;
     if (!files) return;
     Array.from(files).forEach((file) => {
@@ -372,6 +537,12 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
     }
 
     // Detect @mention trigger: @ followed by non-space, non-bracket chars at end of text before cursor
+    if (!enableMentions) {
+      setShowMentionDropdown(false);
+      setMentionQuery('');
+      return;
+    }
+
     const selStart = e.target.selectionStart ?? value.length;
     const textBeforeCursor = value.slice(0, selStart);
     // Match the last @ that isn't part of a completed @[...] mention
@@ -423,6 +594,45 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
     setTimeout(() => setShowMentionDropdown(false), 150);
   };
 
+  const renderInspectPreview = (toolName: string, output: any) => {
+    const previewText =
+      toolName === 'getVideo'
+        ? output?.remotionCode
+        : null;
+    const previewLabel =
+      toolName === 'getVideo'
+        ? 'Video code sent to the LLM'
+        : toolName === 'inspectAsset'
+          ? 'Asset preview sent to the LLM'
+          : toolName === 'getSVG'
+            ? 'SVG preview sent to the LLM'
+            : null;
+
+    if ((toolName === 'inspectAsset' || toolName === 'getSVG') && output?.image) {
+      return (
+        <div className="mt-2 space-y-2">
+          <div className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{previewLabel}</div>
+          <img
+            src={output.image}
+            alt={output?.title || 'Inspected asset'}
+            className="max-w-[220px] max-h-[220px] rounded border border-zinc-200 dark:border-zinc-700 shadow-sm bg-white"
+          />
+        </div>
+      );
+    }
+
+    if (!previewText || !previewLabel) return null;
+
+    return (
+      <div className="mt-2 space-y-2">
+        <div className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{previewLabel}</div>
+        <pre className="max-h-48 overflow-auto rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-2 text-[11px] leading-relaxed text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap wrap-break-word">
+          {previewText}
+        </pre>
+      </div>
+    );
+  };
+
   // ── Submit ──
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -454,17 +664,102 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
       if (processedLabels.has(label)) continue;
       processedLabels.add(label);
 
-      // Check asset match
-      const asset = availableAssets.find(a => a.title === label);
-      if (asset && asset.mimeType.startsWith('image/')) {
+      const warehouseAsset = availableAssets.find(a => a.title === label);
+      if (warehouseAsset && warehouseAsset.mimeType.startsWith('image/')) {
         try {
-          const res = await fetch(`/api/assets/data?id=${encodeURIComponent(asset.id)}`);
+          const res = await fetch(`/api/assets/data?id=${encodeURIComponent(warehouseAsset.id)}`);
           if (res.ok) {
             const { base64, mimeType } = await res.json();
-            mentionImageParts.push({ type: 'image', image: base64, mimeType });
+            mentionContextParts.push({
+              type: 'text',
+              text: `[Context – Warehouse asset ${warehouseAsset.title}]\nAsset URL: ${warehouseAsset.fileUrl}\nMime type: ${warehouseAsset.mimeType}${warehouseAsset.description ? `\nDescription: ${warehouseAsset.description}` : ''}`,
+            });
+            mentionImageParts.push({ type: 'image', image: base64, mimeType, fileUrl: warehouseAsset.fileUrl, title: warehouseAsset.title });
           }
         } catch {
           // Non-fatal – mention still stays in text
+        }
+        continue;
+      }
+
+      const mentionedEntity = availableProjects.find((project) => project.name === label);
+      if (mentionedEntity?.type === 'document') {
+        try {
+          const res = await fetch(`/api/documents?documentId=${encodeURIComponent(mentionedEntity.id)}`);
+          if (res.ok) {
+            const document = await res.json();
+            const html = document?.versions?.[document.currentVersion]?.html ?? '';
+            if (html) {
+              const pageCount = Array.isArray(document?.versions) ? splitHtmlIntoPages(html).length : 1;
+              const documentUrl = `${window.location.origin}/app/documents/${mentionedEntity.id}`;
+              const previewImage = await htmlToPngDataUrl(splitHtmlIntoPages(html)[0] || html, document.width ?? 1200, document.height ?? 800);
+              mentionContextParts.push({
+                type: 'text',
+                text: `[Context – Document ${mentionedEntity.name}]\nDocument URL: ${documentUrl}\nTitle: ${document.title || mentionedEntity.name}\nWidth: ${document.width}\nHeight: ${document.height}\nPages: ${pageCount}\nHTML excerpt:\n\`\`\`html\n${html.slice(0, 3000)}\n\`\`\``,
+              });
+              if (previewImage) {
+                mentionImageParts.push({ type: 'image', image: previewImage, mimeType: 'image/png', fileUrl: documentUrl, title: document.title || mentionedEntity.name });
+              }
+            }
+          }
+        } catch {
+          // Non-fatal
+        }
+        continue;
+      }
+
+      if (mentionedEntity?.type === 'asset') {
+        try {
+          const res = await fetch(`/api/asset-generations?assetId=${encodeURIComponent(mentionedEntity.id)}`);
+          if (res.ok) {
+            const asset = await res.json();
+            const currentSvgContent = asset?.svgContent || asset?.versions?.[asset.currentVersion]?.svgContent;
+            const currentWidth = asset?.width ?? asset?.versions?.[asset.currentVersion]?.width ?? 1024;
+            const currentHeight = asset?.height ?? asset?.versions?.[asset.currentVersion]?.height ?? 1024;
+
+            if (currentSvgContent) {
+              const svgUrl = `${window.location.origin}/api/asset-generations/file?assetId=${encodeURIComponent(mentionedEntity.id)}`;
+              const pngPreview = await svgToPngDataUrl(currentSvgContent, currentWidth, currentHeight);
+
+              mentionContextParts.push({
+                type: 'text',
+                text: `[Context – SVG asset ${mentionedEntity.name}]\nSVG URL: ${svgUrl}\nTitle: ${asset?.title || mentionedEntity.name}\nWidth: ${currentWidth}\nHeight: ${currentHeight}${pngPreview ? `\nPNG Preview: attached separately` : ''}`,
+              });
+
+              if (pngPreview) {
+                mentionImageParts.push({
+                  type: 'image',
+                  image: pngPreview,
+                  mimeType: 'image/png',
+                  fileUrl: svgUrl,
+                  title: asset?.title || mentionedEntity.name,
+                });
+              }
+            }
+          }
+        } catch {
+          // Non-fatal
+        }
+        continue;
+      }
+
+      if (mentionedEntity?.type === 'video') {
+        try {
+          const res = await fetch(`/api/videos?videoId=${encodeURIComponent(mentionedEntity.id)}`);
+          if (res.ok) {
+            const video = await res.json();
+            const videoUrl = video?.videoUrl
+              ? `${window.location.origin}/api/videos/file?key=${encodeURIComponent(video.videoUrl)}`
+              : null;
+            const code = video?.remotionCode || video?.versions?.[video?.currentVersion]?.remotionCode || '';
+
+            mentionContextParts.push({
+              type: 'text',
+              text: `[Context – Video ${mentionedEntity.name}]\nVideo URL: ${videoUrl || 'Not rendered yet'}\nTitle: ${video?.title || mentionedEntity.name}\nWidth: ${video?.width ?? 1920}\nHeight: ${video?.height ?? 1080}\nDuration in frames: ${video?.durationInFrames ?? 150}\nFPS: ${video?.fps ?? 30}\nStatus: ${video?.status || 'unknown'}\nCode excerpt:\n\`\`\`tsx\n${code.slice(0, 3000)}\n\`\`\``,
+            });
+          }
+        } catch {
+          // Non-fatal
         }
         continue;
       }
@@ -509,6 +804,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
         type: 'image',
         image: base64,
         mimeType,
+        title: img.file.name,
         ...(fileUrl ? { fileUrl } : {}),
       });
     }
@@ -555,18 +851,21 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
   const [isDragging, setIsDragging] = useState(false);
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (!enableImageUploads) return;
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
+    if (!enableImageUploads) return;
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
   };
 
   const handleDrop = (e: React.DragEvent) => {
+    if (!enableImageUploads) return;
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
@@ -583,6 +882,9 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
 
   // ── Mention dropdown sections for rendering ──
   const pageItemsInDropdown = filteredMentionItems.filter(i => i.type === 'page');
+  const documentItemsInDropdown = filteredMentionItems.filter(i => i.type === 'document-entity');
+  const assetProjectItemsInDropdown = filteredMentionItems.filter(i => i.type === 'asset-entity');
+  const videoProjectItemsInDropdown = filteredMentionItems.filter(i => i.type === 'video-entity');
   const assetItemsInDropdown = filteredMentionItems.filter(i => i.type === 'asset');
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -608,8 +910,8 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
         <div className="space-y-4 mx-auto">
           {messages.length === 0 && (
             <div className="text-center text-zinc-500 py-12">
-              <h2 className="text-2xl font-semibold mb-2">Create Digital Assets with AI</h2>
-              <p>Ask me to create graphics, illustrations, or any visual content using canvas!</p>
+              <h2 className="text-2xl font-semibold mb-2">{emptyStateTitle}</h2>
+              <p>{emptyStateDescription}</p>
             </div>
           )}
 
@@ -623,7 +925,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                   const input = part.output?.input || part.args;
                   let displayMessage = output?.message || toolName;
 
-                  if (toolName === 'createArtwork') {
+                  if (toolName === 'createDocument') {
                     const width = input?.width;
                     const height = input?.height;
                     const pageCount =
@@ -633,7 +935,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                           ? output.pageCount
                           : undefined;
                     if (width && height) {
-                      displayMessage = `Artwork created with dimensions ${width}x${height}${typeof pageCount === 'number' ? ` (${pageCount} ${pageCount === 1 ? 'page' : 'pages'})` : ''}`;
+                      displayMessage = `Document created with dimensions ${width}x${height}${typeof pageCount === 'number' ? ` (${pageCount} ${pageCount === 1 ? 'page' : 'pages'})` : ''}`;
                     }
                   } else if (toolName === 'writeHTML') {
                     const pageIndex = output?.pageIndex;
@@ -681,7 +983,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                   } else if (toolName === 'searchImage') {
                     const searchQuery = input?.query || part.args?.query || output?.query;
                     displayMessage = searchQuery ? `Searching for images: "${searchQuery}"` : 'Searching for images...';
-                  } else if (toolName === 'getArtworkState') {
+                  } else if (toolName === 'getDocumentState') {
                     const actualPageIndex =
                       typeof output?.pageIndex === 'number'
                         ? output.pageIndex
@@ -690,17 +992,30 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                           : typeof part.args?.pageIndex === 'number'
                             ? part.args.pageIndex
                             : selectedPageIndex;
-                    displayMessage = `Inspecting current artwork (page ${actualPageIndex + 1})`;
-                  } else if (toolName === 'createSVG') {
+                    displayMessage = `Inspecting current document (page ${actualPageIndex + 1})`;
+                  } else if (toolName === 'saveSVG') {
                     const svgTitle = input?.title || output?.title;
                     if (output?.success === false) {
-                      displayMessage = `SVG creation failed: ${output?.error || 'unknown error'}`;
+                      displayMessage = `SVG save failed: ${output?.error || 'unknown error'}`;
                     } else {
-                      displayMessage = svgTitle ? `SVG created: "${svgTitle}"` : (output?.message || 'Generating SVG...');
+                      displayMessage = svgTitle ? `SVG updated: "${svgTitle}"` : (output?.message || 'Saving SVG...');
                     }
+                  } else if (toolName === 'getSVG') {
+                    const title = output?.title;
+                    displayMessage = title ? `Inspecting asset: ${title}` : 'Inspecting current asset...';
+                  } else if (toolName === 'saveVideo') {
+                    const title = input?.title || output?.title;
+                    if (output?.success === false) {
+                      displayMessage = `Video generation failed: ${output?.error || 'unknown error'}`;
+                    } else {
+                      displayMessage = title ? `Video updated: "${title}"` : (output?.message || 'Generating video...');
+                    }
+                  } else if (toolName === 'getVideo') {
+                    const title = output?.title;
+                    displayMessage = title ? `Inspecting video: ${title}` : 'Inspecting current video...';
                   }
 
-                  const hasImage = (toolName === 'getArtworkState' || toolName === 'createSVG') && output?.image;
+                  const hasImage = (toolName === 'getDocumentState' || toolName === 'getSVG') && output?.image;
                   const hasSearchImages =
                     toolName === 'searchImage' &&
                     output?.success &&
@@ -712,17 +1027,21 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                       <div className="w-full rounded-md bg-zinc-100 dark:bg-zinc-800 px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400">
                         <div className="flex items-center gap-2">
                           <span>
-                            {toolName === 'createArtwork' && '🎨'}
+                            {toolName === 'createDocument' && '🎨'}
                             {toolName === 'writeHTML' && '✏️'}
                             {toolName === 'editHTML' && '🔧'}
                             {toolName === 'writePagesHTML' && '✏️'}
-                            {toolName === 'getArtworkState' && '👁️'}
+                            {toolName === 'getDocumentState' && '👁️'}
                             {toolName === 'createPage' && '📄'}
                             {toolName === 'deletePage' && '🗑️'}
                             {toolName === 'searchImage' && '🔍'}
                             {toolName === 'listAssets' && '📦'}
                             {toolName === 'inspectAsset' && '🖼️'}
-                            {toolName === 'createSVG' && '✨'}
+                            {toolName === 'saveSVG' && '✨'}
+                            {toolName === 'getSVG' && '🖼️'}
+                            {toolName === 'saveVideo' && '🎬'}
+                            {toolName === 'getVideo' && '👁️'}
+                            {!['createDocument', 'writeHTML', 'editHTML', 'writePagesHTML', 'getDocumentState', 'createPage', 'deletePage', 'searchImage', 'listAssets', 'inspectAsset', 'saveSVG', 'getSVG', 'saveVideo', 'getVideo'].includes(toolName) && '⚙️'}
                           </span>
                           <span className="font-medium">{displayMessage}</span>
                         </div>
@@ -731,7 +1050,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                           <div className="mt-2">
                             <img
                               src={output.image}
-                              alt={toolName === 'createSVG' ? (output.title || 'Generated SVG') : 'Artwork preview'}
+                              alt={toolName === 'getSVG' ? (output.title || 'SVG preview') : 'Document preview'}
                               className="max-w-[200px] max-h-[200px] rounded border border-zinc-200 dark:border-zinc-700 shadow-sm bg-white"
                             />
                           </div>
@@ -760,6 +1079,8 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                             </div>
                           </div>
                         )}
+
+                        {renderInspectPreview(toolName, output)}
                       </div>
                     </div>
                   );
@@ -767,6 +1088,10 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
 
                 // Text
                 if (part.type === 'text' && part.text) {
+                  if (isHiddenContextPart(part.text)) {
+                    return null;
+                  }
+
                   if (part.text.startsWith('[ELEMENT EDIT REQUEST]')) {
                     const instructionMatch = part.text.match(/User instruction: ([\s\S]+?)(?:\n|$)/);
                     const selectorMatch = part.text.match(/CSS Selector: (.+?)(?:\n|$)/);
@@ -787,9 +1112,15 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                   return (
                     <div key={partIdx} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                       <div className={`max-w-[80%] rounded-lg px-4 py-2 ${message.role === 'user' ? 'bg-blue-600 text-white' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'}`}>
-                        <div className={`prose prose-sm max-w-none ${message.role === 'user' ? 'prose-invert' : 'dark:prose-invert'}`}>
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.text}</ReactMarkdown>
-                        </div>
+                        {message.role === 'user' ? (
+                          <div className="text-sm leading-6 whitespace-pre-wrap wrap-break-word">
+                            <MentionBubbleText value={part.text} inverted />
+                          </div>
+                        ) : (
+                          <div className="prose prose-sm max-w-none dark:prose-invert">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.text}</ReactMarkdown>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -797,13 +1128,20 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
 
                 // Images
                 if (part.type === 'image') {
+                  const src = normalizeImageSrc(part.image, part.mimeType);
+                  const label = part.title || (part.fileUrl ? new URL(part.fileUrl, window.location.origin).pathname.split('/').pop() : null) || 'Attachment';
                   return (
                     <div key={partIdx} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <img
-                        src={`data:${part.mimeType || 'image/png'};base64,${part.image}`}
-                        alt="Uploaded"
-                        className="max-w-[200px] max-h-[200px] rounded border"
-                      />
+                      <div className="overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm max-w-[240px]">
+                        <img
+                          src={src}
+                          alt="Attachment"
+                          className="block max-w-[240px] max-h-[220px] w-full object-contain bg-zinc-50 dark:bg-zinc-950"
+                        />
+                        <div className="px-3 py-2 text-[11px] text-zinc-500 dark:text-zinc-400 border-t border-zinc-100 dark:border-zinc-800 truncate">
+                          {label}
+                        </div>
+                      </div>
                     </div>
                   );
                 }
@@ -829,17 +1167,16 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
         <div className="mx-auto space-y-2 relative">
 
           {/* Mention dropdown – rendered above the input */}
-          {showMentionDropdown && (
+          {enableMentions && showMentionDropdown && (
             <div
               ref={mentionDropdownRef}
               className="absolute bottom-full left-0 right-0 mb-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl overflow-hidden z-50"
             >
               <div className="max-h-60 overflow-y-auto">
                 {filteredMentionItems.length === 0 ? (
-                  <div className="px-3 py-3 text-sm text-zinc-500 text-center">No pages or assets found</div>
+                  <div className="px-3 py-3 text-sm text-zinc-500 text-center">No pages, documents, assets, or videos found</div>
                 ) : (
                   <>
-                    {/* Pages section */}
                     {pageItemsInDropdown.length > 0 && (
                       <>
                         <div className="sticky top-0 px-3 py-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider bg-zinc-50 dark:bg-zinc-800/80 border-b border-zinc-100 dark:border-zinc-700/50">
@@ -851,11 +1188,10 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                             <button
                               key={item.id}
                               data-selected={flatIdx === mentionSelectedIndex ? 'true' : undefined}
-                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${
-                                flatIdx === mentionSelectedIndex
-                                  ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
-                                  : 'hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
-                              }`}
+                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${flatIdx === mentionSelectedIndex
+                                ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                                : 'hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                                }`}
                               onMouseDown={(e) => { e.preventDefault(); selectMention(item); }}
                               onMouseEnter={() => setMentionSelectedIndex(flatIdx)}
                             >
@@ -868,11 +1204,91 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                       </>
                     )}
 
-                    {/* Assets section */}
+                    {videoProjectItemsInDropdown.length > 0 && (
+                      <>
+                        <div className="sticky top-0 px-3 py-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider bg-zinc-50 dark:bg-zinc-800/80 border-b border-zinc-100 dark:border-zinc-700/50">
+                          Videos
+                        </div>
+                        {videoProjectItemsInDropdown.map((item) => {
+                          const flatIdx = filteredMentionItems.indexOf(item);
+                          return (
+                            <button
+                              key={item.id}
+                              data-selected={flatIdx === mentionSelectedIndex ? 'true' : undefined}
+                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${flatIdx === mentionSelectedIndex
+                                ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                                : 'hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                                }`}
+                              onMouseDown={(e) => { e.preventDefault(); selectMention(item); }}
+                              onMouseEnter={() => setMentionSelectedIndex(flatIdx)}
+                            >
+                              <FileText className="h-4 w-4 shrink-0 text-zinc-400" />
+                              <span className="flex-1 truncate font-medium">{item.label}</span>
+                              <span className="text-xs text-zinc-400 shrink-0">Video</span>
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
+
+                    {documentItemsInDropdown.length > 0 && (
+                      <>
+                        <div className="sticky top-0 px-3 py-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider bg-zinc-50 dark:bg-zinc-800/80 border-b border-zinc-100 dark:border-zinc-700/50">
+                          Documents
+                        </div>
+                        {documentItemsInDropdown.map((item) => {
+                          const flatIdx = filteredMentionItems.indexOf(item);
+                          return (
+                            <button
+                              key={item.id}
+                              data-selected={flatIdx === mentionSelectedIndex ? 'true' : undefined}
+                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${flatIdx === mentionSelectedIndex
+                                ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                                : 'hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                                }`}
+                              onMouseDown={(e) => { e.preventDefault(); selectMention(item); }}
+                              onMouseEnter={() => setMentionSelectedIndex(flatIdx)}
+                            >
+                              <FileText className="h-4 w-4 shrink-0 text-zinc-400" />
+                              <span className="flex-1 truncate font-medium">{item.label}</span>
+                              <span className="text-xs text-zinc-400 shrink-0">Document</span>
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
+
+                    {assetProjectItemsInDropdown.length > 0 && (
+                      <>
+                        <div className="sticky top-0 px-3 py-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider bg-zinc-50 dark:bg-zinc-800/80 border-b border-zinc-100 dark:border-zinc-700/50">
+                          Assets
+                        </div>
+                        {assetProjectItemsInDropdown.map((item) => {
+                          const flatIdx = filteredMentionItems.indexOf(item);
+                          return (
+                            <button
+                              key={item.id}
+                              data-selected={flatIdx === mentionSelectedIndex ? 'true' : undefined}
+                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${flatIdx === mentionSelectedIndex
+                                ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                                : 'hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                                }`}
+                              onMouseDown={(e) => { e.preventDefault(); selectMention(item); }}
+                              onMouseEnter={() => setMentionSelectedIndex(flatIdx)}
+                            >
+                              <ImageIcon className="h-4 w-4 shrink-0 text-zinc-400" />
+                              <span className="flex-1 truncate font-medium">{item.label}</span>
+                              <span className="text-xs text-zinc-400 shrink-0">Asset</span>
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
+
                     {assetItemsInDropdown.length > 0 && (
                       <>
                         <div className="sticky top-0 px-3 py-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider bg-zinc-50 dark:bg-zinc-800/80 border-b border-zinc-100 dark:border-zinc-700/50">
-                          Design Warehouse
+                          Warehouse Assets
                         </div>
                         {assetItemsInDropdown.map((item) => {
                           const flatIdx = filteredMentionItems.indexOf(item);
@@ -881,11 +1297,10 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                             <button
                               key={item.id}
                               data-selected={flatIdx === mentionSelectedIndex ? 'true' : undefined}
-                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${
-                                flatIdx === mentionSelectedIndex
-                                  ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
-                                  : 'hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
-                              }`}
+                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${flatIdx === mentionSelectedIndex
+                                ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                                : 'hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                                }`}
                               onMouseDown={(e) => { e.preventDefault(); selectMention(item); }}
                               onMouseEnter={() => setMentionSelectedIndex(flatIdx)}
                             >
@@ -910,7 +1325,6 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                 )}
               </div>
 
-              {/* Footer hint */}
               <div className="border-t border-zinc-100 dark:border-zinc-700/50 px-3 py-1.5 flex items-center justify-between">
                 <span className="text-[11px] text-zinc-400">↑↓ navigate · Enter to select · Esc to close</span>
                 <span className="text-[11px] text-zinc-400">{filteredMentionItems.length} result{filteredMentionItems.length !== 1 ? 's' : ''}</span>
@@ -918,124 +1332,146 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
             </div>
           )}
 
-          {/* Image attachment previews */}
-          {attachedImages.length > 0 && (
-            <div className="flex gap-2 flex-wrap">
-              {attachedImages.map((img, idx) => (
-                <div key={idx} className="relative group">
-                  <img src={img.url} alt="Attached" className="h-20 w-20 object-cover rounded border" />
-                  <button
-                    onClick={() => removeImage(idx)}
-                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
+          <div className="bg-white dark:bg-zinc-950 space-y-3">
+            {enableImageUploads && attachedImages.length > 0 && (
+              <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/60 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium text-zinc-800 dark:text-zinc-100">Attachments</div>
+                    <div className="text-xs text-zinc-500 dark:text-zinc-400">{attachedImages.length} image{attachedImages.length !== 1 ? 's' : ''} ready to send</div>
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
+                <div className="flex gap-3 flex-wrap">
+                  {attachedImages.map((img, idx) => (
+                    <div key={idx} className="relative group w-[120px] overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 shadow-sm">
+                      <img src={img.url} alt="Attached" className="h-24 w-full object-cover" />
+                      <div className="p-2">
+                        <div className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-100">{img.file.name}</div>
+                        <div className="text-[11px] text-zinc-500 dark:text-zinc-400">{formatBytes(img.file.size)}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeImage(idx)}
+                        className="absolute top-2 right-2 bg-black/70 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
-          {/* Input form */}
-          <form onSubmit={handleSubmit} className="flex gap-2 items-end">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={handleImageSelect}
-              className="hidden"
-            />
+            {/* Input form */}
+            <form onSubmit={handleSubmit} className="flex gap-2 items-end">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleImageSelect}
+                className="hidden"
+              />
 
-            {/* Image attach button */}
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isLoading}
-              className="h-11 w-11 shrink-0"
-              title="Attach image"
-            >
-              <ImageIcon className="h-5 w-5" />
-            </Button>
+              {enableImageUploads && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isLoading}
+                  className="h-11 w-11 shrink-0"
+                  title="Attach image"
+                >
+                  <ImageIcon className="h-5 w-5" />
+                </Button>
+              )}
 
-            {/* @ mention button */}
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={handleAtButtonClick}
-              disabled={isLoading}
-              className="h-11 w-11 shrink-0"
-              title="Mention a page or asset (@)"
-            >
-              <AtSign className="h-5 w-5" />
-            </Button>
+              {enableMentions && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={handleAtButtonClick}
+                  disabled={isLoading}
+                  className="h-11 w-11 shrink-0"
+                  title="Mention a page or asset (@)"
+                >
+                  <AtSign className="h-5 w-5" />
+                </Button>
+              )}
 
-            {/*
-              ── Mention-highlight textarea ────────────────────────────────
-              The wrapper is `relative` so the mirror div can be stacked
-              directly behind the textarea. The textarea itself has transparent
-              text (only the caret shows) while the mirror div renders the same
-              content with @[…] tokens replaced by styled bubble chips.
-            */}
-            <div className="relative flex-1 min-h-[44px]">
-              {/* Mirror layer – aria-hidden, pointer-events off */}
-              <div
-                ref={mirrorDivRef}
-                aria-hidden="true"
-                className={[
-                  // Match textarea geometry exactly
-                  'absolute inset-0 px-3 py-3 text-sm',
-                  // Prevent interaction; clip overflow without showing scrollbar
-                  'pointer-events-none overflow-hidden',
-                  // Text wrapping to match textarea behaviour
-                  'whitespace-pre-wrap break-words',
-                  // Inherit leading so chips align with text baseline
-                  'leading-normal',
-                ].join(' ')}
-              >
-                <MentionHighlightedText value={input} />
+              {/*
+                ── Mention-highlight textarea ────────────────────────────────
+                The wrapper is `relative` so the mirror div can be stacked
+                directly behind the textarea. The textarea itself has transparent
+                text (only the caret shows) while the mirror div renders the same
+                content with @[…] tokens replaced by styled bubble chips.
+              */}
+              <div className="relative flex-1 min-h-[44px]">
+                {/* Mirror layer – aria-hidden, pointer-events off */}
+                <div
+                  ref={mirrorDivRef}
+                  aria-hidden="true"
+                  className={[
+                    // Match textarea geometry exactly
+                    'absolute inset-0 px-3 py-3 text-sm',
+                    // Prevent interaction; clip overflow without showing scrollbar
+                    'pointer-events-none overflow-hidden',
+                    // Text wrapping to match textarea behaviour
+                    'whitespace-pre-wrap wrap-break-word',
+                    // Inherit leading so chips align with text baseline
+                    'leading-normal',
+                  ].join(' ')}
+                >
+                  <MentionHighlightedText value={input} />
+                </div>
+
+                {/* Actual textarea – text made transparent so mirror shows */}
+                <Textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={handleInputChange}
+                  onKeyDown={handleKeyDown}
+                  onBlur={handleTextareaBlur}
+                  onScroll={(e) => {
+                    if (mirrorDivRef.current) {
+                      mirrorDivRef.current.scrollTop = e.currentTarget.scrollTop;
+                    }
+                  }}
+                  placeholder={input ? '' : placeholder}
+                  disabled={isLoading}
+                  className="relative w-full min-h-[44px] h-[44px] max-h-[200px] resize-none overflow-y-auto py-3 bg-transparent dark:bg-transparent"
+                  style={
+                    input.length > 0
+                      ? { color: 'transparent', caretColor: 'hsl(var(--foreground))' }
+                      : undefined
+                  }
+                  rows={1}
+                  autoComplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
+                />
               </div>
 
-              {/* Actual textarea – text made transparent so mirror shows */}
-              <Textarea
-                ref={textareaRef}
-                value={input}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                onBlur={handleTextareaBlur}
-                onScroll={(e) => {
-                  // Keep mirror scrolled in sync when content overflows max-height
-                  if (mirrorDivRef.current) {
-                    mirrorDivRef.current.scrollTop = e.currentTarget.scrollTop;
-                  }
-                }}
-                placeholder={input ? '' : 'Ask me to create something… or type @ to tag a page or asset'}
-                disabled={isLoading}
-                className="relative w-full min-h-[44px] h-[44px] max-h-[200px] resize-none overflow-y-auto py-3 bg-transparent dark:bg-transparent"
-                style={
-                  input.length > 0
-                    ? { color: 'transparent', caretColor: 'hsl(var(--foreground))' }
-                    : undefined
-                }
-                rows={1}
-                autoComplete="off"
-                data-1p-ignore
-                data-lpignore="true"
-              />
-            </div>
-
-            <Button
-              type="submit"
-              disabled={!input.trim() && attachedImages.length === 0}
-              size="icon"
-              className="h-11 w-11 shrink-0"
-              title={isLoading ? 'Send (will cancel current request)' : 'Send message'}
-            >
-              <Send className="h-5 w-5" />
-            </Button>
-          </form>
+              <Button
+                type={isLoading ? 'button' : 'submit'}
+                onClick={isLoading ? () => stop() : undefined}
+                disabled={!isLoading && !input.trim() && attachedImages.length === 0}
+                size="icon"
+                className="h-11 w-11 shrink-0"
+                title={isLoading ? 'Stop generation' : 'Send message'}
+              >
+                {isLoading ? (
+                  <div className="flex items-center justify-center">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  </div>
+                ) : (
+                  <Send className="h-5 w-5" />
+                )}
+              </Button>
+            </form>
+          </div>
         </div>
       </div>
     </div>

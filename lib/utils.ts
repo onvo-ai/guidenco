@@ -13,7 +13,7 @@ const PAGE_BREAK_LEGACY_ARTISTE = '\n<!-- ARTISTE_PAGE_BREAK -->\n';
 
 export function splitPages(html: string): string[] {
   if (!html) return [''];
-  // Normalise legacy separators so old artworks both split correctly
+  // Normalise legacy separators so old documents both split correctly
   const normalised = html
     .split(PAGE_BREAK_LEGACY_GUIDENCO).join(PAGE_BREAK)
     .split(PAGE_BREAK_LEGACY_ARTISTE).join(PAGE_BREAK);

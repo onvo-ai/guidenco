@@ -130,7 +130,7 @@ export async function POST(req: Request) {
         {
           headers: {
             "Content-Type": "image/png",
-            "Content-Disposition": `attachment; filename="artwork-${Date.now()}.png"`,
+            "Content-Disposition": `attachment; filename="document-${Date.now()}.png"`,
           },
         },
       );

@@ -11,42 +11,43 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 
-type ProjectType = 'artwork' | 'asset' | 'video';
+type EntityType = 'document' | 'asset' | 'video';
 
 const TYPES: {
-  type: ProjectType;
+  type: EntityType;
   label: string;
   Icon: React.ElementType;
   description: string;
 }[] = [
-  {
-    type: 'artwork',
-    label: 'Artwork',
-    Icon: LayoutTemplate,
-    description: 'Multi-page HTML designs for banners, posters, and presentations.',
-  },
-  {
-    type: 'asset',
-    label: 'Asset',
-    Icon: Shapes,
-    description: 'Single SVG asset — icons, illustrations, and custom graphics.',
-  },
-  {
-    type: 'video',
-    label: 'Video',
-    Icon: Film,
-    description: 'Animated Remotion videos with custom size and duration.',
-  },
-];
+    {
+      type: 'document',
+      label: 'Document',
+      Icon: LayoutTemplate,
+      description: 'Multi-page HTML designs for banners, posters, and presentations.',
+    },
+    {
+      type: 'asset',
+      label: 'Asset',
+      Icon: Shapes,
+      description: 'Single SVG asset — icons, illustrations, and custom graphics.',
+    },
+    {
+      type: 'video',
+      label: 'Video',
+      Icon: Film,
+      description: 'Animated videos with custom size and duration.',
+    },
+  ];
 
 interface NewProjectModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (projectId: string, type: ProjectType) => void;
+  onCreated: (entityId: string, type: EntityType) => void;
+  initialType?: EntityType;
 }
 
-export function NewProjectModal({ open, onOpenChange, onCreated }: NewProjectModalProps) {
-  const [selectedType, setSelectedType] = useState<ProjectType>('artwork');
+export function NewProjectModal({ open, onOpenChange, onCreated, initialType = 'document' }: NewProjectModalProps) {
+  const [selectedType, setSelectedType] = useState<EntityType>(initialType);
   const [name, setName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -54,39 +55,39 @@ export function NewProjectModal({ open, onOpenChange, onCreated }: NewProjectMod
   useEffect(() => {
     if (open) {
       setName('');
-      setSelectedType('artwork');
+      setSelectedType(initialType);
       setTimeout(() => inputRef.current?.focus(), 80);
     }
-  }, [open]);
+  }, [open, initialType]);
 
   const handleCreate = async () => {
     if (!name.trim() || isCreating) return;
     setIsCreating(true);
     try {
-      const res = await fetch('/api/projects', {
+      const res = await fetch('/api/entities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), type: selectedType }),
       });
       if (res.ok) {
-        const project = await res.json();
+        const entity = await res.json();
         onOpenChange(false);
-        onCreated(project.id, selectedType);
+        onCreated(entity.id, selectedType);
       }
     } catch (e) {
-      console.error('Error creating project:', e);
+      console.error('Error creating entity:', e);
     } finally {
       setIsCreating(false);
     }
   };
 
-  const typeLabel = TYPES.find((t) => t.type === selectedType)?.label ?? 'Project';
+  const typeLabel = TYPES.find((t) => t.type === selectedType)?.label ?? 'Entity';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>New Project</DialogTitle>
+          <DialogTitle>New Entity</DialogTitle>
         </DialogHeader>
 
         {/* Type cards */}
@@ -97,28 +98,25 @@ export function NewProjectModal({ open, onOpenChange, onCreated }: NewProjectMod
               <button
                 key={type}
                 onClick={() => setSelectedType(type)}
-                className={`flex flex-col items-center gap-2.5 p-4 rounded-xl border-2 transition-all text-center ${
-                  isSelected
-                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/40'
-                    : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-900'
-                }`}
+                className={`flex flex-col items-center gap-2.5 p-4 rounded-xl border-2 transition-all text-center ${isSelected
+                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/40'
+                  : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-900'
+                  }`}
               >
                 <div
-                  className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
-                    isSelected
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400'
-                  }`}
+                  className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${isSelected
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400'
+                    }`}
                 >
                   <Icon className="h-5 w-5" />
                 </div>
                 <div className="space-y-0.5">
                   <p
-                    className={`text-sm font-semibold transition-colors ${
-                      isSelected
-                        ? 'text-blue-600 dark:text-blue-400'
-                        : 'text-zinc-900 dark:text-zinc-100'
-                    }`}
+                    className={`text-sm font-semibold transition-colors ${isSelected
+                      ? 'text-blue-600 dark:text-blue-400'
+                      : 'text-zinc-900 dark:text-zinc-100'
+                      }`}
                   >
                     {label}
                   </p>
@@ -134,7 +132,7 @@ export function NewProjectModal({ open, onOpenChange, onCreated }: NewProjectMod
         {/* Name input */}
         <div className="mt-1">
           <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5 block">
-            Project name
+            Entity name
           </label>
           <Input
             ref={inputRef}

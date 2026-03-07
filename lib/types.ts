@@ -1,20 +1,20 @@
-export interface Project {
+export interface EntitySummary {
   id: string;
   name: string;
-  type: 'artwork' | 'asset' | 'video';
+  type: 'document' | 'asset' | 'video';
   createdAt: number;
   updatedAt: number;
 }
 
-export interface ArtworkVersion {
+export interface DocumentVersion {
   html: string;
   timestamp: number;
 }
 
-export interface ArtworkState {
+export interface DocumentState {
   width: number;
   height: number;
-  versions: ArtworkVersion[];
+  versions: DocumentVersion[];
   currentVersion: number;
 }
 

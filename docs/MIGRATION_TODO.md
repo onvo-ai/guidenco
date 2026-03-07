@@ -12,12 +12,12 @@
 ## 🔄 In Progress - Need to Complete
 
 ### 1. Update Chat API Route (`/app/api/chat/route.ts`)
-Replace the in-memory `artworkStates` Map with PostgreSQL:
-- Import `createOrUpdateArtwork` and `getProjectArtwork` from `/lib/db/projects-service`
-- In `createArtwork` tool: Call `createOrUpdateArtwork` to save to DB
-- In `writeHTML` tool: Call `createOrUpdateArtwork` to save new version
-- In `getArtworkState` tool: Call `getProjectArtwork` to fetch from DB
-- Remove the `artworkStates` Map entirely
+Replace the in-memory `documentStates` Map with PostgreSQL:
+- Import `createOrUpdateDocument` and `getProjectDocument` from `/lib/db/projects-service`
+- In `createDocument` tool: Call `createOrUpdateDocument` to save to DB
+- In `writeHTML` tool: Call `createOrUpdateDocument` to save new version
+- In `getDocumentState` tool: Call `getProjectDocument` to fetch from DB
+- Remove the `documentStates` Map entirely
 
 ### 2. Update Header Component (`/components/header.tsx`)
 Replace localStorage with API calls:
@@ -29,7 +29,7 @@ Replace localStorage with API calls:
 ### 3. Update Main Page (`/app/page.tsx`)
 - Add authentication check - redirect to `/auth` if not logged in
 - Fetch projects from API on mount
-- Load artwork state from API when project changes
+- Load document state from API when project changes
 
 ### 4. Optional: Save/Load Chat Messages
 - Update chat interface to save messages to DB after each exchange
@@ -44,24 +44,24 @@ Replace localStorage with API calls:
 
 ### Step 1: Update `/app/api/chat/route.ts`
 ```typescript
-import { createOrUpdateArtwork, getProjectArtwork } from '@/lib/db/projects-service';
+import { createOrUpdateDocument, getProjectDocument } from '@/lib/db/projects-service';
 
-// Remove: const artworkStates = new Map...
+// Remove: const documentStates = new Map...
 
-// In createArtwork tool execute:
+// In createDocument tool execute:
 // Just return dimensions, actual creation happens in writeHTML
 
 // In writeHTML tool execute:
-const { version, totalVersions } = await createOrUpdateArtwork(
+const { version, totalVersions } = await createOrUpdateDocument(
   projectId,
   state.width,
   state.height,
   html
 );
 
-// In getArtworkState tool execute:
-const artwork = await getProjectArtwork(projectId);
-if (!artwork) return { success: false, error: 'No artwork exists' };
+// In getDocumentState tool execute:
+const document = await getProjectDocument(projectId);
+if (!document) return { success: false, error: 'No document exists' };
 ```
 
 ### Step 2: Update `/components/header.tsx`
@@ -110,7 +110,7 @@ export default function Home() {
 - [ ] Profile settings can be updated
 - [ ] Projects can be created
 - [ ] Projects can be deleted
-- [ ] Artworks are saved to database
+- [ ] Documents are saved to database
 - [ ] Version history works
 - [ ] Chat messages persist (optional)
 - [ ] Switching projects loads correct data
