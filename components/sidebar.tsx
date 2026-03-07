@@ -16,6 +16,7 @@ import { useSession } from '@/lib/auth-client';
 import { Input } from '@/components/ui/input';
 import { EntitySummary } from '@/lib/types';
 import { SettingsModal } from '@/components/settings-modal';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 
 type SectionType = 'document' | 'asset' | 'video';
 
@@ -38,7 +39,12 @@ function activeSectionFromPath(pathname: string | null): SectionType | null {
   return null;
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  open?: boolean;
+  onClose?: () => void;
+}
+
+export function Sidebar({ open, onClose }: SidebarProps) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useParams();
@@ -46,7 +52,6 @@ export function Sidebar() {
 
   const [entities, setEntities] = useState<EntitySummary[]>([]);
   const [expanded, setExpanded] = useState<Set<SectionType>>(new Set(['document']));
-  // creatingIn tracks which section has the inline create input open
   const [creatingIn, setCreatingIn] = useState<SectionType | null>(null);
   const [newEntityName, setNewEntityName] = useState('');
   const [isCreatingEntity, setIsCreatingEntity] = useState(false);
@@ -55,7 +60,6 @@ export function Sidebar() {
 
   const currentEntityId = params?.id as string | undefined;
 
-  // Auto-expand the section matching the current URL
   useEffect(() => {
     const section = activeSectionFromPath(pathname);
     if (section) {
@@ -90,7 +94,6 @@ export function Sidebar() {
       const next = new Set(prev);
       if (next.has(type)) {
         next.delete(type);
-        // close create input if open in this section
         if (creatingIn === type) {
           setCreatingIn(null);
           setNewEntityName('');
@@ -100,6 +103,11 @@ export function Sidebar() {
       }
       return next;
     });
+  };
+
+  const navigate = (url: string) => {
+    router.push(url);
+    onClose?.();
   };
 
   const handleCreateEntity = async (type: SectionType) => {
@@ -114,7 +122,7 @@ export function Sidebar() {
       if (res.ok) {
         const entity = await res.json();
         await loadEntities();
-        router.push(entityUrl(entity));
+        navigate(entityUrl(entity));
         setNewEntityName('');
         setCreatingIn(null);
       }
@@ -138,7 +146,7 @@ export function Sidebar() {
         await loadEntities();
         if (currentEntityId === entity.id) {
           const remaining = sectionEntities.filter((e) => e.id !== entity.id);
-          router.push(remaining.length > 0 ? entityUrl(remaining[0]) : '/app');
+          navigate(remaining.length > 0 ? entityUrl(remaining[0]) : '/app');
         }
       }
     } catch (e) {
@@ -156,12 +164,12 @@ export function Sidebar() {
 
   const currentSection = activeSectionFromPath(pathname);
 
-  return (
-    <aside className="w-[240px] shrink-0 flex flex-col h-screen border-r bg-white dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800">
+  const content = (
+    <>
       {/* Brand */}
       <div className="px-4 h-14 flex items-center border-b border-zinc-200 dark:border-zinc-800 shrink-0">
         <button
-          onClick={() => router.push('/app')}
+          onClick={() => navigate('/app')}
           className="text-lg font-bold text-zinc-900 dark:text-zinc-100 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
         >
           Guidenco
@@ -175,11 +183,10 @@ export function Sidebar() {
           const isActiveSection = currentSection === type;
           const sectionEntities = entities.filter((e) => e.type === type);
           const isCreatingHere = creatingIn === type;
-          const singularLabel = label.slice(0, -1); // 'Documents' → 'Document'
+          const singularLabel = label.slice(0, -1);
 
           return (
             <div key={type}>
-              {/* Section header */}
               <button
                 onClick={() => toggleSection(type)}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActiveSection
@@ -188,8 +195,7 @@ export function Sidebar() {
                   }`}
               >
                 <ChevronRight
-                  className={`h-3.5 w-3.5 shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''
-                    }`}
+                  className={`h-3.5 w-3.5 shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
                 />
                 <Icon className="h-4 w-4 shrink-0" />
                 <span className="flex-1 text-left">{label}</span>
@@ -200,7 +206,6 @@ export function Sidebar() {
                 )}
               </button>
 
-              {/* Section content */}
               {isExpanded && (
                 <div className="ml-3 mt-0.5 space-y-0.5 border-l border-zinc-100 dark:border-zinc-800 pl-2">
                   {sectionEntities.map((entity) => {
@@ -208,7 +213,7 @@ export function Sidebar() {
                     return (
                       <div
                         key={entity.id}
-                        onClick={() => router.push(entityUrl(entity))}
+                        onClick={() => navigate(entityUrl(entity))}
                         role="button"
                         className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-sm transition-colors group cursor-pointer ${isActive
                           ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
@@ -220,7 +225,7 @@ export function Sidebar() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-4 w-4 p-0 shrink-0 opacity-0 group-hover:opacity-100"
+                            className="h-4 w-4 p-0 shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100"
                             onClick={(e) => handleDeleteEntity(entity, sectionEntities, e)}
                           >
                             <Trash2 className="h-3 w-3" />
@@ -230,7 +235,6 @@ export function Sidebar() {
                     );
                   })}
 
-                  {/* Inline create */}
                   {isCreatingHere ? (
                     <div className="py-1 space-y-1.5">
                       <Input
@@ -321,6 +325,23 @@ export function Sidebar() {
         </button>
       )}
       <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Desktop sidebar */}
+      <aside className="hidden md:flex w-[240px] shrink-0 flex-col h-screen border-r bg-white dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800">
+        {content}
+      </aside>
+
+      {/* Mobile sidebar (Sheet/drawer) */}
+      <Sheet open={open} onOpenChange={(v) => !v && onClose?.()}>
+        <SheetContent side="left" className="w-[280px] p-0 flex flex-col">
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          {content}
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
