@@ -234,14 +234,14 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 mb-10">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
           {CREATE_CARD_META.map(({ type, title, description, Icon }) => {
             const isActive = activeCreateType === type;
 
             return (
               <div
                 key={type}
-                className="group text-left rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 min-h-[220px] flex flex-col justify-between shadow-sm hover:shadow-md hover:border-zinc-300 dark:hover:border-zinc-700 transition-all"
+                className="group text-left rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 md:p-6 min-h-[180px] md:min-h-[220px] flex flex-col justify-between shadow-sm hover:shadow-md hover:border-zinc-300 dark:hover:border-zinc-700 transition-all"
               >
                 <button
                   type="button"
@@ -311,21 +311,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-center py-12">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
           </div>
-        ) : entities.length === 0 ? (
-          <div className="text-center py-12">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 mb-4">
-              <Plus className="h-8 w-8 text-zinc-400" />
-            </div>
-            <h3 className="text-xl font-semibold mb-2">No entities yet</h3>
-            <p className="text-zinc-600 dark:text-zinc-400 mb-4">
-              Create your first entity to get started
-            </p>
-            <Button onClick={() => handleCreateCardClick('document')}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Entity
-            </Button>
-          </div>
-        ) : (
+        ) : entities.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {entities.map((entity) => {
               const meta = TYPE_META[entity.type] ?? TYPE_META.document;
@@ -371,7 +357,7 @@ export default function DashboardPage() {
                   <button
                     onClick={(e) => handleDeleteClick(e, entity.id)}
                     disabled={deletingEntityId === entity.id}
-                    className="absolute top-2 right-2 p-2 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 opacity-0 group-hover:opacity-100 hover:bg-red-50 dark:hover:bg-red-950 hover:border-red-300 dark:hover:border-red-800 hover:text-red-600 dark:hover:text-red-400 transition-all"
+                    className="absolute top-2 right-2 p-2 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:bg-red-50 dark:hover:bg-red-950 hover:border-red-300 dark:hover:border-red-800 hover:text-red-600 dark:hover:text-red-400 transition-all"
                     aria-label="Delete entity"
                   >
                     {deletingEntityId === entity.id ? (
@@ -384,7 +370,7 @@ export default function DashboardPage() {
               );
             })}
           </div>
-        )}
+        ) : null}
       </main>
 
       {showDeleteConfirm && (

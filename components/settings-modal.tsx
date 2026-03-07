@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useSession, signOut } from '@/lib/auth-client';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -114,9 +114,9 @@ function ProfileSection() {
         <p className="text-sm text-zinc-500">Manage your account details</p>
       </div>
 
-      <div className="flex gap-8 flex-1 min-h-0">
+      <div className="flex flex-col md:flex-row gap-6 md:gap-8 flex-1 min-h-0">
         {/* Left: identity */}
-        <div className="w-56 shrink-0 flex flex-col gap-4">
+        <div className="w-full md:w-56 shrink-0 flex flex-col gap-4">
           <div className="flex flex-col items-center text-center gap-3 p-5 rounded-xl border bg-zinc-50 dark:bg-zinc-800/40">
             <div className="h-20 w-20 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-2xl font-semibold shrink-0">
               {session?.user?.image ? (
@@ -237,9 +237,9 @@ function TeamSection() {
         <p className="text-sm text-zinc-500">{data?.team?.name}</p>
       </div>
 
-      <div className="flex gap-8 flex-1 min-h-0">
+      <div className="flex flex-col md:flex-row gap-6 md:gap-8 flex-1 min-h-0">
         {/* Left: owner + members */}
-        <div className="w-72 shrink-0 flex flex-col gap-4 overflow-y-auto pr-1">
+        <div className="w-full md:w-72 shrink-0 flex flex-col gap-4 overflow-y-auto pr-1">
           {/* Owner */}
           {data?.owner && (
             <div>
@@ -446,7 +446,7 @@ function WarehouseSection() {
             );
             if (assets.length === 0) {
               return (
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                   <div className="border rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-800/40 flex flex-col">
                     <div className="p-4 flex-1 flex flex-col gap-3">
                       <h3 className="text-sm font-semibold">Upload Asset</h3>
@@ -501,7 +501,7 @@ function WarehouseSection() {
               );
             }
             return (
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 {assets.map((asset) => (
                   <div key={asset.id} className="border rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-800/40 flex flex-col">
                     <div className="h-24 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center overflow-hidden">
@@ -697,7 +697,7 @@ function AgentSection() {
         {/* URL Analysis Section */}
         <div className="border rounded-xl p-4">
           <h3 className="text-sm font-semibold mb-3">Analyze Website Design</h3>
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2">
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
@@ -795,19 +795,20 @@ export function SettingsModal({ open, onOpenChange, defaultSection = 'profile' }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="!w-[min(90vw,1100px)] !max-w-[min(90vw,1100px)] p-0 gap-0 overflow-hidden h-[640px] flex flex-col">
-        <div className="flex flex-1 min-h-0">
-          {/* Sidebar */}
-          <div className="w-48 shrink-0 border-r bg-zinc-50 dark:bg-zinc-900 p-3 flex flex-col">
-            <div className="px-2 py-1.5 mb-2">
+      <DialogContent className="!fixed !inset-0 !top-0 !left-0 !translate-x-0 !translate-y-0 !w-full !max-w-full !h-dvh !rounded-none !border-0 p-0 gap-0 overflow-hidden flex flex-col md:!inset-auto md:!top-[50%] md:!left-[50%] md:!translate-x-[-50%] md:!translate-y-[-50%] md:!w-[min(90vw,1100px)] md:!max-w-[min(90vw,1100px)] md:!h-[min(640px,90dvh)] md:!rounded-lg md:!border">
+        <DialogTitle className="sr-only">Settings</DialogTitle>
+        <div className="flex flex-col md:flex-row flex-1 min-h-0">
+          {/* Nav — horizontal on mobile, vertical on desktop */}
+          <div className="md:w-48 shrink-0 border-b md:border-b-0 md:border-r bg-zinc-50 dark:bg-zinc-900 md:p-3 flex flex-row md:flex-col overflow-x-auto">
+            <div className="hidden md:block px-2 py-1.5 mb-2">
               <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Settings</p>
             </div>
-            <nav className="flex flex-col gap-0.5 flex-1">
+            <nav className="flex flex-row md:flex-col gap-0.5 flex-1 p-2 md:p-0">
               {NAV_ITEMS.map((item) => (
                 <button
                   key={item.id}
                   onClick={() => setSection(item.id)}
-                  className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm font-medium transition-colors text-left w-full ${section === item.id
+                  className={`flex items-center gap-2 px-3 py-2 md:px-2.5 rounded-lg text-sm font-medium transition-colors text-left whitespace-nowrap ${section === item.id
                     ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100'
                     : 'text-zinc-600 dark:text-zinc-400 hover:bg-white/60 dark:hover:bg-zinc-800/60'
                     }`}
@@ -820,7 +821,7 @@ export function SettingsModal({ open, onOpenChange, defaultSection = 'profile' }
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto p-4 md:p-6">
             {section === 'profile' && <ProfileSection />}
             {section === 'team' && <TeamSection />}
             {section === 'billing' && <BillingSection />}
