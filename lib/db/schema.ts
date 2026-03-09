@@ -238,6 +238,37 @@ export const videoChatMessages = pgTable("video_chat_messages", {
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
+// Subscriptions table
+export const subscriptions = pgTable("subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" })
+    .unique(),
+  stripeCustomerId: text("stripe_customer_id").unique(),
+  stripeSubscriptionId: text("stripe_subscription_id").unique(),
+  stripePriceId: text("stripe_price_id"),
+  plan: text("plan").notNull().default("free"), // 'free' | 'pro'
+  status: text("status").notNull().default("active"), // 'active' | 'canceled' | 'past_due' | 'trialing'
+  currentPeriodEnd: timestamp("current_period_end"),
+  cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Credits table
+export const credits = pgTable("credits", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" })
+    .unique(),
+  balance: integer("balance").notNull().default(0),
+  lastResetAt: timestamp("last_reset_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // Chat messages table
 export const documentChatMessages = pgTable("document_chat_messages", {
   id: uuid("id").primaryKey().defaultRandom(),
