@@ -347,17 +347,220 @@ function TeamSection() {
 
 // ─── Billing Section ──────────────────────────────────────────────────────────
 
+interface BillingData {
+  plan: 'free' | 'pro';
+  planName: string;
+  status: string;
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  credits: {
+    balance: number;
+    monthlyAllocation: number;
+  };
+}
+
 function BillingSection() {
+  const [data, setData] = useState<BillingData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadBilling = async () => {
+    try {
+      const res = await fetch('/api/billing/subscription');
+      if (res.ok) setData(await res.json());
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadBilling(); }, []);
+
+  const handleCheckout = async (type: 'subscription' | 'credits') => {
+    setError('');
+    setCheckoutLoading(type);
+    try {
+      const res = await fetch('/api/billing/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to start checkout');
+      window.location.href = json.url;
+    } catch (err: any) {
+      setError(err.message);
+      setCheckoutLoading(null);
+    }
+  };
+
+  const handlePortal = async () => {
+    setError('');
+    setPortalLoading(true);
+    try {
+      const res = await fetch('/api/billing/portal', { method: 'POST' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to open portal');
+      window.location.href = json.url;
+    } catch (err: any) {
+      setError(err.message);
+      setPortalLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold">Billing</h2>
+          <p className="text-sm text-zinc-500">Manage your subscription and payments</p>
+        </div>
+        <div className="flex items-center gap-2 text-zinc-500 py-8">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading billing info...
+        </div>
+      </div>
+    );
+  }
+
+  const isPro = data?.plan === 'pro';
+  const creditPct = data ? Math.min(100, (data.credits.balance / data.credits.monthlyAllocation) * 100) : 0;
+
   return (
-    <div className="space-y-4">
-      <div>
+    <div className="h-full flex flex-col gap-0">
+      <div className="mb-5">
         <h2 className="text-lg font-semibold">Billing</h2>
         <p className="text-sm text-zinc-500">Manage your subscription and payments</p>
       </div>
-      <div className="flex flex-col items-center justify-center py-16 text-center">
-        <CreditCard className="h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-4" />
-        <p className="text-lg font-medium text-zinc-600 dark:text-zinc-400">Coming Soon</p>
-        <p className="text-sm text-zinc-400 mt-1">Billing management will be available here soon.</p>
+
+      <div className="flex flex-col gap-4 flex-1 overflow-y-auto pr-1">
+        {/* Current Plan */}
+        <div className={`rounded-xl border p-5 ${isPro ? 'border-violet-300 bg-violet-50/60 dark:border-violet-700 dark:bg-violet-950/30' : 'bg-zinc-50 dark:bg-zinc-800/40'}`}>
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isPro ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300' : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400'}`}>
+                  {isPro ? 'PRO' : 'FREE'}
+                </span>
+                {isPro && data?.cancelAtPeriodEnd && (
+                  <span className="text-xs text-amber-600 dark:text-amber-400">Cancels at period end</span>
+                )}
+                {isPro && data?.status === 'past_due' && (
+                  <span className="text-xs text-red-500">Payment past due</span>
+                )}
+              </div>
+              <p className="text-sm font-semibold">{data?.planName ?? 'Free'} Plan</p>
+              {isPro && data?.currentPeriodEnd && (
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  {data.cancelAtPeriodEnd ? 'Access until' : 'Renews'}{' '}
+                  {new Date(data.currentPeriodEnd).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </p>
+              )}
+              {!isPro && (
+                <p className="text-xs text-zinc-500 mt-0.5">{data?.credits.monthlyAllocation ?? 50} credits / month</p>
+              )}
+            </div>
+            <div className="flex gap-2">
+              {isPro ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePortal}
+                  disabled={portalLoading}
+                  className="gap-2 text-xs"
+                >
+                  {portalLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <CreditCard className="h-3 w-3" />}
+                  Manage Subscription
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => handleCheckout('subscription')}
+                  disabled={checkoutLoading === 'subscription'}
+                  className="gap-2 text-xs bg-violet-600 hover:bg-violet-700 text-white"
+                >
+                  {checkoutLoading === 'subscription' ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                  Upgrade to Pro
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Pro Plan Features (shown when on free) */}
+        {!isPro && (
+          <div className="rounded-xl border border-violet-200 dark:border-violet-800 p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-sm font-semibold">Pro Plan</span>
+              <span className="text-xs font-semibold text-violet-600 dark:text-violet-400 px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/40">Most Popular</span>
+            </div>
+            <ul className="space-y-2 mb-4">
+              {[
+                '500 credits per month',
+                'Priority AI processing',
+                'Advanced design features',
+                'Team collaboration',
+              ].map((feat) => (
+                <li key={feat} className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                  <Check className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+                  {feat}
+                </li>
+              ))}
+            </ul>
+            <Button
+              onClick={() => handleCheckout('subscription')}
+              disabled={checkoutLoading === 'subscription'}
+              className="gap-2 w-full bg-violet-600 hover:bg-violet-700 text-white"
+              size="sm"
+            >
+              {checkoutLoading === 'subscription' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Upgrade to Pro
+            </Button>
+          </div>
+        )}
+
+        {/* Credits */}
+        <div className="rounded-xl border p-5 bg-zinc-50 dark:bg-zinc-800/40">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-sm font-semibold">Credits</p>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                {data?.credits.balance ?? 0} of {data?.credits.monthlyAllocation ?? 50} remaining this month
+              </p>
+            </div>
+            <span className="text-2xl font-bold tabular-nums">{data?.credits.balance ?? 0}</span>
+          </div>
+          {/* Progress bar */}
+          <div className="h-2 rounded-full bg-zinc-200 dark:bg-zinc-700 overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all bg-violet-500"
+              style={{ width: `${creditPct}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Add-on Credits */}
+        <div className="rounded-xl border p-5">
+          <p className="text-sm font-semibold mb-1">Need more credits?</p>
+          <p className="text-xs text-zinc-500 mb-3">Purchase a one-time credit pack to top up your balance.</p>
+          <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/40 border mb-3">
+            <div>
+              <p className="text-sm font-medium">100 Credit Pack</p>
+              <p className="text-xs text-zinc-500">One-time purchase, never expires</p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handleCheckout('credits')}
+              disabled={checkoutLoading === 'credits'}
+              className="gap-2 text-xs shrink-0"
+            >
+              {checkoutLoading === 'credits' ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              Buy Credits
+            </Button>
+          </div>
+        </div>
+
+        {error && <p className="text-sm text-red-500">{error}</p>}
       </div>
     </div>
   );
