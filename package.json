@@ -60,6 +60,7 @@
     "remotion": "^4.0.434",
     "resend": "^6.9.2",
     "sharp": "^0.34.5",
+    "stripe": "^20.4.1",
     "tailwind-merge": "^3.4.0",
     "zod": "^4.1.12"
   },

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { saveAssetMessage, upsertAsset, getAssetById } from '@/lib/db/entities-service';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
+import { getUserCredits, deductCredit } from '@/lib/billing';
 
 export const maxDuration = 60;
 const DEFAULT_SVG_MODEL = 'google/gemini-2.5-pro';
@@ -17,6 +18,12 @@ export async function POST(req: Request) {
 
     const session = await auth.api.getSession({ headers: await headers() });
     if (!session) return new Response('Unauthorized', { status: 401 });
+
+    // Credit check — reject before touching the LLM
+    const creditBalance = await getUserCredits(session.user.id);
+    if (creditBalance <= 0) {
+      return new Response('Insufficient credits', { status: 402 });
+    }
 
     const { messages }: { messages: UIMessage[] } = await req.json();
 
@@ -113,7 +120,10 @@ CRITICAL: Always end with a text explanation of what you created/changed.`,
           },
         }),
       },
-      onStepFinish: async ({ text, toolCalls, toolResults }) => {
+      onStepFinish: async ({ text, toolCalls, toolResults, finishReason }) => {
+        if (finishReason === 'stop' || finishReason === 'length') {
+          await deductCredit(session.user.id).catch(() => {});
+        }
         try {
           const parts: any[] = [];
           if (toolCalls && toolResults) {
