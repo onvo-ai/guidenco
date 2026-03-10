@@ -8,6 +8,7 @@ import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { brandAssets, teams, teamMembers, agentSettings } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
+import { getUserCredits, deductCredit } from '@/lib/billing';
 import { getFileBuffer } from '@/lib/storage';
 import { users } from '@/lib/db/schema';
 
@@ -122,6 +123,12 @@ export async function POST(req: Request) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) {
     return new Response('Unauthorized', { status: 401 });
+  }
+
+  // Credit check — reject before touching the LLM
+  const creditBalance = await getUserCredits(session.user.id);
+  if (creditBalance <= 0) {
+    return new Response('Insufficient credits', { status: 402 });
   }
 
   const { designGuidelines } = await getUserTeamAndAgentSettings(session.user.id);
@@ -864,6 +871,10 @@ Always use the tools to create the document. The user will see the visual output
       }),
     },
     onStepFinish: async ({ text, toolCalls, toolResults, finishReason, usage }) => {
+      // Deduct 1 credit on the final step
+      if (finishReason === 'stop' || finishReason === 'length') {
+        await deductCredit(session.user.id).catch(() => {});
+      }
       // Save each step as a separate message for better timeline
       try {
         const parts: any[] = [];

@@ -140,9 +140,13 @@ export async function POST(req: Request) {
     if (!file) return Response.json({ error: 'No file provided' }, { status: 400 });
     if (!title) return Response.json({ error: 'Title required' }, { status: 400 });
 
-    const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/pdf'];
+    const allowed = [
+      'image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/pdf',
+      'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime',
+      'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/aac', 'audio/webm',
+    ];
     if (!allowed.includes(file.type)) {
-      return Response.json({ error: 'Only PNG, JPEG, WebP and PDF files are allowed' }, { status: 400 });
+      return Response.json({ error: 'Only images, PDF, video, and audio files are allowed' }, { status: 400 });
     }
 
     await ensureBucket();
