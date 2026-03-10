@@ -45,14 +45,26 @@ services:
   stripe:
     image: stripe/stripe-cli:latest
     container_name: guidenco-stripe
-    # stripe-cli reads STRIPE_API_KEY — loaded from .env.local via entrypoint wrapper
-    entrypoint: sh -c 'STRIPE_API_KEY="$$STRIPE_SECRET_KEY" stripe listen --device-name guidenco-dev --forward-to http://host.docker.internal:3000/api/webhooks/stripe'
+    # Pass STRIPE_SECRET_KEY via --api-key flag so the CLI never prompts for login.
+    # If STRIPE_SECRET_KEY is blank in .env.local the container exits cleanly with
+    # a helpful message rather than blocking on the interactive pairing flow.
+    entrypoint: >
+      sh -c '
+        if [ -z "$$STRIPE_SECRET_KEY" ]; then
+          echo "INFO: STRIPE_SECRET_KEY is not set in .env.local — Stripe webhook forwarding is disabled.";
+          echo "      Add your Stripe secret key to .env.local and restart to enable it.";
+          exit 0;
+        fi;
+        exec stripe listen
+          --api-key "$$STRIPE_SECRET_KEY"
+          --forward-to http://host.docker.internal:3000/api/billing/webhook
+      '
     env_file:
       - .env.local
     depends_on:
       postgres:
         condition: service_healthy
-    restart: unless-stopped
+    restart: on-failure
     networks:
       - guidenco-network
 
