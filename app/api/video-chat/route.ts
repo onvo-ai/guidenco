@@ -5,6 +5,7 @@ import { getVideoMessages, saveVideoMessage, upsertVideo, getVideoById } from '@
 import { resizeImage } from '@/lib/image-processing';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
+import { getUserCredits, deductCredit } from '@/lib/billing';
 
 export const maxDuration = 60;
 
@@ -47,6 +48,12 @@ export async function POST(req: Request) {
 
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return new Response('Unauthorized', { status: 401 });
+
+  // Credit check — reject before touching the LLM
+  const creditBalance = await getUserCredits(session.user.id);
+  if (creditBalance <= 0) {
+    return new Response('Insufficient credits', { status: 402 });
+  }
 
   const { messages }: { messages: UIMessage[] } = await req.json();
 
@@ -247,7 +254,10 @@ export async function POST(req: Request) {
         },
       }),
     },
-    onStepFinish: async ({ text, toolCalls, toolResults }) => {
+    onStepFinish: async ({ text, toolCalls, toolResults, finishReason }) => {
+      if (finishReason === 'stop' || finishReason === 'length') {
+        await deductCredit(session.user.id).catch(() => {});
+      }
       try {
         const parts: any[] = [];
         if (toolCalls && toolResults) {

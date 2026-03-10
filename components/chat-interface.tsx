@@ -5,7 +5,7 @@ import { DefaultChatTransport } from 'ai';
 import { useEffect, useRef, useState, useMemo, Fragment } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Loader2, Image as ImageIcon, X, AtSign, FileText } from 'lucide-react';
+import { Send, Loader2, Image as ImageIcon, X, AtSign, FileText, Film, Music, Paperclip } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { SelectedElement } from '@/components/element-selector-overlay';
@@ -506,12 +506,15 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
 
   // ── Input / keyboard handlers ──
 
+  const isAttachableFile = (file: File) =>
+    file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/');
+
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!enableImageUploads) return;
     const files = e.target.files;
     if (!files) return;
     Array.from(files).forEach((file) => {
-      if (file.type.startsWith('image/')) {
+      if (isAttachableFile(file)) {
         const url = URL.createObjectURL(file);
         setAttachedImages((prev) => [...prev, { url, file }]);
       }
@@ -778,16 +781,13 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
       }
     }
 
-    // ── 2. Process manually attached images ──
+    // ── 2. Process manually attached files ──
     const attachedImageParts: any[] = [];
     for (const img of attachedImages) {
-      const reader = new FileReader();
-      const base64 = await new Promise<string>((resolve) => {
-        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-        reader.readAsDataURL(img.file);
-      });
-      const mimeType = img.file.type || 'image/png';
+      const mimeType = img.file.type;
+      const isImage = mimeType.startsWith('image/');
 
+      // Upload to asset store for all file types
       let fileUrl: string | null = null;
       try {
         const fd = new FormData();
@@ -800,13 +800,26 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
         // ignore
       }
 
-      attachedImageParts.push({
-        type: 'image',
-        image: base64,
-        mimeType,
-        title: img.file.name,
-        ...(fileUrl ? { fileUrl } : {}),
-      });
+      if (isImage) {
+        const reader = new FileReader();
+        const base64 = await new Promise<string>((resolve) => {
+          reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+          reader.readAsDataURL(img.file);
+        });
+        attachedImageParts.push({
+          type: 'image',
+          image: base64,
+          mimeType,
+          title: img.file.name,
+          ...(fileUrl ? { fileUrl } : {}),
+        });
+      } else {
+        // Video/audio: pass as text context with URL
+        attachedImageParts.push({
+          type: 'text',
+          text: `[Attached file: ${img.file.name}]\nType: ${mimeType}${fileUrl ? `\nURL: ${fileUrl}` : ''}`,
+        });
+      }
     }
 
     // ── 3. Main text ──
@@ -836,7 +849,12 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
       console.error('Error sending message:', error);
       const message = error instanceof Error ? error.message : 'Request failed.';
       if (message !== 'Request aborted') {
-        appendAssistantError(`Request failed: ${message}`);
+        const isOutOfCredits = message.toLowerCase().includes('insufficient credits') || message.includes('402');
+        appendAssistantError(
+          isOutOfCredits
+            ? "You've run out of credits. Please purchase more from **Settings → Billing**."
+            : `Request failed: ${message}`
+        );
         setHasStalled(true);
       }
     } finally {
@@ -872,7 +890,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
       Array.from(files).forEach((file) => {
-        if (file.type.startsWith('image/')) {
+        if (isAttachableFile(file)) {
           const url = URL.createObjectURL(file);
           setAttachedImages((prev) => [...prev, { url, file }]);
         }
@@ -900,7 +918,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
         <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center backdrop-blur-[2px] pointer-events-none">
           <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl shadow-xl flex flex-col items-center gap-2">
             <ImageIcon className="h-8 w-8 text-blue-500 animate-bounce" />
-            <p className="text-sm font-medium">Drop images to upload</p>
+            <p className="text-sm font-medium">Drop files to upload</p>
           </div>
         </div>
       )}
@@ -1338,13 +1356,21 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                 <div className="mb-2 flex items-center justify-between">
                   <div>
                     <div className="text-sm font-medium text-zinc-800 dark:text-zinc-100">Attachments</div>
-                    <div className="text-xs text-zinc-500 dark:text-zinc-400">{attachedImages.length} image{attachedImages.length !== 1 ? 's' : ''} ready to send</div>
+                    <div className="text-xs text-zinc-500 dark:text-zinc-400">{attachedImages.length} file{attachedImages.length !== 1 ? 's' : ''} ready to send</div>
                   </div>
                 </div>
                 <div className="flex gap-3 flex-wrap">
                   {attachedImages.map((img, idx) => (
                     <div key={idx} className="relative group w-[120px] overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 shadow-sm">
-                      <img src={img.url} alt="Attached" className="h-24 w-full object-cover" />
+                      {img.file.type.startsWith('image/') ? (
+                        <img src={img.url} alt="Attached" className="h-24 w-full object-cover" />
+                      ) : img.file.type.startsWith('video/') ? (
+                        <video src={img.url} className="h-24 w-full object-cover" muted preload="metadata" />
+                      ) : (
+                        <div className="h-24 w-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-800">
+                          <Music className="h-8 w-8 text-zinc-400" />
+                        </div>
+                      )}
                       <div className="p-2">
                         <div className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-100">{img.file.name}</div>
                         <div className="text-[11px] text-zinc-500 dark:text-zinc-400">{formatBytes(img.file.size)}</div>
@@ -1367,7 +1393,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime,audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/aac,audio/webm"
                 multiple
                 onChange={handleImageSelect}
                 className="hidden"
@@ -1381,9 +1407,9 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isLoading}
                   className="h-11 w-11 shrink-0"
-                  title="Attach image"
+                  title="Attach image, video, or audio"
                 >
-                  <ImageIcon className="h-5 w-5" />
+                  <Paperclip className="h-5 w-5" />
                 </Button>
               )}
 

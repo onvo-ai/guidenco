@@ -24,6 +24,8 @@ import {
   X,
   FileImage,
   FileText,
+  Film,
+  Music,
   Bot,
 } from 'lucide-react';
 
@@ -632,6 +634,8 @@ function WarehouseSection() {
   };
 
   const isImage = (mimeType: string) => mimeType.startsWith('image/');
+  const isVideo = (mimeType: string) => mimeType.startsWith('video/');
+  const isAudio = (mimeType: string) => mimeType.startsWith('audio/');
 
   return (
     <div className="h-full flex flex-col gap-0">
@@ -664,13 +668,13 @@ function WarehouseSection() {
                           ) : (
                             <>
                               <p className="text-xs text-zinc-500">Click to select a file</p>
-                              <p className="text-[10px] text-zinc-400 mt-0.5">PNG, JPEG, WebP, PDF</p>
+                              <p className="text-[10px] text-zinc-400 mt-0.5">Images, PDF, Video, Audio</p>
                             </>
                           )}
                           <input
                             ref={fileInputRef}
                             type="file"
-                            accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf"
+                            accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf,video/mp4,video/webm,video/ogg,video/quicktime,audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/aac,audio/webm"
                             onChange={handleFileSelect}
                             className="hidden"
                           />
@@ -710,6 +714,10 @@ function WarehouseSection() {
                     <div className="h-24 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center overflow-hidden">
                       {isImage(asset.mimeType) ? (
                         <img src={`/api/assets/image?id=${asset.id}`} alt={asset.title} className="h-full w-full object-cover" />
+                      ) : isVideo(asset.mimeType) ? (
+                        <video src={asset.fileUrl} className="h-full w-full object-cover" muted preload="metadata" />
+                      ) : isAudio(asset.mimeType) ? (
+                        <Music className="h-9 w-9 text-zinc-400" />
                       ) : (
                         <FileText className="h-9 w-9 text-zinc-400" />
                       )}

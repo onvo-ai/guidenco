@@ -268,6 +268,7 @@ export default function DashboardPage() {
                       ref={createInputRef}
                       placeholder={`My ${type}...`}
                       value={newEntityName}
+                      onChange={(e) => setNewEntityName(e.target.value)}
                       onClick={(e) => e.stopPropagation()}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
@@ -281,12 +282,12 @@ export default function DashboardPage() {
                         }
                       }}
                     />
-                    <div className="flex items-center justify-end gap-2">
-                      <Button variant="outline" onClick={handleCreateCancel} disabled={isCreatingEntity}>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" className="flex-1" onClick={handleCreateCancel} disabled={isCreatingEntity}>
                         <X className="h-4 w-4 mr-2" />
                         Cancel
                       </Button>
-                      <Button onClick={() => void handleCreateEntity(type)} disabled={!newEntityName.trim() || isCreatingEntity}>
+                      <Button className="flex-1" onClick={() => void handleCreateEntity(type)} disabled={!newEntityName.trim() || isCreatingEntity}>
                         {isCreatingEntity ? (
                           <>
                             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
