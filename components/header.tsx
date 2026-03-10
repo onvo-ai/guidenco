@@ -1,19 +1,26 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
-import { Button } from '@/components/ui/button';
+import { useRouter, usePathname, useParams } from 'next/navigation';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
-import { ChevronDown, Plus, Trash2, Loader2 } from 'lucide-react';
+  ChevronDown,
+  LayoutTemplate,
+  Shapes,
+  Film,
+  Home,
+  Plus,
+} from 'lucide-react';
+import { useSession } from '@/lib/auth-client';
 import { EntitySummary } from '@/lib/types';
-import { UserMenu } from '@/components/user-menu';
+import { SettingsModal } from '@/components/settings-modal';
+
+type EntityType = 'document' | 'asset' | 'video';
+
+const TYPE_META: Record<EntityType, { label: string; Icon: React.ElementType }> = {
+  document: { label: 'Document', Icon: LayoutTemplate },
+  asset: { label: 'Asset', Icon: Shapes },
+  video: { label: 'Video', Icon: Film },
+};
 
 function entityUrl(entity: EntitySummary) {
   if (entity.type === 'asset') return `/app/assets/${entity.id}`;
@@ -21,237 +28,293 @@ function entityUrl(entity: EntitySummary) {
   return `/app/documents/${entity.id}`;
 }
 
-interface HeaderProps {
-  currentEntity?: EntitySummary | null;
-  onEntityChange?: (entity: EntitySummary) => void;
-  showProjectSelector?: boolean;
+function activeEntityIdFromPath(
+  pathname: string | null,
+  params: Record<string, string | string[]>
+) {
+  if (
+    pathname?.includes('/assets/') ||
+    pathname?.includes('/videos/') ||
+    pathname?.includes('/documents/')
+  ) {
+    return params?.id as string | undefined;
+  }
+  return undefined;
 }
 
-export function Header({ currentEntity, onEntityChange, showProjectSelector = true }: HeaderProps) {
-  const router = useRouter();
-  const [entities, setEntities] = useState<EntitySummary[]>([]);
-  const [isCreating, setIsCreating] = useState(false);
-  const [newEntityName, setNewEntityName] = useState('');
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [isCreatingEntity, setIsCreatingEntity] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+// ─── Credits Ring ─────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    if (showProjectSelector) {
-      loadEntities();
-    }
-  }, [showProjectSelector]);
-
-  // Focus input when isCreating becomes true
-  useEffect(() => {
-    if (isCreating && inputRef.current) {
-      // Use setTimeout to ensure the input is rendered
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 0);
-    }
-  }, [isCreating]);
-
-  const loadEntities = async () => {
-    try {
-      const response = await fetch('/api/entities');
-      if (response.ok) {
-        const data = await response.json();
-        setEntities(data);
-      }
-    } catch (error) {
-      console.error('Error loading entities:', error);
-    }
-  };
-
-  const handleCreateEntity = async () => {
-    if (newEntityName.trim() && !isCreatingEntity) {
-      setIsCreatingEntity(true);
-      try {
-        const response = await fetch('/api/entities', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: newEntityName.trim(), type: 'document' }),
-        });
-        if (response.ok) {
-          const entity = await response.json();
-          await loadEntities();
-          if (onEntityChange) {
-            onEntityChange(entity);
-          } else {
-            router.push(entityUrl(entity));
-          }
-          setNewEntityName('');
-          setIsCreating(false);
-          setDropdownOpen(false);
-        }
-      } catch (error) {
-        console.error('Error creating entity:', error);
-        setIsCreatingEntity(false);
-      }
-    }
-  };
-
-  const handleSelectEntity = (entity: EntitySummary) => {
-    if (onEntityChange) {
-      onEntityChange(entity);
-    } else {
-      router.push(entityUrl(entity));
-    }
-    setDropdownOpen(false);
-  };
-
-  const handleDeleteEntity = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (entities.length > 1) {
-      try {
-        const response = await fetch(`/api/entities/${id}`, { method: 'DELETE' });
-        if (response.ok) {
-          await loadEntities();
-
-          if (currentEntity?.id === id) {
-            const updatedEntities = entities.filter(e => e.id !== id);
-            if (updatedEntities.length > 0 && onEntityChange) {
-              onEntityChange(updatedEntities[0]);
-            } else {
-              router.push('/app');
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error deleting entity:', error);
-      }
-    }
-  };
+function CreditsRing({ balance, total }: { balance: number; total: number }) {
+  const used = total - balance;
+  const pct = total > 0 ? Math.min(1, used / total) : 0;
+  const r = 9;
+  const circumference = 2 * Math.PI * r;
+  const strokeDashoffset = circumference * (1 - pct);
+  const isLow = pct > 0.8;
 
   return (
-    <header className="border-b bg-white dark:bg-zinc-950">
-      <div className="flex h-14 items-center px-4 gap-4">
-        <h1
-          className="text-lg font-semibold cursor-pointer hover:text-blue-600 transition-colors"
+    <div className="relative flex items-center justify-center" style={{ width: 28, height: 28 }}>
+      <svg width="28" height="28" viewBox="0 0 24 24" className="-rotate-90">
+        <circle
+          cx="12"
+          cy="12"
+          r={r}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+          className="text-zinc-200 dark:text-zinc-700"
+        />
+        <circle
+          cx="12"
+          cy="12"
+          r={r}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+          className={isLow ? 'text-orange-500' : 'text-blue-500'}
+          style={{ transition: 'stroke-dashoffset 0.4s ease' }}
+        />
+      </svg>
+    </div>
+  );
+}
+
+// ─── Credits Badge ─────────────────────────────────────────────────────────────
+
+function CreditsBadge() {
+  const [creditsData, setCreditsData] = useState<{ balance: number; monthlyAllocation: number } | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/billing/subscription')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.credits) setCreditsData(d.credits); })
+      .catch(() => {});
+  }, []);
+
+  if (!creditsData) return null;
+
+  return (
+    <>
+      <button
+        onClick={() => setSettingsOpen(true)}
+        title={`${creditsData.balance} of ${creditsData.monthlyAllocation} credits remaining`}
+        className="flex items-center gap-1.5 rounded-full px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+      >
+        <CreditsRing balance={creditsData.balance} total={creditsData.monthlyAllocation} />
+        <span className="hidden sm:block text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
+          {creditsData.balance} credits
+        </span>
+      </button>
+      <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} defaultSection="billing" />
+    </>
+  );
+}
+
+// ─── Project Dropdown ─────────────────────────────────────────────────────────
+
+function ProjectDropdown({
+  entities,
+  currentEntityId,
+}: {
+  entities: EntitySummary[];
+  currentEntityId?: string;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const current = entities.find((e) => e.id === currentEntityId);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const navigate = (url: string) => {
+    router.push(url);
+    setOpen(false);
+  };
+
+  const grouped = (Object.entries(TYPE_META) as [EntityType, { label: string; Icon: React.ElementType }][])
+    .map(([type, meta]) => ({
+      type,
+      ...meta,
+      items: entities.filter((e) => e.type === type),
+    }))
+    .filter((g) => g.items.length > 0);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 h-8 px-2.5 rounded-md text-sm font-medium border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 transition-colors max-w-[180px]"
+      >
+        {current ? (
+          <>
+            {(() => {
+              const meta = TYPE_META[current.type as EntityType];
+              return meta ? <meta.Icon className="h-3.5 w-3.5 shrink-0 text-zinc-400" /> : null;
+            })()}
+            <span className="truncate">{current.name}</span>
+          </>
+        ) : (
+          <>
+            <Home className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+            <span>Home</span>
+          </>
+        )}
+        <ChevronDown className="h-3 w-3 shrink-0 text-zinc-400 ml-auto" />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full mt-1.5 w-56 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg z-50 overflow-hidden py-1">
+          <button
+            onClick={() => navigate('/app')}
+            className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
+              !currentEntityId
+                ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
+                : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'
+            }`}
+          >
+            <Home className="h-3.5 w-3.5 shrink-0" />
+            Home
+          </button>
+
+          {grouped.length > 0 && (
+            <div className="border-t border-zinc-100 dark:border-zinc-800 mt-1 pt-1" />
+          )}
+
+          {grouped.map(({ type, label, Icon, items }) => (
+            <div key={type}>
+              <div className="px-3 pt-1 pb-0.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Icon className="h-3 w-3" />
+                {label}s
+              </div>
+              {items.map((entity) => (
+                <button
+                  key={entity.id}
+                  onClick={() => navigate(entityUrl(entity))}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-colors ${
+                    entity.id === currentEntityId
+                      ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
+                      : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'
+                  }`}
+                >
+                  <span className="truncate">{entity.name}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+
+          <div className="border-t border-zinc-100 dark:border-zinc-800 mt-1">
+            <button
+              onClick={() => navigate('/app')}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5 shrink-0" />
+              New project
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── User Button ──────────────────────────────────────────────────────────────
+
+function UserButton() {
+  const { data: session } = useSession();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  if (!session?.user) return null;
+
+  const initials =
+    session.user.name
+      ?.split(' ')
+      .map((n: string) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2) || 'U';
+
+  return (
+    <>
+      <button
+        onClick={() => setSettingsOpen(true)}
+        className="flex items-center gap-2 rounded-full pl-1.5 pr-2.5 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+      >
+        <div className="h-7 w-7 shrink-0 rounded-full overflow-hidden flex items-center justify-center bg-primary text-primary-foreground text-xs font-medium">
+          {session.user.image ? (
+            <img
+              src={session.user.image}
+              alt={session.user.name || 'User'}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <span>{initials}</span>
+          )}
+        </div>
+        <div className="hidden sm:flex flex-col items-start min-w-0">
+          <span className="text-xs font-medium text-zinc-900 dark:text-zinc-100 truncate max-w-[120px] leading-tight">
+            {session.user.name}
+          </span>
+          <span className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate max-w-[120px] leading-tight">
+            {session.user.email}
+          </span>
+        </div>
+      </button>
+      <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
+    </>
+  );
+}
+
+// ─── Header ───────────────────────────────────────────────────────────────────
+
+export function Header() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useParams();
+  const [entities, setEntities] = useState<EntitySummary[]>([]);
+
+  const currentEntityId = activeEntityIdFromPath(
+    pathname,
+    params as Record<string, string | string[]>
+  );
+
+  useEffect(() => {
+    fetch('/api/entities')
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setEntities)
+      .catch(() => {});
+  }, [pathname]);
+
+  return (
+    <header className="h-14 shrink-0 flex items-center gap-3 px-4 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950">
+      {/* Left: logo + project selector */}
+      <div className="flex items-center gap-2.5 flex-1 min-w-0">
+        <button
           onClick={() => router.push('/app')}
+          className="text-base font-bold text-zinc-900 dark:text-zinc-100 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
         >
           Guidenco
-        </h1>
+        </button>
+        <span className="text-zinc-300 dark:text-zinc-700 font-light select-none">/</span>
+        <ProjectDropdown entities={entities} currentEntityId={currentEntityId} />
+      </div>
 
-        {showProjectSelector && (
-          <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="gap-2">
-                {currentEntity?.name || 'Select Entity'}
-                <ChevronDown className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-80 p-0 overflow-hidden shadow-xl border-zinc-200 dark:border-zinc-800">
-              <div className="max-h-[70vh] flex flex-col">
-                <div className="p-1 overflow-y-auto">
-                  {entities.length > 0 ? (
-                    entities.map((entity) => (
-                      <DropdownMenuItem
-                        key={entity.id}
-                        onClick={() => handleSelectEntity(entity)}
-                        className="flex items-center justify-between group"
-                      >
-                        <span className="flex-1 truncate mr-2">{entity.name}</span>
-                        {entities.length > 1 && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 w-6 p-0 shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100"
-                            onClick={(e) => handleDeleteEntity(entity.id, e)}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        )}
-                      </DropdownMenuItem>
-                    ))
-                  ) : (
-                    <div className="px-3 py-2 text-sm text-zinc-500 italic text-center">
-                      No entities found
-                    </div>
-                  )}
-                </div>
-
-                <DropdownMenuSeparator className="m-0" />
-
-                {isCreating ? (
-                  <div className="p-4 space-y-4 bg-zinc-50 dark:bg-zinc-900 border-t border-zinc-100 dark:border-zinc-800">
-                    <div className="space-y-2">
-                      <Input
-                        ref={inputRef}
-                        placeholder="Entity name"
-                        value={newEntityName}
-                        onChange={(e) => setNewEntityName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            handleCreateEntity();
-                          } else if (e.key === 'Escape') {
-                            setIsCreating(false);
-                            setNewEntityName('');
-                          }
-                          e.stopPropagation();
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        className="w-full bg-white dark:bg-zinc-950"
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        className="flex-1 h-9"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleCreateEntity();
-                        }}
-                        disabled={isCreatingEntity || !newEntityName.trim()}
-                      >
-                        {isCreatingEntity ? (
-                          <>
-                            <Loader2 className="h-3 w-3 mr-2 animate-spin" />
-                            Creating...
-                          </>
-                        ) : (
-                          'Create'
-                        )}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="flex-1 h-9"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setIsCreating(false);
-                          setNewEntityName('');
-                        }}
-                        disabled={isCreatingEntity}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-1">
-                    <DropdownMenuItem
-                      onClick={(e) => {
-                        e.preventDefault();
-                        setIsCreating(true);
-                      }}
-                      onSelect={(e) => e.preventDefault()}
-                      className="text-blue-600 dark:text-blue-400 focus:text-blue-600 dark:focus:text-blue-400"
-                    >
-                      <Plus className="h-4 w-4 mr-2" />
-                      New Entity
-                    </DropdownMenuItem>
-                  </div>
-                )}
-              </div>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-
-        <div className="ml-auto">
-          <UserMenu />
-        </div>
+      {/* Right: credits + user */}
+      <div className="flex items-center gap-1 shrink-0">
+        <CreditsBadge />
+        <div className="w-px h-5 bg-zinc-200 dark:bg-zinc-700 mx-1" />
+        <UserButton />
       </div>
     </header>
   );

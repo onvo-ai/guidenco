@@ -1,5 +1,6 @@
 'use client';
 
+import type { ComponentProps } from 'react';
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
@@ -11,6 +12,23 @@ import { Settings2, Loader2, Eye, MessageSquare } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ChatInterface } from '@/components/chat-interface';
 import { useIsMobile } from '@/hooks/use-is-mobile';
+
+function configureMonacoForVideoEditor(monaco: Parameters<NonNullable<ComponentProps<typeof Editor>['beforeMount']>>[0]) {
+    monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+        allowNonTsExtensions: true,
+        jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+        module: monaco.languages.typescript.ModuleKind.ESNext,
+        moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+        target: monaco.languages.typescript.ScriptTarget.ES2020,
+        allowSyntheticDefaultImports: true,
+        esModuleInterop: true,
+    });
+
+    monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+        noSemanticValidation: true,
+        noSuggestionDiagnostics: true,
+    });
+}
 
 interface VideoSettings {
     title: string;
@@ -47,7 +65,7 @@ export default function VideosPage() {
     const [showCode, setShowCode] = useState(false);
     const [editedCode, setEditedCode] = useState('');
     const [isSaving, setIsSaving] = useState(false);
-    const [mobileTab, setMobileTab] = useState<'editor' | 'preview'>('editor');
+    const [mobileTab, setMobileTab] = useState<'editor' | 'preview'>('preview');
     const [settings, setSettings] = useState<VideoSettings>({
         title: 'Untitled Video',
         width: 1920,
@@ -59,9 +77,6 @@ export default function VideosPage() {
     const video = videoState.video;
     const currentVideoVersion = video?.versions?.[videoState.currentVersion];
     const currentRemotionCode = currentVideoVersion?.remotionCode ?? video?.remotionCode ?? '';
-    const currentVersionTimestamp = currentVideoVersion?.timestamp ?? video?.updatedAt ?? video?.createdAt ?? 'base';
-    const [autoRenderKey, setAutoRenderKey] = useState<string | null>(null);
-
     useEffect(() => {
         setEditedCode(currentRemotionCode);
     }, [currentRemotionCode]);
@@ -187,21 +202,6 @@ export default function VideosPage() {
         return () => window.clearInterval(poll);
     }, [video?.id, video?.status]);
 
-    useEffect(() => {
-        if (!video || !currentRemotionCode || video.status !== 'pending' || isRendering) return;
-        const nextAutoRenderKey = `${video.id}:${videoState.currentVersion}:${currentVersionTimestamp}`;
-        if (autoRenderKey === nextAutoRenderKey) return;
-        setAutoRenderKey(nextAutoRenderKey);
-        void handleRender();
-    }, [
-        video?.id,
-        video?.status,
-        currentRemotionCode,
-        currentVersionTimestamp,
-        videoState.currentVersion,
-        isRendering,
-        autoRenderKey,
-    ]);
 
     const hasChanges = editedCode !== currentRemotionCode;
 
@@ -325,6 +325,7 @@ export default function VideosPage() {
             <div className="flex-1 overflow-hidden bg-[#1e1e1e]">
                 <Editor
                     height="100%"
+                    beforeMount={configureMonacoForVideoEditor}
                     language="typescript"
                     path="MainComposition.tsx"
                     theme="vs-dark"
@@ -369,7 +370,7 @@ export default function VideosPage() {
             placeholder="Describe the video you want to create..."
             historyEndpoint={`/api/messages?videoId=${videoId}`}
             emptyStateTitle="Create Videos with AI"
-            emptyStateDescription="Ask me to create, inspect, and refine Remotion video compositions."
+            emptyStateDescription="Ask me to create, inspect, and refine video compositions."
         />
     );
 
@@ -377,6 +378,8 @@ export default function VideosPage() {
         <VideoViewer
             video={video}
             onVersionChange={handleVersionChange}
+            onRender={handleRender}
+            isRendering={isRendering}
         />
     );
 

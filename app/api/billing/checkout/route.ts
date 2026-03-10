@@ -50,15 +50,21 @@ export async function POST(req: Request) {
     }
 
     if (type === 'subscription') {
-      const priceId = process.env.STRIPE_PRO_PRICE_ID;
-      if (!priceId) {
+      const productId = process.env.STRIPE_PRO_PRODUCT_ID;
+      if (!productId) {
         return NextResponse.json({ error: 'Pro plan not configured' }, { status: 500 });
+      }
+
+      const prices = await stripe.prices.list({ product: productId, active: true, limit: 1 });
+      const price = prices.data[0];
+      if (!price) {
+        return NextResponse.json({ error: 'No active price found for Pro plan' }, { status: 500 });
       }
 
       const checkoutSession = await stripe.checkout.sessions.create({
         mode: 'subscription',
         customer: stripeCustomerId,
-        line_items: [{ price: priceId, quantity: 1 }],
+        line_items: [{ price: price.id, quantity: 1 }],
         success_url: `${appUrl}/app?billing=success`,
         cancel_url: `${appUrl}/app?billing=canceled`,
         metadata: { userId },
@@ -69,15 +75,21 @@ export async function POST(req: Request) {
     }
 
     if (type === 'credits') {
-      const priceId = process.env.STRIPE_CREDIT_PACK_PRICE_ID;
-      if (!priceId) {
+      const productId = process.env.STRIPE_CREDIT_PACK_PRODUCT_ID;
+      if (!productId) {
         return NextResponse.json({ error: 'Credit packs not configured' }, { status: 500 });
+      }
+
+      const prices = await stripe.prices.list({ product: productId, active: true, limit: 1 });
+      const price = prices.data[0];
+      if (!price) {
+        return NextResponse.json({ error: 'No active price found for credit pack' }, { status: 500 });
       }
 
       const checkoutSession = await stripe.checkout.sessions.create({
         mode: 'payment',
         customer: stripeCustomerId,
-        line_items: [{ price: priceId, quantity: 1 }],
+        line_items: [{ price: price.id, quantity: 1 }],
         success_url: `${appUrl}/app?billing=credits_added`,
         cancel_url: `${appUrl}/app?billing=canceled`,
         metadata: { userId, type: 'credits' },

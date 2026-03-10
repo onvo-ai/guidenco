@@ -229,7 +229,7 @@ export async function POST(req: Request) {
               status: 'pending',
             });
 
-            return { success: true, message: 'Remotion code saved. The video will be available to render.' };
+            return { success: true, message: 'Video code saved. The video will be available to render.' };
           } catch (error: any) {
             return { success: false, error: error.message };
           }

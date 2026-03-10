@@ -1,10 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/lib/auth-client';
-import { Sidebar } from '@/components/sidebar';
-import { Menu } from 'lucide-react';
+import { Header } from '@/components/header';
 
 export default function DashboardLayout({
   children,
@@ -13,7 +12,6 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const { data: session, isPending } = useSession();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (!isPending && !session) {
@@ -34,20 +32,9 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Mobile top bar */}
-        <div className="flex md:hidden items-center h-14 px-4 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shrink-0 gap-3">
-          <button
-            onClick={() => setSidebarOpen(true)}
-            className="p-1.5 rounded-md text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-            aria-label="Open menu"
-          >
-            <Menu className="h-5 w-5" />
-          </button>
-          <span className="text-base font-bold text-zinc-900 dark:text-zinc-100">Guidenco</span>
-        </div>
+    <div className="flex flex-col h-screen overflow-hidden">
+      <Header />
+      <div className="flex-1 overflow-hidden">
         {children}
       </div>
     </div>

@@ -19,7 +19,7 @@ export const PLANS = {
   pro: {
     name: 'Pro',
     credits: 500,
-    priceId: process.env.STRIPE_PRO_PRICE_ID,
+    productId: process.env.STRIPE_PRO_PRODUCT_ID,
   },
 } as const;
 

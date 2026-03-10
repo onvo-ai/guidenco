@@ -45,22 +45,21 @@ services:
   stripe:
     image: stripe/stripe-cli:latest
     container_name: guidenco-stripe
-    # Pass STRIPE_SECRET_KEY via --api-key flag so the CLI never prompts for login.
-    # If STRIPE_SECRET_KEY is blank in .env.local the container exits cleanly with
-    # a helpful message rather than blocking on the interactive pairing flow.
+    # Mount .env.local and parse STRIPE_SECRET_KEY directly so Docker Compose's
+    # env var precedence (host shell > env_file) cannot shadow the real value.
+    volumes:
+      - ./.env.local:/.env.local:ro
     entrypoint: >
       sh -c '
-        if [ -z "$$STRIPE_SECRET_KEY" ]; then
+        KEY=$$(grep -m1 "^STRIPE_SECRET_KEY=" /.env.local 2>/dev/null | cut -d= -f2-);
+        if [ -z "$$KEY" ]; then
           echo "INFO: STRIPE_SECRET_KEY is not set in .env.local — Stripe webhook forwarding is disabled.";
           echo "      Add your Stripe secret key to .env.local and restart to enable it.";
           exit 0;
         fi;
-        exec stripe listen
-          --api-key "$$STRIPE_SECRET_KEY"
-          --forward-to http://host.docker.internal:3000/api/billing/webhook
+        export STRIPE_API_KEY="$$KEY";
+        exec stripe listen --forward-to http://host.docker.internal:3000/api/billing/webhook
       '
-    env_file:
-      - .env.local
     depends_on:
       postgres:
         condition: service_healthy

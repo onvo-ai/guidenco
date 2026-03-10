@@ -5,8 +5,6 @@ import { subscriptions, credits } from '@/lib/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import type Stripe from 'stripe';
 
-// Disable body parsing — Stripe needs the raw body for signature verification
-export const config = { api: { bodyParser: false } };
 
 async function upsertCredits(userId: string, newBalance: number) {
   const [existing] = await db
@@ -77,7 +75,7 @@ export async function POST(req: Request) {
 
           const stripeSub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
           const priceId = stripeSub.items.data[0]?.price.id;
-          const currentPeriodEnd = new Date((stripeSub as any).current_period_end * 1000);
+          const currentPeriodEnd = new Date(stripeSub.items.data[0].current_period_end * 1000);
 
           const [existing] = await db
             .select()
@@ -127,9 +125,10 @@ export async function POST(req: Request) {
         if (!userId) break;
 
         const priceId = stripeSub.items.data[0]?.price.id;
-        const isProPrice = priceId === process.env.STRIPE_PRO_PRICE_ID;
-        const plan = isProPrice ? 'pro' : 'free';
-        const currentPeriodEnd = new Date((stripeSub as any).current_period_end * 1000);
+        const productId = stripeSub.items.data[0]?.price.product as string | undefined;
+        const isProProduct = productId === process.env.STRIPE_PRO_PRODUCT_ID;
+        const plan = isProProduct ? 'pro' : 'free';
+        const currentPeriodEnd = new Date(stripeSub.items.data[0].current_period_end * 1000);
 
         await db
           .update(subscriptions)

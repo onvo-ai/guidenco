@@ -1026,14 +1026,16 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                     if (output?.success === false) {
                       displayMessage = `Video generation failed: ${output?.error || 'unknown error'}`;
                     } else {
-                      displayMessage = title ? `Video updated: "${title}"` : (output?.message || 'Generating video...');
+                      const rawMsg = output?.message || 'Video code saved. The video will be available to render.';
+                      const cleanMsg = rawMsg.replace(/remotion code saved/i, 'Video code saved');
+                      displayMessage = title ? `Video updated: "${title}"` : cleanMsg;
                     }
                   } else if (toolName === 'getVideo') {
                     const title = output?.title;
                     displayMessage = title ? `Inspecting video: ${title}` : 'Inspecting current video...';
                   }
 
-                  const hasImage = (toolName === 'getDocumentState' || toolName === 'getSVG') && output?.image;
+                  const hasImage = toolName === 'getDocumentState' && output?.image;
                   const hasSearchImages =
                     toolName === 'searchImage' &&
                     output?.success &&
