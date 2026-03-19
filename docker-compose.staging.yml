@@ -38,7 +38,7 @@ services:
     # Network
     # ----------------------------------------------------------------------
     ports:
-      - "3000:3000"
+      - "3001:3000"
     # Uncomment for internal-only access (reverse proxy in front)
     # expose:
     #   - "3000"
