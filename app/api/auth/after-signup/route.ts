@@ -4,6 +4,7 @@ import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { teams, teamMembers, teamInvites, users } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
+import { ensureUserCredits } from '@/lib/billing';
 
 /**
  * Called after a user signs up. Checks for pending invites by email
@@ -15,6 +16,8 @@ export async function POST() {
     if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id: userId, email } = session.user;
+
+    await ensureUserCredits(userId);
 
     // Check if already has a team
     const ownedTeam = await db

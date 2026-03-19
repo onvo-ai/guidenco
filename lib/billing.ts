@@ -37,6 +37,22 @@ export const CREDIT_PACK_SIZE = 100;
  */
 export const TOKENS_PER_CREDIT = 2000;
 
+export async function ensureUserCredits(userId: string, balance: number = PLANS.free.credits): Promise<number> {
+  const [row] = await db.select().from(credits).where(eq(credits.userId, userId)).limit(1);
+
+  if (row) {
+    return row.balance;
+  }
+
+  await db.insert(credits).values({
+    userId,
+    balance,
+    lastResetAt: new Date(),
+  });
+
+  return balance;
+}
+
 /** Returns the user's current credit balance (0 if no record). */
 export async function getUserCredits(userId: string): Promise<number> {
   const [row] = await db.select().from(credits).where(eq(credits.userId, userId)).limit(1);
@@ -49,9 +65,14 @@ export async function getUserCredits(userId: string): Promise<number> {
  */
 export async function deductCreditsForUsage(
   userId: string,
-  usage: { promptTokens: number; completionTokens: number }
+  usage: {
+    promptTokens?: number;
+    completionTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+  }
 ): Promise<void> {
-  const totalTokens = (usage.promptTokens ?? 0) + (usage.completionTokens ?? 0);
+  const totalTokens = (usage.inputTokens ?? usage.promptTokens ?? 0) + (usage.outputTokens ?? usage.completionTokens ?? 0);
   const creditsToDeduct = Math.max(1, Math.ceil(totalTokens / TOKENS_PER_CREDIT));
   await db
     .update(credits)

@@ -1,5 +1,5 @@
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { streamText, convertToModelMessages, UIMessage, tool, stepCountIs } from 'ai';
+import { streamText, UIMessage, tool, stepCountIs } from 'ai';
 import { z } from 'zod';
 import { createOrUpdateDocument, getDocumentById, saveDocumentMessage } from '@/lib/db/entities-service';
 import { resizeImage } from '@/lib/image-processing';
@@ -873,7 +873,7 @@ Always use the tools to create the document. The user will see the visual output
     onStepFinish: async ({ text, toolCalls, toolResults, finishReason, usage }) => {
       // Deduct credits on every step based on actual token usage.
       // Charging per step (not just final) ensures tool-call steps are counted too.
-      await deductCreditsForUsage(session.user.id, usage).catch(() => {});
+      await deductCreditsForUsage(session.user.id, usage).catch(() => { });
       // Save each step as a separate message for better timeline
       try {
         const parts: any[] = [];

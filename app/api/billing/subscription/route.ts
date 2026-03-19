@@ -4,7 +4,7 @@ import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { subscriptions, credits } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
-import { PLANS } from '@/lib/billing';
+import { PLANS, ensureUserCredits } from '@/lib/billing';
 
 export async function GET() {
   try {
@@ -29,6 +29,7 @@ export async function GET() {
 
     const plan = (sub?.plan ?? 'free') as keyof typeof PLANS;
     const planInfo = PLANS[plan] ?? PLANS.free;
+    const balance = creditRecord?.balance ?? await ensureUserCredits(userId, planInfo.credits);
 
     return NextResponse.json({
       plan,
@@ -37,7 +38,7 @@ export async function GET() {
       currentPeriodEnd: sub?.currentPeriodEnd ?? null,
       cancelAtPeriodEnd: sub?.cancelAtPeriodEnd ?? false,
       credits: {
-        balance: creditRecord?.balance ?? 0,
+        balance,
         monthlyAllocation: planInfo.credits,
       },
     });

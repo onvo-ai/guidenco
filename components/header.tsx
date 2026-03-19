@@ -45,12 +45,13 @@ function activeEntityIdFromPath(
 // ─── Credits Ring ─────────────────────────────────────────────────────────────
 
 function CreditsRing({ balance, total }: { balance: number; total: number }) {
-  const used = total - balance;
-  const pct = total > 0 ? Math.min(1, used / total) : 0;
+  const safeBalance = Math.max(0, Math.min(balance, total));
+  const pct = total > 0 ? Math.min(1, safeBalance / total) : 0;
   const r = 9;
   const circumference = 2 * Math.PI * r;
   const strokeDashoffset = circumference * (1 - pct);
-  const isLow = pct > 0.8;
+  const isEmpty = safeBalance <= 0;
+  const isLow = !isEmpty && pct <= 0.2;
 
   return (
     <div className="relative flex items-center justify-center" style={{ width: 28, height: 28 }}>
@@ -74,7 +75,7 @@ function CreditsRing({ balance, total }: { balance: number; total: number }) {
           strokeDasharray={circumference}
           strokeDashoffset={strokeDashoffset}
           strokeLinecap="round"
-          className={isLow ? 'text-orange-500' : 'text-blue-500'}
+          className={isEmpty ? 'text-zinc-200 dark:text-zinc-700' : isLow ? 'text-orange-500' : 'text-blue-500'}
           style={{ transition: 'stroke-dashoffset 0.4s ease' }}
         />
       </svg>
@@ -92,7 +93,7 @@ function CreditsBadge() {
     fetch('/api/billing/subscription')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (d?.credits) setCreditsData(d.credits); })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   if (!creditsData) return null;
@@ -178,11 +179,10 @@ function ProjectDropdown({
         <div className="absolute left-0 top-full mt-1.5 w-56 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg z-50 overflow-hidden py-1">
           <button
             onClick={() => navigate('/app')}
-            className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
-              !currentEntityId
+            className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${!currentEntityId
                 ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
                 : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'
-            }`}
+              }`}
           >
             <Home className="h-3.5 w-3.5 shrink-0" />
             Home
@@ -202,11 +202,10 @@ function ProjectDropdown({
                 <button
                   key={entity.id}
                   onClick={() => navigate(entityUrl(entity))}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-colors ${
-                    entity.id === currentEntityId
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-colors ${entity.id === currentEntityId
                       ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
                       : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'
-                  }`}
+                    }`}
                 >
                   <span className="truncate">{entity.name}</span>
                 </button>
@@ -293,7 +292,7 @@ export function Header() {
     fetch('/api/entities')
       .then((r) => (r.ok ? r.json() : []))
       .then(setEntities)
-      .catch(() => {});
+      .catch(() => { });
   }, [pathname]);
 
   return (
