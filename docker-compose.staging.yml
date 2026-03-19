@@ -27,25 +27,25 @@ services:
     container_name: guidenco-app-prod
     hostname: guidenco
 
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Environment & Secrets
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Secrets loaded at runtime from env file (not baked into image layers)
     env_file:
       - ./.env
 
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Network
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     ports:
-      - "3001:3000"
+      - "3000:3000"
     # Uncomment for internal-only access (reverse proxy in front)
     # expose:
     #   - "3000"
 
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Security Hardening
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Read-only root filesystem (prevents runtime modifications)
     read_only: true
 
@@ -114,36 +114,6 @@ services:
     # sysctls:
     #   net.ipv4.ip_unprivileged_port_start: 0
 
-  remotion:
-    image: node:20-bookworm-slim
-    container_name: guidenco-remotion
-    working_dir: /workspace
-    profiles:
-      - remotion
-    env_file:
-      - ./.env
-    environment:
-      NODE_ENV: development
-    ports:
-      - "3001:3001"
-    volumes:
-      - ./:/workspace
-    command: >
-      bash -lc "npm ci && npx remotion studio --host 0.0.0.0 --port 3001"
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    tmpfs:
-      - /tmp:size=256m,mode=1777,noexec,nosuid
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001', (r) => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-
 # =============================================================================
 # Networks (optional - for multi-container setups)
 # =============================================================================
@@ -153,9 +123,9 @@ services:
 #     driver_opts:
 #       com.docker.network.bridge.enable_icc: "false"
 
-# ===========================================================================
+# =============================================================================
 # SECURITY CHECKLIST
-# ===========================================================================
+# =============================================================================
 # | Control                     | Status | Notes                            |
 # |-----------------------------|--------|----------------------------------|
 # | Read-only root filesystem   | ✅     | Prevents runtime tampering       |
@@ -167,4 +137,4 @@ services:
 # | Log rotation                | ✅     | Prevents disk exhaustion         |
 # | Secrets at runtime          | ✅     | Not baked into image             |
 # | tmpfs for writable dirs     | ✅     | /tmp and .next/cache             |
-# ===========================================================================
+# =============================================================================
