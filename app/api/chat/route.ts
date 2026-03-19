@@ -8,7 +8,7 @@ import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { brandAssets, teams, teamMembers, agentSettings } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
-import { getUserCredits, deductCredit } from '@/lib/billing';
+import { getUserCredits, deductCreditsForUsage } from '@/lib/billing';
 import { getFileBuffer } from '@/lib/storage';
 import { users } from '@/lib/db/schema';
 
@@ -871,10 +871,9 @@ Always use the tools to create the document. The user will see the visual output
       }),
     },
     onStepFinish: async ({ text, toolCalls, toolResults, finishReason, usage }) => {
-      // Deduct 1 credit on the final step
-      if (finishReason === 'stop' || finishReason === 'length') {
-        await deductCredit(session.user.id).catch(() => {});
-      }
+      // Deduct credits on every step based on actual token usage.
+      // Charging per step (not just final) ensures tool-call steps are counted too.
+      await deductCreditsForUsage(session.user.id, usage).catch(() => {});
       // Save each step as a separate message for better timeline
       try {
         const parts: any[] = [];

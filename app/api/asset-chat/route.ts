@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { saveAssetMessage, upsertAsset, getAssetById } from '@/lib/db/entities-service';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
-import { getUserCredits, deductCredit } from '@/lib/billing';
+import { getUserCredits, deductCreditsForUsage } from '@/lib/billing';
 
 export const maxDuration = 60;
 const DEFAULT_SVG_MODEL = 'google/gemini-2.5-pro';
@@ -120,10 +120,8 @@ CRITICAL: Always end with a text explanation of what you created/changed.`,
           },
         }),
       },
-      onStepFinish: async ({ text, toolCalls, toolResults, finishReason }) => {
-        if (finishReason === 'stop' || finishReason === 'length') {
-          await deductCredit(session.user.id).catch(() => {});
-        }
+      onStepFinish: async ({ text, toolCalls, toolResults, finishReason, usage }) => {
+        await deductCreditsForUsage(session.user.id, usage).catch(() => {});
         try {
           const parts: any[] = [];
           if (toolCalls && toolResults) {

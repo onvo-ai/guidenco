@@ -5,7 +5,7 @@ import { getVideoMessages, saveVideoMessage, upsertVideo, getVideoById } from '@
 import { resizeImage } from '@/lib/image-processing';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
-import { getUserCredits, deductCredit } from '@/lib/billing';
+import { getUserCredits, deductCreditsForUsage } from '@/lib/billing';
 
 export const maxDuration = 60;
 
@@ -254,10 +254,8 @@ export async function POST(req: Request) {
         },
       }),
     },
-    onStepFinish: async ({ text, toolCalls, toolResults, finishReason }) => {
-      if (finishReason === 'stop' || finishReason === 'length') {
-        await deductCredit(session.user.id).catch(() => {});
-      }
+    onStepFinish: async ({ text, toolCalls, toolResults, finishReason, usage }) => {
+      await deductCreditsForUsage(session.user.id, usage).catch(() => {});
       try {
         const parts: any[] = [];
         if (toolCalls && toolResults) {
