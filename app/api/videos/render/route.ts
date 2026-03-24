@@ -64,13 +64,29 @@ registerRoot(RemotionRoot);
     writeFileSync(join(tempDir, 'composition.tsx'), video.remotionCode);
     writeFileSync(join(tempDir, 'package.json'), JSON.stringify({ name: 'remotion-render', version: '1.0.0', dependencies: { remotion: '*', react: '*', 'react-dom': '*' } }));
 
+    const chromiumOptions = {
+      disableWebSecurity: false,
+      gl: 'swiftshader' as const,
+    };
+    const browserExecutable = process.env.REMOTION_CHROME_EXECUTABLE_PATH || undefined;
+
     const bundled = await bundle({ entryPoint: join(tempDir, 'index.tsx') });
-    const compositions = await getCompositions(bundled);
+    const compositions = await getCompositions(bundled, {
+      chromiumOptions,
+      browserExecutable,
+    });
     const composition = compositions.find((c: any) => c.id === 'MainComposition');
     if (!composition) throw new Error('Composition not found after bundling');
 
     const outputPath = join(tempDir, 'output.mp4');
-    await renderMedia({ composition, serveUrl: bundled, codec: 'h264', outputLocation: outputPath });
+    await renderMedia({
+      composition,
+      serveUrl: bundled,
+      codec: 'h264',
+      outputLocation: outputPath,
+      chromiumOptions,
+      browserExecutable,
+    });
 
     const { uploadFile, ensureBucket } = await import('@/lib/storage');
     await ensureBucket();
