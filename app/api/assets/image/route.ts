@@ -1,7 +1,7 @@
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
-import { assets } from '@/lib/db/schema';
+import { brandAssets } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { getFileBuffer } from '@/lib/storage';
 import { getUserTeamId } from '@/app/api/settings/assets/route';
@@ -21,8 +21,8 @@ export async function GET(req: Request) {
 
     const [asset] = await db
       .select()
-      .from(assets)
-      .where(and(eq(assets.id, assetId), eq(assets.teamId, teamId)))
+      .from(brandAssets)
+      .where(and(eq(brandAssets.id, assetId), eq(brandAssets.teamId, teamId)))
       .limit(1);
 
     if (!asset) return new Response('Not found', { status: 404 });

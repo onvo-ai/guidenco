@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
-import { assets, teams, teamMembers } from '@/lib/db/schema';
+import { brandAssets, teams, teamMembers } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { uploadFile, deleteFile, ensureBucket } from '@/lib/storage';
 import { randomUUID } from 'crypto';
@@ -114,9 +114,9 @@ export async function GET() {
 
     const teamAssets = await db
       .select()
-      .from(assets)
-      .where(eq(assets.teamId, teamId))
-      .orderBy(assets.createdAt);
+      .from(brandAssets)
+      .where(eq(brandAssets.teamId, teamId))
+      .orderBy(brandAssets.createdAt);
 
     return NextResponse.json(teamAssets.filter((asset) => asset.source !== 'generated'));
   } catch (error) {
@@ -161,7 +161,7 @@ export async function POST(req: Request) {
     const description = await generateDescription(title, base64Jpeg);
 
     const [asset] = await db
-      .insert(assets)
+      .insert(brandAssets)
       .values({
         teamId,
         uploadedBy: session.user.id,
@@ -195,14 +195,14 @@ export async function DELETE(req: Request) {
 
     const asset = await db
       .select()
-      .from(assets)
-      .where(and(eq(assets.id, assetId), eq(assets.teamId, teamId)))
+      .from(brandAssets)
+      .where(and(eq(brandAssets.id, assetId), eq(brandAssets.teamId, teamId)))
       .limit(1);
 
     if (!asset.length) return Response.json({ error: 'Asset not found' }, { status: 404 });
 
     await deleteFile(asset[0].fileKey);
-    await db.delete(assets).where(eq(assets.id, assetId));
+    await db.delete(brandAssets).where(eq(brandAssets.id, assetId));
 
     return Response.json({ success: true });
   } catch (error) {
