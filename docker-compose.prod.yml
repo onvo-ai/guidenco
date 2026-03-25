@@ -34,15 +34,15 @@ services:
     # .env.docker overrides localhost URLs with Docker container hostnames
     env_file:
       - ./.env
-      - ./.env.docker
+    
 
     # -------------------------------------------------------------------------
     # Network
     # -------------------------------------------------------------------------
     ports:
       - "3000:3000"
-    networks:
-      - guidenco-network
+    # networks:
+    #   - guidenco-network
     # Uncomment for internal-only access (reverse proxy in front)
     # expose:
     #   - "3000"
