@@ -2,45 +2,18 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
-import { brandAssets, teams, teamMembers } from '@/lib/db/schema';
+import { brandAssets as assets } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { uploadFile, deleteFile, ensureBucket } from '@/lib/storage';
 import { randomUUID } from 'crypto';
 import sharp from 'sharp';
+import { getOrganizationId, getOrCreateOrganizationId } from '@/lib/organization';
 
 const DESCRIBE_MAX_PX = 512; // max dimension for the thumbnail sent to LLM
 
+/** @deprecated Use getOrganizationId from lib/organization instead. Kept for compatibility with assets/image and assets/data routes. */
 export async function getUserTeamId(userId: string): Promise<string | null> {
-  const ownedTeam = await db
-    .select({ id: teams.id })
-    .from(teams)
-    .where(eq(teams.ownerId, userId))
-    .limit(1);
-
-  if (ownedTeam.length > 0) return ownedTeam[0].id;
-
-  const membership = await db
-    .select({ teamId: teamMembers.teamId })
-    .from(teamMembers)
-    .where(eq(teamMembers.userId, userId))
-    .limit(1);
-
-  return membership.length > 0 ? membership[0].teamId : null;
-}
-
-/** Ensure the user has a team, lazily creating one if needed. Returns teamId. */
-export async function getOrCreateTeamId(userId: string): Promise<string> {
-  const existing = await getUserTeamId(userId);
-  if (existing) return existing;
-
-  const { users } = await import('@/lib/db/schema');
-  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-  const teamName = user[0]?.name ? `${user[0].name}'s Team` : 'My Team';
-  const [newTeam] = await db
-    .insert(teams)
-    .values({ name: teamName, ownerId: userId })
-    .returning();
-  return newTeam.id;
+  return getOrganizationId(userId);
 }
 
 /** Resize an image buffer to at most DESCRIBE_MAX_PX on the longest side, return as JPEG base64. */
@@ -109,16 +82,16 @@ export async function GET() {
     const session = await auth.api.getSession({ headers: await headers() });
     if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const teamId = await getUserTeamId(session.user.id);
-    if (!teamId) return NextResponse.json([]);
+    const organizationId = await getOrganizationId(session.user.id);
+    if (!organizationId) return NextResponse.json([]);
 
-    const teamAssets = await db
+    const orgAssets = await db
       .select()
-      .from(brandAssets)
-      .where(eq(brandAssets.teamId, teamId))
-      .orderBy(brandAssets.createdAt);
+      .from(assets)
+      .where(eq(assets.organizationId, organizationId))
+      .orderBy(assets.createdAt);
 
-    return NextResponse.json(teamAssets.filter((asset) => asset.source !== 'generated'));
+    return NextResponse.json(orgAssets.filter((asset) => asset.source !== 'generated'));
   } catch (error) {
     console.error('Error fetching assets:', error);
     return NextResponse.json({ error: 'Failed to fetch assets' }, { status: 500 });
@@ -130,7 +103,7 @@ export async function POST(req: Request) {
     const session = await auth.api.getSession({ headers: await headers() });
     if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const teamId = await getOrCreateTeamId(session.user.id);
+    const organizationId = await getOrCreateOrganizationId(session.user.id);
 
     const formData = await req.formData();
     const file = formData.get('file') as File | null;
@@ -152,7 +125,7 @@ export async function POST(req: Request) {
     await ensureBucket();
 
     const ext = file.name.split('.').pop() ?? 'bin';
-    const key = `assets/${teamId}/${randomUUID()}.${ext}`;
+    const key = `assets/${organizationId}/${randomUUID()}.${ext}`;
     const buffer = Buffer.from(await file.arrayBuffer());
     const fileUrl = await uploadFile(key, buffer, file.type);
 
@@ -163,7 +136,7 @@ export async function POST(req: Request) {
     const [asset] = await db
       .insert(brandAssets)
       .values({
-        teamId,
+        organizationId,
         uploadedBy: session.user.id,
         title,
         description,
@@ -190,13 +163,13 @@ export async function DELETE(req: Request) {
     const assetId = searchParams.get('id');
     if (!assetId) return Response.json({ error: 'Asset ID required' }, { status: 400 });
 
-    const teamId = await getUserTeamId(session.user.id);
-    if (!teamId) return Response.json({ error: 'No team found' }, { status: 404 });
+    const organizationId = await getOrganizationId(session.user.id);
+    if (!organizationId) return Response.json({ error: 'No organization found' }, { status: 404 });
 
     const asset = await db
       .select()
-      .from(brandAssets)
-      .where(and(eq(brandAssets.id, assetId), eq(brandAssets.teamId, teamId)))
+      .from(assets)
+      .where(and(eq(assets.id, assetId), eq(assets.organizationId, organizationId)))
       .limit(1);
 
     if (!asset.length) return Response.json({ error: 'Asset not found' }, { status: 404 });

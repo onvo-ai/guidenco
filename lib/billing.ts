@@ -37,15 +37,15 @@ export const CREDIT_PACK_SIZE = 100;
  */
 export const TOKENS_PER_CREDIT = 2000;
 
-export async function ensureUserCredits(userId: string, balance: number = PLANS.free.credits): Promise<number> {
-  const [row] = await db.select().from(credits).where(eq(credits.userId, userId)).limit(1);
+export async function ensureUserCredits(organizationId: string, balance: number = PLANS.free.credits): Promise<number> {
+  const [row] = await db.select().from(credits).where(eq(credits.organizationId, organizationId)).limit(1);
 
   if (row) {
     return row.balance;
   }
 
   await db.insert(credits).values({
-    userId,
+    organizationId,
     balance,
     lastResetAt: new Date(),
   });
@@ -53,9 +53,9 @@ export async function ensureUserCredits(userId: string, balance: number = PLANS.
   return balance;
 }
 
-/** Returns the user's current credit balance (0 if no record). */
-export async function getUserCredits(userId: string): Promise<number> {
-  const [row] = await db.select().from(credits).where(eq(credits.userId, userId)).limit(1);
+/** Returns the organization's current credit balance (0 if no record). */
+export async function getUserCredits(organizationId: string): Promise<number> {
+  const [row] = await db.select().from(credits).where(eq(credits.organizationId, organizationId)).limit(1);
   return row?.balance ?? 0;
 }
 
@@ -64,7 +64,7 @@ export async function getUserCredits(userId: string): Promise<number> {
  * Charges 1 credit per TOKENS_PER_CREDIT tokens, minimum 1 credit per step.
  */
 export async function deductCreditsForUsage(
-  userId: string,
+  organizationId: string,
   usage: {
     promptTokens?: number;
     completionTokens?: number;
@@ -77,5 +77,5 @@ export async function deductCreditsForUsage(
   await db
     .update(credits)
     .set({ balance: sql`GREATEST(${credits.balance} - ${creditsToDeduct}, 0)`, updatedAt: new Date() })
-    .where(eq(credits.userId, userId));
+    .where(eq(credits.organizationId, organizationId));
 }

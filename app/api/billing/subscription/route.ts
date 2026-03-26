@@ -5,31 +5,32 @@ import { db } from '@/lib/db';
 import { subscriptions, credits } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { PLANS, ensureUserCredits } from '@/lib/billing';
+import { getOrCreateOrganizationId } from '@/lib/organization';
 
 export async function GET() {
   try {
     const session = await auth.api.getSession({ headers: await headers() });
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const userId = session.user.id;
+    const organizationId = await getOrCreateOrganizationId(session.user.id);
 
     // Get or default subscription record
     const [sub] = await db
       .select()
       .from(subscriptions)
-      .where(eq(subscriptions.userId, userId))
+      .where(eq(subscriptions.organizationId, organizationId))
       .limit(1);
 
     // Get or default credits record
     const [creditRecord] = await db
       .select()
       .from(credits)
-      .where(eq(credits.userId, userId))
+      .where(eq(credits.organizationId, organizationId))
       .limit(1);
 
     const plan = (sub?.plan ?? 'free') as keyof typeof PLANS;
     const planInfo = PLANS[plan] ?? PLANS.free;
-    const balance = creditRecord?.balance ?? await ensureUserCredits(userId, planInfo.credits);
+    const balance = creditRecord?.balance ?? await ensureUserCredits(organizationId, planInfo.credits);
 
     return NextResponse.json({
       plan,

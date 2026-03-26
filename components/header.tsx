@@ -9,22 +9,31 @@ import {
   Film,
   Home,
   Plus,
+  BookOpen,
+  Share2,
 } from 'lucide-react';
-import { useSession } from '@/lib/auth-client';
+import { useSession, authClient } from '@/lib/auth-client';
 import { EntitySummary } from '@/lib/types';
 import { SettingsModal } from '@/components/settings-modal';
 
-type EntityType = 'document' | 'asset' | 'video';
+// Get organization hooks from authClient
+const { useListOrganizations, useActiveOrganization } = authClient;
+
+type EntityType = 'document' | 'asset' | 'video' | 'blog_article' | 'social_post';
 
 const TYPE_META: Record<EntityType, { label: string; Icon: React.ElementType }> = {
   document: { label: 'Document', Icon: LayoutTemplate },
   asset: { label: 'Asset', Icon: Shapes },
   video: { label: 'Video', Icon: Film },
+  blog_article: { label: 'Blog Article', Icon: BookOpen },
+  social_post: { label: 'Social Post', Icon: Share2 },
 };
 
 function entityUrl(entity: EntitySummary) {
   if (entity.type === 'asset') return `/app/assets/${entity.id}`;
   if (entity.type === 'video') return `/app/videos/${entity.id}`;
+  if (entity.type === 'blog_article') return `/app/blog-articles/${entity.id}`;
+  if (entity.type === 'social_post') return `/app/social-posts/${entity.id}`;
   return `/app/documents/${entity.id}`;
 }
 
@@ -35,7 +44,9 @@ function activeEntityIdFromPath(
   if (
     pathname?.includes('/assets/') ||
     pathname?.includes('/videos/') ||
-    pathname?.includes('/documents/')
+    pathname?.includes('/documents/') ||
+    pathname?.includes('/blog-articles/') ||
+    pathname?.includes('/social-posts/')
   ) {
     return params?.id as string | undefined;
   }
@@ -115,6 +126,64 @@ function CreditsBadge() {
   );
 }
 
+// ─── Organisation Dropdown ────────────────────────────────────────────────────
+
+function OrganisationDropdown() {
+  const { data: organizations, isPending } = useListOrganizations();
+  const { data: activeOrganization } = useActiveOrganization();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const handleSelect = async (orgId: string) => {
+    await authClient.organization.setActive({ organizationId: orgId });
+    setOpen(false);
+    window.location.reload();
+  };
+
+  if (isPending || !organizations || organizations.length === 0) return null;
+
+  // Use active org name, or first org name if no active org set
+  const displayName = activeOrganization?.name || organizations[0]?.name || 'Select team';
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 h-8 px-2.5 rounded-md text-sm font-medium border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 transition-colors max-w-[140px]"
+      >
+        <span className="truncate">{displayName}</span>
+        <ChevronDown className="h-3 w-3 shrink-0 text-zinc-400 ml-auto" />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full mt-1.5 w-56 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg z-50 overflow-hidden py-1">
+          {organizations.map((org) => (
+            <button
+              key={org.id}
+              onClick={() => handleSelect(org.id)}
+              className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${org.id === activeOrganization?.id
+                ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
+                : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'
+                }`}
+            >
+              <span className="truncate">{org.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Project Dropdown ─────────────────────────────────────────────────────────
 
 function ProjectDropdown({
@@ -180,8 +249,8 @@ function ProjectDropdown({
           <button
             onClick={() => navigate('/app')}
             className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${!currentEntityId
-                ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
-                : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'
+              ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
+              : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'
               }`}
           >
             <Home className="h-3.5 w-3.5 shrink-0" />
@@ -203,8 +272,8 @@ function ProjectDropdown({
                   key={entity.id}
                   onClick={() => navigate(entityUrl(entity))}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-colors ${entity.id === currentEntityId
-                      ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
-                      : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'
+                    ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
+                    : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'
                     }`}
                 >
                   <span className="truncate">{entity.name}</span>
@@ -297,7 +366,7 @@ export function Header() {
 
   return (
     <header className="h-14 shrink-0 flex items-center gap-3 px-4 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950">
-      {/* Left: logo + project selector */}
+      {/* Left: logo + org selector + entity selector */}
       <div className="flex items-center gap-2.5 flex-1 min-w-0">
         <button
           onClick={() => router.push('/app')}
@@ -305,6 +374,7 @@ export function Header() {
         >
           Guidenco
         </button>
+        <OrganisationDropdown />
         <span className="text-zinc-300 dark:text-zinc-700 font-light select-none">/</span>
         <ProjectDropdown entities={entities} currentEntityId={currentEntityId} />
       </div>

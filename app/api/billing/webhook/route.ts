@@ -6,41 +6,41 @@ import { eq, sql } from 'drizzle-orm';
 import type Stripe from 'stripe';
 
 
-async function upsertCredits(userId: string, newBalance: number) {
+async function upsertCredits(organizationId: string, newBalance: number) {
   const [existing] = await db
     .select()
     .from(credits)
-    .where(eq(credits.userId, userId))
+    .where(eq(credits.organizationId, organizationId))
     .limit(1);
 
   if (existing) {
     await db
       .update(credits)
       .set({ balance: newBalance, lastResetAt: new Date(), updatedAt: new Date() })
-      .where(eq(credits.userId, userId));
+      .where(eq(credits.organizationId, organizationId));
   } else {
     await db.insert(credits).values({
-      userId,
+      organizationId,
       balance: newBalance,
       lastResetAt: new Date(),
     });
   }
 }
 
-async function addCredits(userId: string, amount: number) {
+async function addCredits(organizationId: string, amount: number) {
   const [existing] = await db
     .select()
     .from(credits)
-    .where(eq(credits.userId, userId))
+    .where(eq(credits.organizationId, organizationId))
     .limit(1);
 
   if (existing) {
     await db
       .update(credits)
       .set({ balance: sql`${credits.balance} + ${amount}`, updatedAt: new Date() })
-      .where(eq(credits.userId, userId));
+      .where(eq(credits.organizationId, organizationId));
   } else {
-    await db.insert(credits).values({ userId, balance: amount });
+    await db.insert(credits).values({ organizationId, balance: amount });
   }
 }
 
@@ -64,8 +64,8 @@ export async function POST(req: Request) {
     switch (event.type) {
       case 'checkout.session.completed': {
         const checkoutSession = event.data.object as Stripe.Checkout.Session;
-        const userId = checkoutSession.metadata?.userId;
-        if (!userId) break;
+        const organizationId = checkoutSession.metadata?.organizationId;
+        if (!organizationId) break;
 
         if (checkoutSession.mode === 'subscription') {
           // Subscription started — handled more fully in subscription events below
@@ -80,7 +80,7 @@ export async function POST(req: Request) {
           const [existing] = await db
             .select()
             .from(subscriptions)
-            .where(eq(subscriptions.userId, userId))
+            .where(eq(subscriptions.organizationId, organizationId))
             .limit(1);
 
           if (existing) {
@@ -96,10 +96,10 @@ export async function POST(req: Request) {
                 cancelAtPeriodEnd: false,
                 updatedAt: new Date(),
               })
-              .where(eq(subscriptions.userId, userId));
+              .where(eq(subscriptions.organizationId, organizationId));
           } else {
             await db.insert(subscriptions).values({
-              userId,
+              organizationId,
               stripeCustomerId,
               stripeSubscriptionId,
               stripePriceId: priceId,
@@ -111,18 +111,18 @@ export async function POST(req: Request) {
           }
 
           // Grant pro credits
-          await upsertCredits(userId, PLANS.pro.credits);
+          await upsertCredits(organizationId, PLANS.pro.credits);
         } else if (checkoutSession.mode === 'payment' && checkoutSession.metadata?.type === 'credits') {
           // One-time credit pack purchase
-          await addCredits(userId, CREDIT_PACK_SIZE);
+          await addCredits(organizationId, CREDIT_PACK_SIZE);
         }
         break;
       }
 
       case 'customer.subscription.updated': {
         const stripeSub = event.data.object as Stripe.Subscription;
-        const userId = stripeSub.metadata?.userId;
-        if (!userId) break;
+        const organizationId = stripeSub.metadata?.organizationId;
+        if (!organizationId) break;
 
         const priceId = stripeSub.items.data[0]?.price.id;
         const productId = stripeSub.items.data[0]?.price.product as string | undefined;
@@ -167,7 +167,7 @@ export async function POST(req: Request) {
           .limit(1);
 
         if (sub) {
-          await upsertCredits(sub.userId, PLANS.free.credits);
+          await upsertCredits(sub.organizationId, PLANS.free.credits);
         }
         break;
       }
@@ -184,7 +184,7 @@ export async function POST(req: Request) {
             .limit(1);
 
           if (sub && sub.plan === 'pro') {
-            await upsertCredits(sub.userId, PLANS.pro.credits);
+            await upsertCredits(sub.organizationId, PLANS.pro.credits);
           }
         }
         break;

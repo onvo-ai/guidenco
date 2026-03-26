@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { subscriptions } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { stripe } from '@/lib/billing';
+import { getOrCreateOrganizationId } from '@/lib/organization';
 
 export async function POST(req: Request) {
   try {
@@ -12,14 +13,14 @@ export async function POST(req: Request) {
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { type } = await req.json(); // 'subscription' | 'credits'
-    const userId = session.user.id;
+    const organizationId = await getOrCreateOrganizationId(session.user.id);
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
 
     // Get existing subscription record for stripeCustomerId
     const [sub] = await db
       .select()
       .from(subscriptions)
-      .where(eq(subscriptions.userId, userId))
+      .where(eq(subscriptions.organizationId, organizationId))
       .limit(1);
 
     let stripeCustomerId = sub?.stripeCustomerId;
@@ -29,7 +30,7 @@ export async function POST(req: Request) {
       const customer = await stripe.customers.create({
         email: session.user.email,
         name: session.user.name,
-        metadata: { userId },
+        metadata: { organizationId },
       });
       stripeCustomerId = customer.id;
 
@@ -38,10 +39,10 @@ export async function POST(req: Request) {
         await db
           .update(subscriptions)
           .set({ stripeCustomerId, updatedAt: new Date() })
-          .where(eq(subscriptions.userId, userId));
+          .where(eq(subscriptions.organizationId, organizationId));
       } else {
         await db.insert(subscriptions).values({
-          userId,
+          organizationId,
           stripeCustomerId,
           plan: 'free',
           status: 'active',
@@ -67,8 +68,8 @@ export async function POST(req: Request) {
         line_items: [{ price: price.id, quantity: 1 }],
         success_url: `${appUrl}/app?billing=success`,
         cancel_url: `${appUrl}/app?billing=canceled`,
-        metadata: { userId },
-        subscription_data: { metadata: { userId } },
+        metadata: { organizationId },
+        subscription_data: { metadata: { organizationId } },
       });
 
       return NextResponse.json({ url: checkoutSession.url });
@@ -92,7 +93,7 @@ export async function POST(req: Request) {
         line_items: [{ price: price.id, quantity: 1 }],
         success_url: `${appUrl}/app?billing=credits_added`,
         cancel_url: `${appUrl}/app?billing=canceled`,
-        metadata: { userId, type: 'credits' },
+        metadata: { organizationId, type: 'credits' },
       });
 
       return NextResponse.json({ url: checkoutSession.url });

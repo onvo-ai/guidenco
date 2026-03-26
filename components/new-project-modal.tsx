@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { LayoutTemplate, Shapes, Film, Loader2 } from 'lucide-react';
+import { LayoutTemplate, Shapes, Film, Loader2, FlaskConical } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import {
   Dialog,
   DialogContent,
@@ -23,7 +25,7 @@ const TYPES: {
       type: 'document',
       label: 'Document',
       Icon: LayoutTemplate,
-      description: 'Multi-page HTML designs for banners, posters, and presentations.',
+      description: 'Multi-page designs for banners, posters, and presentations.',
     },
     {
       type: 'asset',
@@ -50,12 +52,22 @@ export function NewProjectModal({ open, onOpenChange, onCreated, initialType = '
   const [selectedType, setSelectedType] = useState<EntityType>(initialType);
   const [name, setName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [isExperiment, setIsExperiment] = useState(false);
+  const [hypothesis, setHypothesis] = useState('');
+  const [successMetric, setSuccessMetric] = useState('');
+  const [variants, setVariants] = useState(2);
+  const [durationDays, setDurationDays] = useState(14);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
       setName('');
       setSelectedType(initialType);
+      setIsExperiment(false);
+      setHypothesis('');
+      setSuccessMetric('');
+      setVariants(2);
+      setDurationDays(14);
       setTimeout(() => inputRef.current?.focus(), 80);
     }
   }, [open, initialType]);
@@ -64,10 +76,14 @@ export function NewProjectModal({ open, onOpenChange, onCreated, initialType = '
     if (!name.trim() || isCreating) return;
     setIsCreating(true);
     try {
+      const body: Record<string, unknown> = { name: name.trim(), type: selectedType };
+      if (isExperiment) {
+        body.experiment = { hypothesis: hypothesis.trim(), successMetric: successMetric.trim(), variants, durationDays };
+      }
       const res = await fetch('/api/entities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), type: selectedType }),
+        body: JSON.stringify(body),
       });
       if (res.ok) {
         const entity = await res.json();
@@ -145,6 +161,74 @@ export function NewProjectModal({ open, onOpenChange, onCreated, initialType = '
             }}
           />
         </div>
+
+        {/* Experiment toggle */}
+        <div className="flex items-center gap-2 mt-2">
+          <Checkbox
+            id="experiment-toggle"
+            checked={isExperiment}
+            onCheckedChange={(v) => setIsExperiment(!!v)}
+          />
+          <Label htmlFor="experiment-toggle" className="flex items-center gap-1.5 cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            <FlaskConical className="h-4 w-4 text-violet-500" />
+            Setup as an experiment
+          </Label>
+        </div>
+
+        {/* Experiment fields */}
+        {isExperiment && (
+          <div className="rounded-xl border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-950/30 p-4 space-y-3">
+            <div>
+              <Label className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1 block">
+                Hypothesis
+              </Label>
+              <Input
+                placeholder="e.g. Changing the CTA color will increase clicks by 10%"
+                value={hypothesis}
+                onChange={(e) => setHypothesis(e.target.value)}
+                className="bg-white dark:bg-zinc-900 text-sm"
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1 block">
+                Success metric
+              </Label>
+              <Input
+                placeholder="e.g. Click-through rate, conversions"
+                value={successMetric}
+                onChange={(e) => setSuccessMetric(e.target.value)}
+                className="bg-white dark:bg-zinc-900 text-sm"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1 block">
+                  Number of variants
+                </Label>
+                <Input
+                  type="number"
+                  min={2}
+                  max={10}
+                  value={variants}
+                  onChange={(e) => setVariants(Math.max(2, parseInt(e.target.value) || 2))}
+                  className="bg-white dark:bg-zinc-900 text-sm"
+                />
+              </div>
+              <div>
+                <Label className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1 block">
+                  Duration (days)
+                </Label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={durationDays}
+                  onChange={(e) => setDurationDays(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="bg-white dark:bg-zinc-900 text-sm"
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Actions */}
         <div className="flex justify-end gap-2 mt-1">

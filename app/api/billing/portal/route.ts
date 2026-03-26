@@ -5,16 +5,18 @@ import { db } from '@/lib/db';
 import { subscriptions } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { stripe } from '@/lib/billing';
+import { getOrCreateOrganizationId } from '@/lib/organization';
 
 export async function POST() {
   try {
     const session = await auth.api.getSession({ headers: await headers() });
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+    const organizationId = await getOrCreateOrganizationId(session.user.id);
     const [sub] = await db
       .select()
       .from(subscriptions)
-      .where(eq(subscriptions.userId, session.user.id))
+      .where(eq(subscriptions.organizationId, organizationId))
       .limit(1);
 
     if (!sub?.stripeCustomerId) {

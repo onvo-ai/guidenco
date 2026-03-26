@@ -1,6 +1,7 @@
 import { auth } from '@/lib/auth';
 import { deleteEntity } from '@/lib/db/entities-service';
 import { headers } from 'next/headers';
+import { getOrCreateOrganizationId } from '@/lib/organization';
 
 export async function DELETE(
   req: Request,
@@ -13,7 +14,8 @@ export async function DELETE(
     }
 
     const { id } = await params;
-    await deleteEntity(id, session.user.id);
+    const organizationId = await getOrCreateOrganizationId(session.user.id);
+    await deleteEntity(id, organizationId);
     return Response.json({ success: true });
   } catch (error) {
     console.error('Error deleting entity:', error);

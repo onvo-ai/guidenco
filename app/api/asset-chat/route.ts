@@ -1,36 +1,55 @@
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { streamText, UIMessage, tool, stepCountIs } from 'ai';
 import { z } from 'zod';
-import { saveAssetMessage, upsertAsset, getAssetById } from '@/lib/db/entities-service';
-import { auth } from '@/lib/auth';
+import { saveAssetMessage, upsertAsset, getAssetById, getAssetVersionById, updateAssetVersionUsage } from '@/lib/db/entities-service';
 import { headers } from 'next/headers';
-import { getUserCredits, deductCreditsForUsage } from '@/lib/billing';
+import { getUserCredits, deductCreditsForUsage, TOKENS_PER_CREDIT } from '@/lib/billing';
+import { getOrCreateOrganizationId } from '@/lib/organization';
+import { getAuthenticatedUser } from '@/lib/request-auth';
 
 export const maxDuration = 60;
 const DEFAULT_SVG_MODEL = 'google/gemini-2.5-pro';
+const ALLOWED_MODELS = [
+  'google/gemini-3-flash-preview',
+  'google/gemini-3.1-flash-lite-preview',
+  'google/gemini-3.1-pro-preview',
+];
 
 export async function POST(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const assetId = searchParams.get('assetId');
+    const parentVersionId = searchParams.get('parentVersionId') ?? undefined;
 
     if (!assetId) return new Response('Asset ID required', { status: 400 });
 
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (!session) return new Response('Unauthorized', { status: 401 });
+    const currentUser = await getAuthenticatedUser(await headers());
+    if (!currentUser) return new Response('Unauthorized', { status: 401 });
+
+    const organizationId = await getOrCreateOrganizationId(currentUser.id);
 
     // Credit check — reject before touching the LLM
-    const creditBalance = await getUserCredits(session.user.id);
+    const creditBalance = await getUserCredits(organizationId);
     if (creditBalance <= 0) {
       return new Response('Insufficient credits', { status: 402 });
     }
 
-    const { messages }: { messages: UIMessage[] } = await req.json();
+    const { messages, prompt: directPrompt, parentPromptChain, model: requestModel }: { messages: UIMessage[]; prompt?: string; parentPromptChain?: string[]; model?: string } = await req.json();
 
     const lastUserMessage = messages[messages.length - 1];
+    // Resolve model: prefer request-provided model (if in allowed list), then env vars, then default
+    const requestedModel = requestModel && ALLOWED_MODELS.includes(requestModel) ? requestModel : null;
+    const configuredSvgModel = (process.env.SVG_MODEL || '').trim();
+    const configuredDefaultModel = (process.env.OPENROUTER_MODEL || '').trim();
+    const selectedConfiguredModel = configuredSvgModel || configuredDefaultModel;
+    const envModel = selectedConfiguredModel && !selectedConfiguredModel.includes('preview') ? selectedConfiguredModel : DEFAULT_SVG_MODEL;
+    const modelId = requestedModel ?? envModel;
+
     if (lastUserMessage?.role === 'user') {
-      await saveAssetMessage(assetId, 'user', lastUserMessage.parts || []);
+      await saveAssetMessage(assetId, 'user', lastUserMessage.parts || [], modelId);
     }
+
+    const userPrompt = directPrompt ?? (lastUserMessage?.parts?.find((p: any) => p.type === 'text') as any)?.text ?? '';
 
     const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
     if (!apiKey) {
@@ -38,21 +57,40 @@ export async function POST(req: Request) {
     }
 
     const openrouter = createOpenRouter({ apiKey });
-    const configuredSvgModel = (process.env.SVG_MODEL || '').trim();
-    const configuredDefaultModel = (process.env.OPENROUTER_MODEL || '').trim();
-    const selectedConfiguredModel = configuredSvgModel || configuredDefaultModel;
-    const modelId = selectedConfiguredModel.includes('preview') ? DEFAULT_SVG_MODEL : (selectedConfiguredModel || DEFAULT_SVG_MODEL);
+
+    // Accumulate token/credit usage across all steps
+    let totalTokens = 0;
+    let totalCredits = 0;
+    let savedVersionId: string | undefined;
+
+    // If branching from a parent version, get that version's SVG as context
+    let parentSvgContent: string | undefined;
+    if (parentVersionId) {
+      const parentVersion = await getAssetVersionById(parentVersionId);
+      parentSvgContent = parentVersion?.svgContent;
+    }
+
     const currentAsset = await getAssetById(assetId);
 
     const convertedMessages = messages.map((msg: any) => {
-      const textParts = (msg.parts || [])
-        .filter((p: any) => p.type === 'text')
-        .map((p: any) => ({ type: 'text' as const, text: p.text }));
+      const contentParts: any[] = (msg.parts || []).flatMap((p: any) => {
+        if (p.type === 'text') return [{ type: 'text' as const, text: p.text }];
+        if (p.type === 'file' && p.data && p.mimeType) {
+          // Strip data URL prefix to get raw base64
+          const base64 = p.data.includes(',') ? p.data.split(',')[1] : p.data;
+          return [{ type: 'image' as const, image: base64, mimeType: p.mimeType }];
+        }
+        return [];
+      });
       return {
         role: msg.role,
-        content: textParts.length > 0 ? textParts : [{ type: 'text' as const, text: '' }],
+        content: contentParts.length > 0 ? contentParts : [{ type: 'text' as const, text: '' }],
       };
     });
+
+    const chainContext = parentPromptChain && parentPromptChain.length > 0
+      ? `\n\nVERSION HISTORY CONTEXT:\nThis SVG branches from a prior version. The prompts used to create previous versions in this branch (oldest first):\n${parentPromptChain.map((p, i) => `${i + 1}. "${p}"`).join('\n')}\n\nUse this to understand the creative direction and evolve it accordingly.`
+      : '';
 
     const result = streamText({
       model: openrouter(modelId),
@@ -64,7 +102,7 @@ export async function POST(req: Request) {
           activeTools: ['saveSVG'],
           toolChoice: { type: 'tool' as const, toolName: 'saveSVG' as const },
         }),
-      system: `You are an expert SVG designer. Your job is to create high-quality, standalone SVG assets for the user.
+      system: `You are an expert SVG designer. Your job is to create high-quality, standalone SVG assets for the user.${chainContext}
 
 Guidelines:
 - Always output a complete, valid, self-contained SVG (starting with <svg ...> and ending with </svg>)
@@ -93,7 +131,8 @@ CRITICAL: Always end with a text explanation of what you created/changed.`,
           }),
           execute: async ({ svgContent, title }: { svgContent: string; title?: string }) => {
             try {
-              await upsertAsset(assetId, { svgContent, title, createVersion: true });
+              const result = await upsertAsset(assetId, { svgContent, title, createVersion: true, prompt: userPrompt, parentVersionId, model: modelId });
+              savedVersionId = (result as any).newVersionId;
               return { success: true, message: 'SVG saved successfully' };
             } catch (error: any) {
               console.error('Error saving SVG asset:', error);
@@ -105,23 +144,27 @@ CRITICAL: Always end with a text explanation of what you created/changed.`,
           description: 'Get the current SVG asset content so you can modify or improve it.',
           inputSchema: z.object({}),
           execute: async () => {
-            const asset = await getAssetById(assetId);
-            if (!asset) return { success: false, error: 'No SVG asset yet' };
+            const svgContent = parentSvgContent ?? (await getAssetById(assetId))?.svgContent;
+            if (!svgContent) return { success: false, error: 'No SVG asset yet' };
 
-            const image = `data:image/svg+xml;base64,${Buffer.from(asset.svgContent).toString('base64')}`;
+            const image = `data:image/svg+xml;base64,${Buffer.from(svgContent).toString('base64')}`;
 
             return {
               success: true,
-              title: asset.title || 'Current SVG Asset',
+              title: 'Current SVG Asset',
               image,
               mimeType: 'image/svg+xml',
-              message: asset.title ? `Inspecting asset: ${asset.title}` : 'Inspecting current asset...',
+              message: 'Inspecting current asset...',
             };
           },
         }),
       },
       onStepFinish: async ({ text, toolCalls, toolResults, finishReason, usage }) => {
-        await deductCreditsForUsage(session.user.id, usage).catch(() => {});
+        const stepTokens = (usage?.inputTokens ?? usage?.promptTokens ?? 0) + (usage?.outputTokens ?? usage?.completionTokens ?? 0);
+        const stepCredits = Math.max(1, Math.ceil(stepTokens / TOKENS_PER_CREDIT));
+        totalTokens += stepTokens;
+        totalCredits += stepCredits;
+        await deductCreditsForUsage(organizationId, usage).catch(() => { });
         try {
           const parts: any[] = [];
           if (toolCalls && toolResults) {
@@ -132,9 +175,14 @@ CRITICAL: Always end with a text explanation of what you created/changed.`,
             }
           }
           if (text) parts.push({ type: 'text', text });
-          if (parts.length > 0) await saveAssetMessage(assetId, 'assistant', parts);
+          if (parts.length > 0) await saveAssetMessage(assetId, 'assistant', parts, modelId);
         } catch (e) {
           console.error('Error saving asset message:', e);
+        }
+      },
+      onFinish: async () => {
+        if (savedVersionId && totalTokens > 0) {
+          await updateAssetVersionUsage(savedVersionId, totalTokens, totalCredits).catch(() => { });
         }
       },
     });
