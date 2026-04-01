@@ -106,7 +106,7 @@ function splitHtmlIntoPages(html: string): string[] {
 
 interface ChatInterfaceProps {
   entityId: string;
-  entityType?: 'document' | 'asset' | 'video';
+  entityType?: 'document' | 'asset' | 'video' | 'blog_article' | 'social_post';
   selectedPageIndex?: number;
   onDocumentUpdate?: () => void;
   onUpdate?: () => void;
@@ -999,8 +999,7 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                     const title = output?.title;
                     displayMessage = title ? `Inspecting asset: ${title}` : 'Inspecting asset...';
                   } else if (toolName === 'searchImage') {
-                    const searchQuery = input?.query || part.args?.query || output?.query;
-                    displayMessage = searchQuery ? `Searching for images: "${searchQuery}"` : 'Searching for images...';
+                    displayMessage = 'Searching Unsplash images';
                   } else if (toolName === 'getDocumentState') {
                     const actualPageIndex =
                       typeof output?.pageIndex === 'number'
@@ -1033,6 +1032,14 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                   } else if (toolName === 'getVideo') {
                     const title = output?.title;
                     displayMessage = title ? `Inspecting video: ${title}` : 'Inspecting current video...';
+                  } else if (toolName === 'searchPexelsVideos') {
+                    displayMessage = output?.success === false
+                      ? `Pexels video search failed: ${output?.error || 'unknown error'}`
+                      : 'Searching Pexels videos';
+                  } else if (toolName === 'searchPexelsImages') {
+                    displayMessage = output?.success === false
+                      ? `Pexels image search failed: ${output?.error || 'unknown error'}`
+                      : 'Searching Pexels images';
                   }
 
                   const hasImage = toolName === 'getDocumentState' && output?.image;
@@ -1042,10 +1049,26 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                     Array.isArray(output?.images) &&
                     output.images.length > 0;
 
+                  const hasPexelsVideos =
+                    toolName === 'searchPexelsVideos' &&
+                    output?.success &&
+                    Array.isArray(output?.videos) &&
+                    output.videos.length > 0;
+
+                  const hasPexelsImages =
+                    toolName === 'searchPexelsImages' &&
+                    output?.success &&
+                    Array.isArray(output?.images) &&
+                    output.images.length > 0;
+
+                  const searchQuery = ['searchImage', 'searchPexelsVideos', 'searchPexelsImages'].includes(toolName)
+                    ? (input?.query || part.args?.query || output?.query || null)
+                    : null;
+
                   return (
                     <div key={partIdx} className="w-full">
                       <div className="w-full rounded-md bg-zinc-100 dark:bg-zinc-800 px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span>
                             {toolName === 'createDocument' && '🎨'}
                             {toolName === 'writeHTML' && '✏️'}
@@ -1061,9 +1084,16 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                             {toolName === 'getSVG' && '🖼️'}
                             {toolName === 'saveVideo' && '🎬'}
                             {toolName === 'getVideo' && '👁️'}
-                            {!['createDocument', 'writeHTML', 'editHTML', 'writePagesHTML', 'getDocumentState', 'createPage', 'deletePage', 'searchImage', 'listAssets', 'inspectAsset', 'saveSVG', 'getSVG', 'saveVideo', 'getVideo'].includes(toolName) && '⚙️'}
+                            {toolName === 'searchPexelsVideos' && '🎥'}
+                            {toolName === 'searchPexelsImages' && '🔍'}
+                            {!['createDocument', 'writeHTML', 'editHTML', 'writePagesHTML', 'getDocumentState', 'createPage', 'deletePage', 'searchImage', 'listAssets', 'inspectAsset', 'saveSVG', 'getSVG', 'saveVideo', 'getVideo', 'searchPexelsVideos', 'searchPexelsImages'].includes(toolName) && '⚙️'}
                           </span>
                           <span className="font-medium">{displayMessage}</span>
+                          {searchQuery && (
+                            <span className="inline-flex items-center rounded-full bg-zinc-200 dark:bg-zinc-700 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                              &ldquo;{searchQuery}&rdquo;
+                            </span>
+                          )}
                         </div>
 
                         {hasImage && (
@@ -1084,6 +1114,60 @@ IMPORTANT: Only edit this specific element (matched by the CSS selector above). 
                                 const fullSrc = img?.url || img?.thumbnail;
                                 if (!thumbSrc) return null;
                                 const altText = img?.description || (typeof output?.query === 'string' ? output.query : 'Image option');
+                                return (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => { if (typeof fullSrc === 'string') window.open(fullSrc, '_blank', 'noopener,noreferrer'); }}
+                                    className="h-20 w-20 shrink-0 overflow-hidden rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                                    title={altText}
+                                  >
+                                    <img src={thumbSrc} alt={altText} className="h-full w-full object-cover" loading="lazy" />
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {hasPexelsVideos && (
+                          <div className="mt-2 overflow-x-auto">
+                            <div className="flex gap-2 pb-1">
+                              {output.videos.map((vid: any, idx: number) => {
+                                const thumbSrc = vid?.thumbnail;
+                                const fullSrc = vid?.url;
+                                if (!thumbSrc) return null;
+                                const altText = vid?.photographer ? `Video by ${vid.photographer}` : 'Pexels video';
+                                return (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => { if (typeof vid?.pexelsUrl === 'string') window.open(vid.pexelsUrl, '_blank', 'noopener,noreferrer'); }}
+                                    className="relative h-20 w-32 shrink-0 overflow-hidden rounded border border-zinc-200 dark:border-zinc-700 bg-zinc-900"
+                                    title={altText}
+                                  >
+                                    <img src={thumbSrc} alt={altText} className="h-full w-full object-cover opacity-80" loading="lazy" />
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                      <span className="text-white text-lg drop-shadow">▶</span>
+                                    </div>
+                                    {vid?.duration && (
+                                      <span className="absolute bottom-1 right-1 text-[10px] text-white bg-black/60 rounded px-1">{vid.duration}s</span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {hasPexelsImages && (
+                          <div className="mt-2 overflow-x-auto">
+                            <div className="flex gap-2 pb-1">
+                              {output.images.map((img: any, idx: number) => {
+                                const thumbSrc = img?.mediumUrl || img?.largeUrl || img?.url;
+                                const fullSrc = img?.url;
+                                if (!thumbSrc) return null;
+                                const altText = img?.alt || (img?.photographer ? `Photo by ${img.photographer}` : 'Pexels image');
                                 return (
                                   <button
                                     key={idx}

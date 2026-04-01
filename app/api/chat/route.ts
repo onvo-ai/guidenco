@@ -1,16 +1,16 @@
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { streamText, convertToModelMessages, UIMessage, tool, stepCountIs } from 'ai';
+import { streamText, UIMessage, tool, stepCountIs } from 'ai';
 import { z } from 'zod';
 import { createOrUpdateDocument, getDocumentById, saveDocumentMessage } from '@/lib/db/entities-service';
 import { resizeImage } from '@/lib/image-processing';
-import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
-import { brandAssets, teams, teamMembers, agentSettings } from '@/lib/db/schema';
+import { brandAssets, agentSettings } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
-import { getUserCredits, deductCredit } from '@/lib/billing';
+import { getUserCredits, deductCreditsForUsage } from '@/lib/billing';
 import { getFileBuffer } from '@/lib/storage';
-import { users } from '@/lib/db/schema';
+import { getOrCreateOrganizationId, getOrganizationId } from '@/lib/organization';
+import { getAuthenticatedUser } from '@/lib/request-auth';
 
 export const maxDuration = 60;
 
@@ -47,49 +47,16 @@ function clampPageIndex(pageIndex: number, pageCount: number): number {
 }
 
 async function getUserTeamAndAgentSettings(userId: string) {
-  // Check if user is a team owner
-  const ownedTeam = await db
-    .select()
-    .from(teams)
-    .where(eq(teams.ownerId, userId))
-    .limit(1);
+  const organizationId = await getOrCreateOrganizationId(userId);
 
-  let team;
-  if (ownedTeam.length > 0) {
-    team = ownedTeam[0];
-  } else {
-    // Check if user is a member of a team
-    const membership = await db
-      .select({ team: teams })
-      .from(teamMembers)
-      .innerJoin(teams, eq(teamMembers.teamId, teams.id))
-      .where(eq(teamMembers.userId, userId))
-      .limit(1);
-
-    if (membership.length > 0) {
-      team = membership[0].team;
-    } else {
-      // Create a default team for this user
-      const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-      const teamName = user[0]?.name ? `${user[0].name}'s Team` : 'My Team';
-
-      const [newTeam] = await db
-        .insert(teams)
-        .values({ name: teamName, ownerId: userId })
-        .returning();
-      team = newTeam;
-    }
-  }
-
-  // Get agent settings for this team
   const agentData = await db
     .select()
     .from(agentSettings)
-    .where(eq(agentSettings.teamId, team.id))
+    .where(eq(agentSettings.organizationId, organizationId))
     .limit(1);
 
   return {
-    team,
+    organizationId,
     designGuidelines: agentData[0]?.designGuidelines || ''
   };
 }
@@ -120,18 +87,18 @@ export async function POST(req: Request) {
   const modelId = (process.env.OPENROUTER_MODEL || '').trim() || 'google/gemini-2.5-pro';
 
   // Get session and agent settings
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) {
+  const currentUser = await getAuthenticatedUser(await headers());
+  if (!currentUser) {
     return new Response('Unauthorized', { status: 401 });
   }
 
+  const { organizationId, designGuidelines } = await getUserTeamAndAgentSettings(currentUser.id);
+
   // Credit check — reject before touching the LLM
-  const creditBalance = await getUserCredits(session.user.id);
+  const creditBalance = await getUserCredits(organizationId);
   if (creditBalance <= 0) {
     return new Response('Insufficient credits', { status: 402 });
   }
-
-  const { designGuidelines } = await getUserTeamAndAgentSettings(session.user.id);
 
   // Manually convert messages to handle images properly
   const convertedMessages = await Promise.all(messages.map(async (msg: any) => {
@@ -798,21 +765,10 @@ Always use the tools to create the document. The user will see the visual output
         inputSchema: z.object({}),
         execute: async () => {
           try {
-            const session = await auth.api.getSession({ headers: await headers() });
-            if (!session) return { success: false, error: 'Not authenticated', assets: [] };
+            const organizationId = await getOrganizationId(currentUser.id);
+            if (!organizationId) return { success: true, assets: [], message: 'No organization found — no assets available.' };
 
-            const userId = session.user.id;
-            const ownedTeam = await db.select({ id: teams.id }).from(teams).where(eq(teams.ownerId, userId)).limit(1);
-            let teamId = ownedTeam[0]?.id;
-
-            if (!teamId) {
-              const membership = await db.select({ teamId: teamMembers.teamId }).from(teamMembers).where(eq(teamMembers.userId, userId)).limit(1);
-              teamId = membership[0]?.teamId;
-            }
-
-            if (!teamId) return { success: true, assets: [], message: 'No team found — no assets available.' };
-
-            const teamAssets = await db.select().from(brandAssets).where(eq(brandAssets.teamId, teamId));
+            const teamAssets = await db.select().from(brandAssets).where(eq(brandAssets.organizationId, organizationId));
             return {
               success: true,
               assets: teamAssets.map(a => ({
@@ -871,10 +827,9 @@ Always use the tools to create the document. The user will see the visual output
       }),
     },
     onStepFinish: async ({ text, toolCalls, toolResults, finishReason, usage }) => {
-      // Deduct 1 credit on the final step
-      if (finishReason === 'stop' || finishReason === 'length') {
-        await deductCredit(session.user.id).catch(() => {});
-      }
+      // Deduct credits on every step based on actual token usage.
+      // Charging per step (not just final) ensures tool-call steps are counted too.
+      await deductCreditsForUsage(organizationId, usage).catch(() => { });
       // Save each step as a separate message for better timeline
       try {
         const parts: any[] = [];

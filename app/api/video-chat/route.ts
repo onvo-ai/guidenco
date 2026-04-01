@@ -1,17 +1,32 @@
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { streamText, UIMessage, tool, stepCountIs } from 'ai';
 import { z } from 'zod';
-import { getVideoMessages, saveVideoMessage, upsertVideo, getVideoById } from '@/lib/db/entities-service';
+import { saveVideoMessage, upsertVideo, getVideoById, getVideoVersionById } from '@/lib/db/entities-service';
 import { resizeImage } from '@/lib/image-processing';
-import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
-import { getUserCredits, deductCredit } from '@/lib/billing';
+import { getUserCredits, deductCreditsForUsage } from '@/lib/billing';
+import { getOrCreateOrganizationId } from '@/lib/organization';
+import { getAuthenticatedUser } from '@/lib/request-auth';
 
 export const maxDuration = 60;
 
 function toDataUri(image: string, mimeType: string) {
   if (!image) return image;
   return image.startsWith('data:') ? image : `data:${mimeType};base64,${image}`;
+}
+
+function findNativeVideoTag(remotionCode: string): string | null {
+  // Detect native <video> HTML tags (not Remotion components)
+  const nativeVideoRegex = /<video[\s>]/gi;
+  if (nativeVideoRegex.test(remotionCode)) {
+    return 'native <video> tag';
+  }
+  // Detect Remotion <Video> (Html5Video) — should use <OffthreadVideo> instead
+  const remotionVideoRegex = /<Video[\s/>]/g;
+  if (remotionVideoRegex.test(remotionCode)) {
+    return '<Video> component (Html5Video)';
+  }
+  return null;
 }
 
 function findInvalidImageSource(remotionCode: string) {
@@ -22,6 +37,9 @@ function findInvalidImageSource(remotionCode: string) {
     const src = match[1]?.trim();
     if (!src) continue;
     if (src.startsWith('data:') || src.startsWith('blob:')) continue;
+
+    const isPexels = src.includes('images.pexels.com') || src.includes('videos.pexels.com') || src.includes('player.vimeo.com');
+    if (isPexels) continue;
 
     if (
       src.startsWith('http://localhost')
@@ -43,23 +61,35 @@ function findInvalidImageSource(remotionCode: string) {
 export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
   const videoId = searchParams.get('videoId');
+  const parentVersionId = searchParams.get('parentVersionId') ?? undefined;
 
   if (!videoId) return new Response('Video ID required', { status: 400 });
 
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return new Response('Unauthorized', { status: 401 });
+  const currentUser = await getAuthenticatedUser(await headers());
+  if (!currentUser) return new Response('Unauthorized', { status: 401 });
+
+  const organizationId = await getOrCreateOrganizationId(currentUser.id);
 
   // Credit check — reject before touching the LLM
-  const creditBalance = await getUserCredits(session.user.id);
+  const creditBalance = await getUserCredits(organizationId);
   if (creditBalance <= 0) {
     return new Response('Insufficient credits', { status: 402 });
   }
 
-  const { messages }: { messages: UIMessage[] } = await req.json();
+  const { messages, prompt: directPrompt, parentPromptChain }: { messages: UIMessage[]; prompt?: string; parentPromptChain?: string[] } = await req.json();
 
   const lastUserMessage = messages[messages.length - 1];
   if (lastUserMessage?.role === 'user') {
     await saveVideoMessage(videoId, 'user', lastUserMessage.parts || []);
+  }
+
+  const userPrompt = directPrompt ?? (lastUserMessage?.parts?.find((p: any) => p.type === 'text') as any)?.text ?? '';
+
+  // If branching from a parent version, get that version's code as context
+  let parentRemotionCode: string | undefined;
+  if (parentVersionId) {
+    const parentVersion = await getVideoVersionById(parentVersionId);
+    parentRemotionCode = parentVersion?.remotionCode;
   }
 
   // Load current video settings for context
@@ -128,12 +158,16 @@ export async function POST(req: Request) {
     };
   }));
 
+  const chainContext = parentPromptChain && parentPromptChain.length > 0
+    ? `\n\nVERSION HISTORY CONTEXT:\nThis video branches from a prior version. The prompts used to create previous versions in this branch (oldest first):\n${parentPromptChain.map((p, i) => `${i + 1}. "${p}"`).join('\n')}\n\nUse this to understand the creative direction and evolve it accordingly.`
+    : '';
+
   const videoContext = currentVideo
     ? `Current video settings: ${currentVideo.width}x${currentVideo.height}, ${currentVideo.durationInFrames} frames at ${currentVideo.fps} fps (${(currentVideo.durationInFrames / currentVideo.fps).toFixed(1)}s)`
     : 'No video configured yet. The user will provide dimensions and duration.';
 
   const systemPrompt = [
-    'You are an expert Remotion video developer. Your job is to create stunning, production-quality Remotion video compositions for the user.',
+    `You are an expert Remotion video developer. Your job is to create stunning, production-quality Remotion video compositions for the user.${chainContext}`,
     '',
     videoContext,
     '',
@@ -146,13 +180,22 @@ export async function POST(req: Request) {
     '- `AbsoluteFill` for full-canvas layers',
     '- Standard CSS-in-JS for styling (inline styles or CSS modules)',
     '',
-    'When generating Remotion code:',
-    '1. Use the `saveVideo` tool to save the Remotion component code',
-    '2. The code should be a complete React component named `MainComposition`',
-    "3. Import only from 'remotion' (the package will be available)",
-    '4. Use inline styles — no external CSS files',
-    '5. Create visually impressive animations with smooth easing',
-    '6. Think about: text animations, shape morphing, color transitions, particle effects, etc.',
+    'You have access to Pexels stock media:',
+    '- Use `searchPexelsVideos` to find stock video clips by keyword',
+    '- Use `searchPexelsImages` to find stock photos/images by keyword',
+    '- Pexels video URLs MUST be used in Remotion <OffthreadVideo> components (NOT <Video> or native <video> tags)',
+    '- Pexels image URLs MUST be used in Remotion <Img> components (NOT native <img> tags)',
+    '- Always attribute Pexels in a comment in the code when using their media',
+    '',
+    'When generating or editing Remotion code:',
+    '1. If the user wants to EDIT or MODIFY the existing video, first call `getVideo` to retrieve the current code, then make the requested changes and call `saveVideo` with the updated code.',
+    '2. If the user wants to CREATE a new video from scratch, call `saveVideo` directly with the new code.',
+    '3. Use the `saveVideo` tool to save the Remotion component code — each save automatically creates a new version.',
+    '4. The code should be a complete React component named `MainComposition`',
+    "5. Import only from 'remotion' (the package will be available)",
+    '6. Use inline styles — no external CSS files',
+    '7. Create visually impressive animations with smooth easing',
+    '8. Think about: text animations, shape morphing, color transitions, particle effects, etc.',
     '',
     'When the user references uploaded or tagged assets:',
     '- You may receive image inputs and reference URLs in chat context.',
@@ -163,7 +206,7 @@ export async function POST(req: Request) {
     '',
     'Code format expected:',
     '```tsx',
-    "import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, spring, Sequence } from 'remotion';",
+    "import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, spring, Sequence, OffthreadVideo, Img, Audio } from 'remotion';",
     '',
     'export const MainComposition: React.FC = () => {',
     '  const frame = useCurrentFrame();',
@@ -182,6 +225,13 @@ export async function POST(req: Request) {
     '- The component MUST be named `MainComposition` and exported as named export',
     '- Do NOT include any JSX pragma or React import (React is available globally)',
     '- Do NOT call `registerRoot` or `Composition` — just export the component',
+    '',
+    'ANTI-FLICKERING RULES (critical for correct video rendering):',
+    '- ALL animations MUST be derived purely from `useCurrentFrame()`. Never use CSS animations, CSS transitions, `setTimeout`, `setInterval`, `requestAnimationFrame`, or any time-based state — these cause flickering because Remotion renders frames in parallel tabs.',
+    '- ALWAYS use `<OffthreadVideo>` for video content (backgrounds, overlays, etc.) — NEVER use `<Video>` (Html5Video) or native `<video>` HTML tags. `<OffthreadVideo>` renders each frame independently and is the only way to get flicker-free video backgrounds.',
+    '- ALWAYS use `<Img>` from remotion for images — NEVER use native `<img>` HTML tags. `<Img>` blocks rendering until the asset is loaded, preventing blank frames.',
+    '- NEVER use CSS `background-image` with external URLs — use `<Img>` or `<OffthreadVideo>` components instead so Remotion can wait for the asset.',
+    '- NEVER use `Math.random()` or any non-deterministic values — use `random()` from remotion with a stable seed instead.',
     '',
     'After saving, briefly describe what you created.',
   ].join('\n');
@@ -219,6 +269,14 @@ export async function POST(req: Request) {
               };
             }
 
+            const invalidVideoTag = findNativeVideoTag(remotionCode);
+            if (invalidVideoTag) {
+              return {
+                success: false,
+                error: `Flickering-prone video tag detected: ${invalidVideoTag}. Always use <OffthreadVideo> from 'remotion' for video backgrounds and overlays — it renders each frame independently and prevents flickering. Replace with <OffthreadVideo src="..." /> and import OffthreadVideo from 'remotion'.`,
+              };
+            }
+
             await upsertVideo(videoId, {
               remotionCode,
               ...(title && { title }),
@@ -227,6 +285,9 @@ export async function POST(req: Request) {
               ...(durationInFrames && { durationInFrames }),
               ...(fps && { fps }),
               status: 'pending',
+              prompt: userPrompt,
+              parentVersionId,
+              model: modelId,
             });
 
             return { success: true, message: 'Video code saved. The video will be available to render.' };
@@ -242,9 +303,11 @@ export async function POST(req: Request) {
           const video = await getVideoById(videoId);
           if (!video) return { success: false, error: 'No video yet' };
 
+          const remotionCode = parentRemotionCode ?? video.remotionCode;
+
           return {
             success: true,
-            remotionCode: video.remotionCode,
+            remotionCode,
             title: video.title,
             width: video.width,
             height: video.height,
@@ -253,11 +316,81 @@ export async function POST(req: Request) {
           };
         },
       }),
+      searchPexelsVideos: tool({
+        description: 'Search for stock videos on Pexels to use in the video composition. Returns video URLs and metadata.',
+        inputSchema: z.object({
+          query: z.string().describe('Search query for finding relevant stock videos'),
+          count: z.number().min(1).max(10).optional().describe('Number of results to return (default: 5, max: 10)'),
+        }),
+        execute: async ({ query, count = 5 }: { query: string; count?: number }) => {
+          const apiKey = process.env.PEXELS_API_KEY;
+          if (!apiKey) return { success: false, error: 'Pexels API key not configured' };
+
+          try {
+            const url = `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=${Math.min(count, 10)}`;
+            const res = await fetch(url, { headers: { Authorization: apiKey } });
+            if (!res.ok) return { success: false, error: `Pexels API error: ${res.status}` };
+
+            const data = await res.json() as any;
+            const videos = (data.videos || []).map((v: any) => {
+              const bestFile = (v.video_files || [])
+                .filter((f: any) => f.file_type === 'video/mp4')
+                .sort((a: any, b: any) => (b.width || 0) - (a.width || 0))[0];
+              return {
+                id: v.id,
+                url: bestFile?.link || null,
+                width: bestFile?.width || v.width,
+                height: bestFile?.height || v.height,
+                duration: v.duration,
+                thumbnail: v.image,
+                photographer: v.user?.name,
+                pexelsUrl: v.url,
+              };
+            }).filter((v: any) => v.url);
+
+            return { success: true, videos };
+          } catch (error: any) {
+            return { success: false, error: error.message };
+          }
+        },
+      }),
+      searchPexelsImages: tool({
+        description: 'Search for stock photos/images on Pexels to use in the video composition. Returns image URLs and metadata.',
+        inputSchema: z.object({
+          query: z.string().describe('Search query for finding relevant stock images'),
+          count: z.number().min(1).max(10).optional().describe('Number of results to return (default: 5, max: 10)'),
+        }),
+        execute: async ({ query, count = 5 }: { query: string; count?: number }) => {
+          const apiKey = process.env.PEXELS_API_KEY;
+          if (!apiKey) return { success: false, error: 'Pexels API key not configured' };
+
+          try {
+            const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${Math.min(count, 10)}`;
+            const res = await fetch(url, { headers: { Authorization: apiKey } });
+            if (!res.ok) return { success: false, error: `Pexels API error: ${res.status}` };
+
+            const data = await res.json() as any;
+            const images = (data.photos || []).map((p: any) => ({
+              id: p.id,
+              url: p.src?.original || null,
+              largeUrl: p.src?.large2x || p.src?.large || null,
+              mediumUrl: p.src?.medium || null,
+              width: p.width,
+              height: p.height,
+              photographer: p.photographer,
+              alt: p.alt,
+              pexelsUrl: p.url,
+            }));
+
+            return { success: true, images };
+          } catch (error: any) {
+            return { success: false, error: error.message };
+          }
+        },
+      }),
     },
-    onStepFinish: async ({ text, toolCalls, toolResults, finishReason }) => {
-      if (finishReason === 'stop' || finishReason === 'length') {
-        await deductCredit(session.user.id).catch(() => {});
-      }
+    onStepFinish: async ({ text, toolCalls, toolResults, finishReason, usage }) => {
+      await deductCreditsForUsage(organizationId, usage).catch(() => { });
       try {
         const parts: any[] = [];
         if (toolCalls && toolResults) {

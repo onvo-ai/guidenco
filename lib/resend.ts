@@ -15,14 +15,17 @@ export async function sendInviteEmail({
   toName,
   inviterName,
   teamName,
+  inviteLink,
 }: {
   to: string;
   toName?: string;
   inviterName: string;
   teamName: string;
+  inviteLink?: string;
 }): Promise<void> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-  const signUpUrl = `${appUrl}/auth/sign-up`;
+  const defaultSignUpUrl = `${appUrl}/auth/sign-up`;
+  const actionUrl = inviteLink || defaultSignUpUrl;
 
   await transporter.sendMail({
     from: process.env.SMTP_FROM || `"Guidenco" <noreply@guidenco.com>`,
@@ -37,11 +40,11 @@ export async function sendInviteEmail({
     <p style="color: #6b7280; margin: 0 0 24px;">
       <strong style="color: #111827;">${inviterName}</strong> has invited ${toName ? `<strong style="color: #111827;">${toName}</strong>` : 'you'} to join the <strong style="color: #111827;">${teamName}</strong> team on Guidenco.
     </p>
-    <a href="${signUpUrl}" style="display: inline-block; background: #2563eb; color: #fff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 15px;">
+    <a href="${actionUrl}" style="display: inline-block; background: #2563eb; color: #fff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 15px;">
       Accept Invitation
     </a>
     <p style="color: #9ca3af; font-size: 13px; margin: 24px 0 0;">
-      Sign up with this email address (<strong>${to}</strong>) and you'll automatically be added to the team.
+      Sign in or sign up with this email address (<strong>${to}</strong>) to accept the invitation.
     </p>
   </div>
 </body>
