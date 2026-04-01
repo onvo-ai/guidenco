@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { EntitySummary } from '@/lib/types';
 import { VersionFlowCanvas, VersionNode } from '@/components/version-flow-canvas';
+import { Experiment } from '@/components/experiment-details-card';
 
 export default function BlogArticlePage() {
   const params = useParams();
@@ -13,11 +14,13 @@ export default function BlogArticlePage() {
   const [currentEntity, setCurrentEntity] = useState<EntitySummary | null>(null);
   const [versions, setVersions] = useState<VersionNode[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [experiment, setExperiment] = useState<Experiment | null>(null);
 
   useEffect(() => {
     if (articleId) {
       loadEntity();
       loadArticle();
+      loadExperiment();
     }
   }, [articleId]);
 
@@ -49,11 +52,36 @@ export default function BlogArticlePage() {
           timestamp: v.timestamp,
           prompt: v.prompt,
           parentVersionId: v.parentVersionId,
+          model: v.model,
+          tokenCount: v.tokenCount,
+          creditCount: v.creditCount,
+          metric: v.metric,
+          parameters: v.parameters,
         }));
         setVersions(vs);
       }
     } catch (e) {
       console.error('Error loading article:', e);
+    }
+  }, [articleId]);
+
+  const loadExperiment = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/experiments?entityId=${articleId}`);
+      if (res.ok) {
+        const experiments = await res.json();
+        if (experiments && experiments.length > 0) {
+          const exp = experiments[0];
+          setExperiment({
+            ...exp,
+            parameters: exp.parameters || [],
+          });
+        } else {
+          setExperiment(null);
+        }
+      }
+    } catch (e) {
+      console.error('Error loading experiment:', e);
     }
   }, [articleId]);
 
@@ -75,6 +103,7 @@ export default function BlogArticlePage() {
         onUpdate={loadArticle}
         isGenerating={isGenerating}
         onGeneratingChange={setIsGenerating}
+        experiment={experiment}
       />
     </div>
   );

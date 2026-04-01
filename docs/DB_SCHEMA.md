@@ -131,6 +131,10 @@ erDiagram
         text google_fonts
         text prompt
         uuid parent_version_id
+        text model
+        integer token_count
+        integer credit_count
+        text status
         timestamp created_at
     }
 
@@ -160,9 +164,12 @@ erDiagram
         text title
         integer width
         integer height
-        text url
         text prompt
         uuid parent_version_id
+        text model
+        integer token_count
+        integer credit_count
+        text status
         timestamp created_at
     }
 
@@ -232,6 +239,10 @@ erDiagram
         text url
         text prompt
         uuid parent_version_id
+        text model
+        integer token_count
+        integer credit_count
+        text status
         timestamp created_at
     }
 
@@ -265,6 +276,9 @@ erDiagram
         text url
         text prompt
         uuid parent_version_id
+        text model
+        integer token_count
+        integer credit_count
         timestamp created_at
     }
 
@@ -355,9 +369,16 @@ erDiagram
         text organization_id FK
         uuid entity_id
         text entity_type
+        text name
         integer max_depth
         integer max_iterations
         timestamp time_limit
+        timestamp start_date
+        timestamp end_date
+        integer check_in_interval
+        text goal_metric
+        integer current_iteration
+        jsonb scores
         text status
         timestamp created_at
         timestamp updated_at

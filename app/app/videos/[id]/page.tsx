@@ -47,6 +47,8 @@ export default function VideosPage() {
             prompt: v.prompt,
             parentVersionId: v.parentVersionId,
             model: v.model,
+            tokenCount: v.tokenCount,
+            creditCount: v.creditCount,
             videoUrl: v.videoUrl,
             videoStatus: v.status,
         }));

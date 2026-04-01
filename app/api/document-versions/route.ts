@@ -3,6 +3,9 @@ import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { getDocumentById, updateDocumentVersionStatus } from '@/lib/db/entities-service';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -13,7 +16,13 @@ export async function GET(req: NextRequest) {
   const document = await getDocumentById(documentId);
   if (!document) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-  return NextResponse.json(document);
+  return NextResponse.json(document, {
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+    },
+  });
 }
 
 export async function PATCH(req: NextRequest) {

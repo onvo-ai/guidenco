@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { EntitySummary } from '@/lib/types';
 import { VersionFlowCanvas, VersionNode } from '@/components/version-flow-canvas';
+import { Experiment } from '@/components/experiment-details-card';
 
 export default function AssetsPage() {
     const params = useParams();
@@ -13,11 +14,13 @@ export default function AssetsPage() {
     const [currentEntity, setCurrentEntity] = useState<EntitySummary | null>(null);
     const [versions, setVersions] = useState<VersionNode[]>([]);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [experiment, setExperiment] = useState<Experiment | null>(null);
 
     useEffect(() => {
         if (assetId) {
             loadEntity();
             loadAsset();
+            loadExperiment();
         }
     }, [assetId]);
 
@@ -60,6 +63,24 @@ export default function AssetsPage() {
         }
     }, [assetId]);
 
+    const loadExperiment = useCallback(async () => {
+        try {
+            const res = await fetch(`/api/experiments?entityId=${assetId}`);
+            if (res.ok) {
+                const experiments = await res.json();
+                if (experiments && experiments.length > 0) {
+                    const exp = experiments[0];
+                    setExperiment({
+                        ...exp,
+                        parameters: exp.parameters || [],
+                    });
+                }
+            }
+        } catch (e) {
+            console.error('Error loading experiment:', e);
+        }
+    }, [assetId]);
+
     if (!currentEntity) {
         return (
             <div className="flex items-center justify-center h-full">
@@ -78,6 +99,7 @@ export default function AssetsPage() {
                 onUpdate={loadAsset}
                 isGenerating={isGenerating}
                 onGeneratingChange={setIsGenerating}
+                experiment={experiment}
             />
         </div>
     );

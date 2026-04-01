@@ -1,6 +1,5 @@
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { streamText, UIMessage, tool, stepCountIs } from "ai";
-import { z } from "zod";
+import { tool } from 'ai';
+import { z } from 'zod';
 import {
   createOrUpdateDocument,
   getDocumentById,
@@ -8,19 +7,25 @@ import {
   createPendingDocumentVersion,
   updateDocumentVersionContent,
   updateDocumentVersionStatus,
-} from "@/lib/db/entities-service";
-import { resizeImage } from "@/lib/image-processing";
-import { headers } from "next/headers";
-import { db } from "@/lib/db";
-import { brandAssets, agentSettings } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
-import { getUserCredits, deductCreditsForUsage } from "@/lib/billing";
-import { getFileBuffer } from "@/lib/storage";
-import { getOrCreateOrganizationId } from "@/lib/organization";
-import { getAuthenticatedUser } from "@/lib/request-auth";
+  updateDocumentVersionUsage,
+} from '@/lib/db/entities-service';
+import { resizeImage } from '@/lib/image-processing';
+import { db } from '@/lib/db';
+import { brandAssets, agentSettings } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
+import { getFileBuffer } from '@/lib/storage';
+import { createEntityChatHandler } from '@/lib/chat/entity-chat-handler';
 
 export const maxDuration = 60;
 
+const DEFAULT_MODEL = 'google/gemini-3-flash-preview';
+const ALLOWED_MODELS = [
+  'google/gemini-3-flash-preview',
+  'google/gemini-3.1-flash-lite-preview',
+  'google/gemini-3.1-pro-preview',
+];
+
+// Module-level maps persist across tool calls within the same request (same module scope)
 const tempDimensions = new Map<string, { width: number; height: number }>();
 const tempPageCounts = new Map<string, number>();
 
@@ -53,155 +58,28 @@ function toDataUri(image: string, mimeType: string) {
   return image.startsWith("data:") ? image : `data:${mimeType};base64,${image}`;
 }
 
-async function getUserTeamAndAgentSettings(userId: string) {
-  const organizationId = await getOrCreateOrganizationId(userId);
-  const agentData = await db
-    .select()
-    .from(agentSettings)
-    .where(eq(agentSettings.organizationId, organizationId))
-    .limit(1);
-  return {
-    organizationId,
-    designGuidelines: agentData[0]?.designGuidelines || "",
-  };
-}
-
-export async function POST(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const documentId = searchParams.get("documentId");
-  const parentVersionId = searchParams.get("parentVersionId") ?? undefined;
-
-  if (!documentId) return new Response("Document ID required", { status: 400 });
-
-  const currentUser = await getAuthenticatedUser(await headers());
-  if (!currentUser) return new Response("Unauthorized", { status: 401 });
-
-  const { organizationId, designGuidelines } =
-    await getUserTeamAndAgentSettings(currentUser.id);
-
-  const creditBalance = await getUserCredits(organizationId);
-  if (creditBalance <= 0)
-    return new Response("Insufficient credits", { status: 402 });
-
-  const {
-    messages,
-    prompt: directPrompt,
-    parentPromptChain,
-  }: {
-    messages: UIMessage[];
-    prompt?: string;
-    parentPromptChain?: string[];
-  } = await req.json();
-
-  const lastUserMessage = messages[messages.length - 1];
-  const userPrompt =
-    directPrompt ??
-    (lastUserMessage?.parts?.find((p: any) => p.type === "text") as any)
-      ?.text ??
-    "";
-
-  const modelId =
-    (process.env.OPENROUTER_MODEL || "").trim() || "google/gemini-2.5-pro";
-
-  // Resolve the version ID to associate messages with
-  const currentDoc = await getDocumentById(documentId);
-  let activeVersionId: string | undefined =
-    parentVersionId ?? currentDoc?.versions[currentDoc.currentVersion]?.id;
-  let latestVersionId: string | undefined = activeVersionId;
-  let pendingVersionId: string | undefined;
-
-  // If no version exists yet (new document), create a pending version so the user message has somewhere to live
-  if (!activeVersionId) {
-    const { versionId } = await createPendingDocumentVersion(documentId, {
-      prompt: userPrompt,
-      parentVersionId,
-      model: modelId,
-    });
-    activeVersionId = versionId;
-    latestVersionId = versionId;
-    pendingVersionId = versionId;
-  }
-
-  if (lastUserMessage?.role === "user" && activeVersionId) {
-    await saveDocumentMessage(
-      activeVersionId,
-      "user",
-      lastUserMessage.parts || [],
-    ).catch(() => {});
-  }
-
-  // Get parent version HTML for branching context
-  let parentHtml: string | undefined;
-  let parentGoogleFonts: string[] = [];
-  if (parentVersionId) {
-    const parentVer = currentDoc?.versions.find(
-      (v) => v.id === parentVersionId,
-    );
-    if (parentVer) {
-      parentHtml = parentVer.html;
-      parentGoogleFonts = parentVer.googleFonts || [];
-    }
-  }
-
-  const convertedMessages = await Promise.all(
-    messages.map(async (msg: any) => {
-      const content: any[] = [];
-      for (const part of msg.parts || []) {
-        if (part.type === "text") {
-          content.push({ type: "text", text: part.text });
-        } else if (part.type === "image") {
-          const mimeType = part.mimeType || "image/png";
-          if (mimeType === "image/svg+xml") {
-            content.push({
-              type: "text",
-              text: part.fileUrl
-                ? `[SVG reference provided. Use this asset URL if needed: ${part.fileUrl}]`
-                : "[SVG reference provided in chat context.]",
-            });
-            if (typeof part.image === "string" && part.image.length > 0) {
-              content.push({
-                type: "text",
-                text: `[SVG content preview]\n\n${part.image.slice(0, 4000)}`,
-              });
-            }
-            continue;
-          }
-          let imageContent = toDataUri(part.image, mimeType);
-          try {
-            imageContent = await resizeImage(imageContent);
-          } catch (e) {
-            console.error("Failed to resize image:", e);
-          }
-          content.push({ type: "image", image: imageContent, mimeType });
-          if (part.fileUrl) {
-            content.push({
-              type: "text",
-              text: `[Image uploaded to Design Warehouse. Permanent URL: ${part.fileUrl} — use this URL in <img src="..."> tags when embedding this image in document.]`,
-            });
-          }
-        }
-      }
-      return {
-        role: msg.role,
-        content: content.length > 0 ? content : [{ type: "text", text: "" }],
-      };
-    }),
-  );
-
-  const openrouter = createOpenRouter({
-    apiKey: process.env.OPENROUTER_API_KEY,
-  });
-
-  const chainContext =
-    parentPromptChain && parentPromptChain.length > 0
-      ? `\n\nVERSION HISTORY CONTEXT:\nThis version branches from a prior generation. The prompts used to create previous versions in this branch (oldest first) were:\n${parentPromptChain.map((p, i) => `${i + 1}. "${p}"`).join("\n")}\n\nBuild upon this creative direction.`
-      : "";
-
-  const result = streamText({
-    model: openrouter(modelId),
-    messages: convertedMessages as any,
-    stopWhen: stepCountIs(5),
-    system: `You are an AI assistant that helps users create digital assets using HTML, Tailwind CSS, and FontAwesome icons.${chainContext}
+export const POST = createEntityChatHandler({
+  entityIdParam: 'documentId',
+  defaultModel: DEFAULT_MODEL,
+  allowedModels: ALLOWED_MODELS,
+  maxSteps: 5,
+  messageConversionMode: 'image-aware',
+  messageConversionLabel: 'document',
+  fetchOrgData: async (organizationId) => {
+    const agentData = await db.select().from(agentSettings).where(eq(agentSettings.organizationId, organizationId)).limit(1);
+    return { designGuidelines: agentData[0]?.designGuidelines || '' };
+  },
+  loadEntity: getDocumentById,
+  createPendingVersion: async (documentId, opts) => {
+    const { versionId } = await createPendingDocumentVersion(documentId, opts);
+    return versionId;
+  },
+  markVersionError: (versionId) => updateDocumentVersionStatus(versionId, 'error'),
+  saveMessage: saveDocumentMessage,
+  updateVersionUsage: updateDocumentVersionUsage,
+  buildSystemPrompt: ({ chainContext, orgData }) => {
+    const designGuidelines = orgData.designGuidelines as string;
+    return `You are an AI assistant that helps users create digital assets using HTML, Tailwind CSS, and FontAwesome icons.${chainContext}
 
 ${designGuidelines ? `TEAM DESIGN GUIDELINES:\n${designGuidelines}\n\nIMPORTANT: Follow these design guidelines closely. They represent your team's brand standards.` : ""}
 
@@ -241,8 +119,15 @@ DESIGN WAREHOUSE:
 - Use inspectAsset to view an asset's content
 - To embed an asset, use its proxyUrl (/api/assets/image?id=...) in <img> tags
 
-CRITICAL: ALWAYS provide a text response after using tools.`,
-    tools: {
+CRITICAL: ALWAYS provide a text response after using tools.`;
+  },
+  buildTools: ({ entityId, tracker, userPrompt, parentVersionId, modelId, entity, organizationId }) => {
+    // Capture parent HTML/fonts for branching context
+    const parentVer = parentVersionId ? entity?.versions.find((v: any) => v.id === parentVersionId) : undefined;
+    let parentHtml: string | undefined = (parentVer as any)?.html;
+    let parentGoogleFonts: string[] = (parentVer as any)?.googleFonts || [];
+
+    return {
       createDocument: tool({
         description:
           "Create a new document container with specified width and height.",
@@ -257,24 +142,10 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
             .optional()
             .describe("How many pages to create (default: 1)"),
         }),
-        execute: async ({
-          width,
-          height,
-          pageCount = 1,
-        }: {
-          width: number;
-          height: number;
-          pageCount?: number;
-        }) => {
-          tempDimensions.set(documentId, { width, height });
-          tempPageCounts.set(documentId, pageCount);
-          return {
-            success: true,
-            message: `Document created with dimensions ${width}x${height}`,
-            width,
-            height,
-            pageCount,
-          };
+        execute: async ({ width, height, pageCount = 1 }: { width: number; height: number; pageCount?: number }) => {
+          tempDimensions.set(entityId, { width, height });
+          tempPageCounts.set(entityId, pageCount);
+          return { success: true, message: `Document created with dimensions ${width}x${height}`, width, height, pageCount };
         },
       }),
       writeHTML: tool({
@@ -303,9 +174,9 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
           pageIndex?: number;
         }) => {
           try {
-            let dimensions = tempDimensions.get(documentId);
-            const requestedPageCount = tempPageCounts.get(documentId);
-            let existingDocument = await getDocumentById(documentId);
+            let dimensions = tempDimensions.get(entityId);
+            const requestedPageCount = tempPageCounts.get(entityId);
+            let existingDocument = await getDocumentById(entityId);
 
             if (!dimensions) {
               if (existingDocument) {
@@ -355,71 +226,31 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
               htmlToStore = joinPages(pages);
             }
 
-            const fontsToUse =
-              googleFonts && googleFonts.length > 0 ? googleFonts : sourceFonts;
-            tempDimensions.delete(documentId);
-            tempPageCounts.delete(documentId);
+            const fontsToUse = googleFonts && googleFonts.length > 0 ? googleFonts : sourceFonts;
+            tempDimensions.delete(entityId);
+            tempPageCounts.delete(entityId);
             const storedPages = splitPages(htmlToStore);
             const resolvedPageIndex =
               typeof pageIndex === "number"
                 ? clampPageIndex(pageIndex, storedPages.length)
                 : 0;
 
-            if (pendingVersionId) {
-              // Update the pending version in-place with the real content
-              await updateDocumentVersionContent(pendingVersionId, {
-                html: htmlToStore,
-                width: dimensions.width,
-                height: dimensions.height,
-                googleFonts: fontsToUse,
-                title: existingDocument?.title ?? "Untitled Document",
-                status: "done",
-              });
-              latestVersionId = pendingVersionId;
-              pendingVersionId = undefined;
-              return {
-                success: true,
-                message: "HTML updated successfully (Version 1)",
-                version: 0,
-                totalVersions: 1,
-                width: dimensions.width,
-                height: dimensions.height,
-                pageCount: storedPages.length,
-                pageIndex: resolvedPageIndex,
-              };
-            }
-
-            const {
-              currentVersion,
-              totalVersions,
-              newVersionId: wvId,
-            } = await createOrUpdateDocument(
-              documentId,
-              existingDocument?.title ?? "Untitled Document",
-              dimensions.width,
-              dimensions.height,
-              htmlToStore,
-              fontsToUse,
-              userPrompt,
-              parentVersionId,
-              modelId,
-            );
-            if (wvId) latestVersionId = wvId;
-
-            let message = `HTML updated successfully (Version ${currentVersion + 1})`;
-            if (typeof pageIndex === "number" && storedPages.length > 1) {
-              message = `HTML updated successfully for page ${resolvedPageIndex + 1} of ${storedPages.length} (Version ${currentVersion + 1})`;
-            }
-            return {
-              success: true,
-              message,
-              version: currentVersion,
-              totalVersions,
+            // Update the pending version in-place with the real content
+            await updateDocumentVersionContent(tracker.currentVersionId, {
+              html: htmlToStore,
               width: dimensions.width,
               height: dimensions.height,
-              pageCount: storedPages.length,
-              pageIndex: resolvedPageIndex,
-            };
+              googleFonts: fontsToUse,
+              title: existingDocument?.title ?? 'Untitled Document',
+              status: 'done',
+            });
+            tracker.contentSaved = true;
+
+            let message = `HTML updated successfully`;
+            if (typeof pageIndex === 'number' && storedPages.length > 1) {
+              message = `HTML updated successfully for page ${resolvedPageIndex + 1} of ${storedPages.length}`;
+            }
+            return { success: true, message, width: dimensions.width, height: dimensions.height, pageCount: storedPages.length, pageIndex: resolvedPageIndex };
           } catch (error: any) {
             console.error("Error in writeHTML:", error);
             return {
@@ -456,9 +287,8 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
           pageIndex?: number;
         }) => {
           try {
-            const document = await getDocumentById(documentId);
-            if (!document)
-              return { success: false, error: "No document exists." };
+            const document = await getDocumentById(entityId);
+            if (!document) return { success: false, error: 'No document exists.' };
 
             const sourceHtml =
               parentHtml !== undefined
@@ -492,30 +322,18 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
               replaceString,
             );
             const htmlToStore = joinPages(pages);
-            const {
-              currentVersion,
-              totalVersions,
-              newVersionId: evId,
-            } = await createOrUpdateDocument(
-              documentId,
-              document.title,
-              document.width,
-              document.height,
-              htmlToStore,
-              sourceFonts,
-              userPrompt,
-              parentVersionId,
-              modelId,
-            );
-            if (evId) latestVersionId = evId;
-            return {
-              success: true,
-              message: `HTML edited successfully (Version ${currentVersion + 1})`,
-              version: currentVersion,
-              totalVersions,
-              pageCount: pages.length,
-              pageIndex: targetPageIndex,
-            };
+
+            await updateDocumentVersionContent(tracker.currentVersionId, {
+              html: htmlToStore,
+              width: document.width,
+              height: document.height,
+              googleFonts: sourceFonts,
+              title: document.title,
+              status: 'done',
+            });
+            tracker.contentSaved = true;
+
+            return { success: true, message: `HTML edited successfully`, pageCount: pages.length, pageIndex: targetPageIndex };
           } catch (error: any) {
             return {
               success: false,
@@ -546,9 +364,9 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
           googleFonts?: string[];
         }) => {
           try {
-            let dimensions = tempDimensions.get(documentId);
-            const requestedPageCount = tempPageCounts.get(documentId);
-            let existingDocument = await getDocumentById(documentId);
+            let dimensions = tempDimensions.get(entityId);
+            const requestedPageCount = tempPageCounts.get(entityId);
+            let existingDocument = await getDocumentById(entityId);
             if (!dimensions) {
               if (existingDocument) {
                 dimensions = {
@@ -571,52 +389,20 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
               (_, idx) => pages[idx] ?? "",
             );
             const htmlToStore = joinPages(normalizedPages);
-            tempDimensions.delete(documentId);
-            tempPageCounts.delete(documentId);
+            tempDimensions.delete(entityId);
+            tempPageCounts.delete(entityId);
 
-            if (pendingVersionId) {
-              await updateDocumentVersionContent(pendingVersionId, {
-                html: htmlToStore,
-                width: dimensions.width,
-                height: dimensions.height,
-                googleFonts: googleFonts || [],
-                title: existingDocument?.title ?? "Untitled Document",
-                status: "done",
-              });
-              latestVersionId = pendingVersionId;
-              pendingVersionId = undefined;
-              return {
-                success: true,
-                message: "HTML updated successfully (Version 1)",
-                version: 0,
-                totalVersions: 1,
-                pageCount: normalizedPages.length,
-              };
-            }
+            await updateDocumentVersionContent(tracker.currentVersionId, {
+              html: htmlToStore,
+              width: dimensions.width,
+              height: dimensions.height,
+              googleFonts: googleFonts || [],
+              title: existingDocument?.title ?? 'Untitled Document',
+              status: 'done',
+            });
+            tracker.contentSaved = true;
 
-            const {
-              currentVersion,
-              totalVersions,
-              newVersionId: wpId,
-            } = await createOrUpdateDocument(
-              documentId,
-              existingDocument?.title ?? "Untitled Document",
-              dimensions.width,
-              dimensions.height,
-              htmlToStore,
-              googleFonts || [],
-              userPrompt,
-              parentVersionId,
-              modelId,
-            );
-            if (wpId) latestVersionId = wpId;
-            return {
-              success: true,
-              message: `HTML updated successfully (Version ${currentVersion + 1})`,
-              version: currentVersion,
-              totalVersions,
-              pageCount: normalizedPages.length,
-            };
+            return { success: true, message: 'HTML updated successfully', pageCount: normalizedPages.length };
           } catch (error: any) {
             return {
               success: false,
@@ -639,55 +425,27 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
         }),
         execute: async ({ afterPageIndex }: { afterPageIndex?: number }) => {
           try {
-            const document = await getDocumentById(documentId);
-            if (!document)
-              return { success: false, error: "No document exists." };
-            const sourceHtml =
-              parentHtml !== undefined
-                ? parentHtml
-                : document.versions[document.currentVersion]?.html || "";
-            const sourceFonts =
-              parentGoogleFonts.length > 0
-                ? parentGoogleFonts
-                : document.versions[document.currentVersion]?.googleFonts || [];
+            const document = await getDocumentById(entityId);
+            if (!document) return { success: false, error: 'No document exists.' };
+            const sourceHtml = parentHtml !== undefined ? parentHtml : document.versions[document.currentVersion]?.html || '';
+            const sourceFonts = parentGoogleFonts.length > 0 ? parentGoogleFonts : document.versions[document.currentVersion]?.googleFonts || [];
             const pages = splitPages(sourceHtml);
-            const insertAfter =
-              typeof afterPageIndex === "number"
-                ? afterPageIndex
-                : pages.length - 1;
-            const insertAt = Math.min(
-              Math.max(insertAfter + 1, 0),
-              pages.length,
-            );
-            const nextPages = [
-              ...pages.slice(0, insertAt),
-              "",
-              ...pages.slice(insertAt),
-            ];
-            const {
-              currentVersion,
-              totalVersions,
-              newVersionId: cpId,
-            } = await createOrUpdateDocument(
-              documentId,
-              document.title,
-              document.width,
-              document.height,
-              joinPages(nextPages),
-              sourceFonts,
-              userPrompt,
-              parentVersionId,
-              modelId,
-            );
-            if (cpId) latestVersionId = cpId;
-            return {
-              success: true,
-              message: `Page created (Version ${currentVersion + 1})`,
-              pageCount: nextPages.length,
-              pageIndex: insertAt,
-              version: currentVersion,
-              totalVersions,
-            };
+            const insertAfter = typeof afterPageIndex === 'number' ? afterPageIndex : pages.length - 1;
+            const insertAt = Math.min(Math.max(insertAfter + 1, 0), pages.length);
+            const nextPages = [...pages.slice(0, insertAt), '', ...pages.slice(insertAt)];
+            const htmlToStore = joinPages(nextPages);
+
+            await updateDocumentVersionContent(tracker.currentVersionId, {
+              html: htmlToStore,
+              width: document.width,
+              height: document.height,
+              googleFonts: sourceFonts,
+              title: document.title,
+              status: 'done',
+            });
+            tracker.contentSaved = true;
+
+            return { success: true, message: `Page created`, pageCount: nextPages.length, pageIndex: insertAt };
           } catch (error: any) {
             return {
               success: false,
@@ -708,17 +466,10 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
         }),
         execute: async ({ pageIndex }: { pageIndex: number }) => {
           try {
-            const document = await getDocumentById(documentId);
-            if (!document)
-              return { success: false, error: "No document exists." };
-            const sourceHtml =
-              parentHtml !== undefined
-                ? parentHtml
-                : document.versions[document.currentVersion]?.html || "";
-            const sourceFonts =
-              parentGoogleFonts.length > 0
-                ? parentGoogleFonts
-                : document.versions[document.currentVersion]?.googleFonts || [];
+            const document = await getDocumentById(entityId);
+            if (!document) return { success: false, error: 'No document exists.' };
+            const sourceHtml = parentHtml !== undefined ? parentHtml : document.versions[document.currentVersion]?.html || '';
+            const sourceFonts = parentGoogleFonts.length > 0 ? parentGoogleFonts : document.versions[document.currentVersion]?.googleFonts || [];
             const pages = splitPages(sourceHtml);
             if (pages.length <= 1)
               return {
@@ -728,30 +479,19 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
             if (pageIndex < 0 || pageIndex >= pages.length)
               return { success: false, error: `Invalid pageIndex.` };
             const nextPages = pages.filter((_, idx) => idx !== pageIndex);
-            const {
-              currentVersion,
-              totalVersions,
-              newVersionId: dpId,
-            } = await createOrUpdateDocument(
-              documentId,
-              document.title,
-              document.width,
-              document.height,
-              joinPages(nextPages),
-              sourceFonts,
-              userPrompt,
-              parentVersionId,
-              modelId,
-            );
-            if (dpId) latestVersionId = dpId;
-            return {
-              success: true,
-              message: `Page deleted (Version ${currentVersion + 1})`,
-              pageCount: nextPages.length,
-              deletedPageIndex: pageIndex,
-              version: currentVersion,
-              totalVersions,
-            };
+            const htmlToStore = joinPages(nextPages);
+
+            await updateDocumentVersionContent(tracker.currentVersionId, {
+              html: htmlToStore,
+              width: document.width,
+              height: document.height,
+              googleFonts: sourceFonts,
+              title: document.title,
+              status: 'done',
+            });
+            tracker.contentSaved = true;
+
+            return { success: true, message: `Page deleted`, pageCount: nextPages.length, deletedPageIndex: pageIndex };
           } catch (error: any) {
             return {
               success: false,
@@ -775,13 +515,10 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
         }),
         execute: async ({ pageIndex }: { pageIndex?: number }) => {
           try {
-            const document = await getDocumentById(documentId);
-            if (!document)
-              return { success: false, error: "No document exists." };
-            const currentHTML =
-              document.versions[document.currentVersion]?.html || "";
-            const currentFonts =
-              document.versions[document.currentVersion]?.googleFonts || [];
+            const document = await getDocumentById(entityId);
+            if (!document) return { success: false, error: 'No document exists.' };
+            const currentHTML = document.versions[document.currentVersion]?.html || '';
+            const currentFonts = document.versions[document.currentVersion]?.googleFonts || [];
             const pages = splitPages(currentHTML);
             const resolvedPageIndex = clampPageIndex(
               typeof pageIndex === "number" ? pageIndex : 0,
@@ -815,19 +552,8 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
                   }
                 }
               }
-            } catch (renderError) {
-              console.error("Error rendering image:", renderError);
-            }
-            return {
-              success: true,
-              width: document.width,
-              height: document.height,
-              image: imageData,
-              version: document.currentVersion,
-              totalVersions: document.versions.length,
-              pageCount: pages.length,
-              pageIndex: resolvedPageIndex,
-            };
+            } catch (renderError) { console.error('Error rendering image:', renderError); }
+            return { success: true, width: document.width, height: document.height, image: imageData, pageCount: pages.length, pageIndex: resolvedPageIndex };
           } catch (error: any) {
             return {
               success: false,
@@ -977,40 +703,6 @@ CRITICAL: ALWAYS provide a text response after using tools.`,
           }
         },
       }),
-    },
-    onFinish: async () => {
-      // If generation ended without ever writing HTML, mark the pending version as error
-      if (pendingVersionId) {
-        await updateDocumentVersionStatus(pendingVersionId, "error").catch(
-          () => {},
-        );
-      }
-    },
-    onStepFinish: async ({ text, toolCalls, toolResults, usage }) => {
-      await deductCreditsForUsage(organizationId, usage).catch(() => {});
-      try {
-        const parts: any[] = [];
-        if (toolCalls && toolResults) {
-          for (let i = 0; i < toolCalls.length; i++) {
-            const tc = toolCalls[i] as any;
-            const tr = toolResults[i] as any;
-            parts.push({
-              type: `tool-${tc.toolName}`,
-              toolCallId: tc.toolCallId,
-              toolName: tc.toolName,
-              args: tc.args,
-              output: tr?.result || tr,
-            });
-          }
-        }
-        if (text) parts.push({ type: "text", text });
-        if (parts.length > 0 && latestVersionId)
-          await saveDocumentMessage(latestVersionId, "assistant", parts);
-      } catch (e) {
-        console.error("Error in onStepFinish:", e);
-      }
-    },
-  });
-
-  return result.toUIMessageStreamResponse();
-}
+    };
+  },
+});

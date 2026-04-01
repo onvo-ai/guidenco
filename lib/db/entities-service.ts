@@ -357,50 +357,20 @@ export async function getDocumentById(documentId: string) {
     .where(eq(documentVersions.documentId, documentData.id))
     .orderBy(documentVersions.version);
 
-  const mappedVersions = versions
-    .filter((v) => v.status !== "error")
-    .map((v) => ({
-      id: v.id,
-      html: v.html,
-      timestamp: v.createdAt.getTime(),
-      googleFonts: v.googleFonts || [],
-      prompt: v.prompt ?? undefined,
-      parentVersionId: v.parentVersionId ?? undefined,
-      model: v.model ?? undefined,
-      width: v.width,
-      height: v.height,
-      thumbnail: v.thumbnail,
-      url: v.url,
-      status: v.status,
-    }));
-
-  const currentVersionData = mappedVersions[documentData.currentVersion ?? 0];
+  const latestVersion = versions[versions.length - 1];
 
   return {
     ...documentData,
-    width: currentVersionData?.width ?? 800,
-    height: currentVersionData?.height ?? 600,
-    html: currentVersionData?.html,
-    versions: mappedVersions,
+    width: latestVersion?.width ?? 800,
+    height: latestVersion?.height ?? 600,
+    versions: versions
+      .map((v) => ({ id: v.id, html: v.html, timestamp: v.createdAt.getTime(), googleFonts: v.googleFonts || [], prompt: v.prompt ?? undefined, parentVersionId: v.parentVersionId ?? undefined, model: v.model ?? undefined, tokenCount: v.tokenCount ?? undefined, creditCount: v.creditCount ?? undefined, width: v.width, height: v.height, thumbnail: v.thumbnail, url: v.url, status: v.status })),
   };
 }
 
-export async function createOrUpdateDocument(
-  documentId: string,
-  title: string,
-  width: number,
-  height: number,
-  html: string,
-  googleFonts: string[] = [],
-  prompt?: string,
-  parentVersionId?: string,
-  model?: string,
-) {
-  let [documentData] = await db
-    .select()
-    .from(documents)
-    .where(eq(documents.id, documentId));
-  if (!documentData) throw new Error("Document not found");
+export async function createOrUpdateDocument(documentId: string, title: string, width: number, height: number, html: string, googleFonts: string[] = [], prompt?: string, parentVersionId?: string, model?: string, tokenCount?: number, creditCount?: number) {
+  let [documentData] = await db.select().from(documents).where(eq(documents.id, documentId));
+  if (!documentData) throw new Error('Document not found');
 
   if (documentData.title !== title) {
     [documentData] = await db
@@ -416,20 +386,7 @@ export async function createOrUpdateDocument(
     .where(eq(documentVersions.documentId, documentData.id));
   const newVersionNumber = existingVersions.length;
 
-  const [newVersion] = await db
-    .insert(documentVersions)
-    .values({
-      documentId: documentData.id,
-      version: newVersionNumber,
-      html,
-      width,
-      height,
-      googleFonts: googleFonts.length > 0 ? googleFonts : null,
-      prompt: prompt ?? null,
-      parentVersionId: parentVersionId ?? null,
-      model: model ?? null,
-    })
-    .returning();
+  const [newVersion] = await db.insert(documentVersions).values({ documentId: documentData.id, version: newVersionNumber, html, width, height, googleFonts: googleFonts.length > 0 ? googleFonts : null, prompt: prompt ?? null, parentVersionId: parentVersionId ?? null, model: model ?? null, tokenCount: tokenCount ?? null, creditCount: creditCount ?? null }).returning();
 
   [documentData] = await db
     .update(documents)
@@ -621,15 +578,50 @@ export async function getAssetVersionById(versionId: string) {
   return version ?? null;
 }
 
-export async function updateAssetVersionUsage(
-  versionId: string,
-  tokenCount: number,
-  creditCount: number,
-) {
-  await db
-    .update(assetVersions)
-    .set({ tokenCount, creditCount })
-    .where(eq(assetVersions.id, versionId));
+export async function createPendingAssetVersion(assetId: string, opts: { prompt?: string; parentVersionId?: string; model?: string } = {}) {
+  const [existing] = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
+  if (!existing) throw new Error('Asset not found');
+
+  const existingVersions = await db.select({ id: assetVersions.id }).from(assetVersions).where(eq(assetVersions.assetId, existing.id));
+  const newVersionNumber = existingVersions.length;
+
+  const [newVersion] = await db.insert(assetVersions).values({
+    assetId: existing.id,
+    version: newVersionNumber,
+    svgContent: '',
+    title: existing.title,
+    width: 1024,
+    height: 1024,
+    status: 'generating',
+    prompt: opts.prompt ?? null,
+    parentVersionId: opts.parentVersionId ?? null,
+    model: opts.model ?? null,
+  }).returning();
+
+  await db.update(assets).set({ currentVersion: newVersionNumber, updatedAt: new Date() }).where(eq(assets.id, existing.id));
+
+  return newVersion.id;
+}
+
+export async function updateAssetVersionContent(versionId: string, data: { svgContent: string; title?: string; width?: number; height?: number }) {
+  const [version] = await db.select({ assetId: assetVersions.assetId }).from(assetVersions).where(eq(assetVersions.id, versionId));
+  if (!version) throw new Error('Asset version not found');
+
+  await db.update(assetVersions).set({
+    svgContent: data.svgContent,
+    ...(data.title ? { title: data.title } : {}),
+    ...(data.width ? { width: data.width } : {}),
+    ...(data.height ? { height: data.height } : {}),
+    status: 'done',
+  }).where(eq(assetVersions.id, versionId));
+
+  if (data.title) {
+    await db.update(assets).set({ title: data.title, updatedAt: new Date() }).where(eq(assets.id, version.assetId));
+  }
+}
+
+export async function updateAssetVersionStatus(versionId: string, status: 'generating' | 'done' | 'error') {
+  await db.update(assetVersions).set({ status }).where(eq(assetVersions.id, versionId));
 }
 
 export async function upsertAsset(
@@ -708,23 +700,12 @@ export async function upsertAsset(
   return updated;
 }
 
-export async function getAssetMessages(assetId: string) {
-  return await db
-    .select()
-    .from(assetChatMessages)
-    .where(eq(assetChatMessages.assetId, assetId))
-    .orderBy(assetChatMessages.createdAt);
+export async function getAssetMessages(assetVersionId: string) {
+  return await db.select().from(assetChatMessages).where(eq(assetChatMessages.assetVersionId, assetVersionId)).orderBy(assetChatMessages.createdAt);
 }
 
-export async function saveAssetMessage(
-  assetId: string,
-  role: "user" | "assistant",
-  content: any,
-  model?: string,
-) {
-  await db
-    .insert(assetChatMessages)
-    .values({ assetId, role, content, ...(model ? { model } : {}) });
+export async function saveAssetMessage(assetVersionId: string, role: 'user' | 'assistant', content: any) {
+  await db.insert(assetChatMessages).values({ assetVersionId, role, content });
 }
 
 export async function getVideoById(videoId: string) {
@@ -735,40 +716,17 @@ export async function getVideoById(videoId: string) {
     .limit(1);
   if (!video) return null;
 
-  const versions = await db
-    .select()
-    .from(videoVersions)
-    .where(eq(videoVersions.videoId, video.id))
-    .orderBy(videoVersions.version);
-  const mappedVersions = versions.map((v) => ({
-    id: v.id,
-    title: v.title,
-    remotionCode: v.remotionCode,
-    width: v.width,
-    height: v.height,
-    durationInFrames: v.durationInFrames,
-    fps: v.fps,
-    timestamp: v.createdAt.getTime(),
-    prompt: v.prompt ?? undefined,
-    parentVersionId: v.parentVersionId ?? undefined,
-    model: v.model ?? undefined,
-    videoUrl: v.videoUrl ?? undefined,
-    status: v.status,
-    url: v.url,
-  }));
-
-  const currentVersionData = mappedVersions[video.currentVersion ?? 0];
-
+  const versions = await db.select().from(videoVersions).where(eq(videoVersions.videoId, video.id)).orderBy(videoVersions.version);
+  const latestVersion = versions[versions.length - 1];
   return {
     ...video,
-    remotionCode: currentVersionData?.remotionCode,
-    width: currentVersionData?.width ?? 1920,
-    height: currentVersionData?.height ?? 1080,
-    durationInFrames: currentVersionData?.durationInFrames ?? 150,
-    fps: currentVersionData?.fps ?? 30,
-    status: currentVersionData?.status ?? "pending",
-    videoUrl: currentVersionData?.videoUrl,
-    versions: mappedVersions,
+    width: latestVersion?.width ?? 1920,
+    height: latestVersion?.height ?? 1080,
+    durationInFrames: latestVersion?.durationInFrames ?? 150,
+    fps: latestVersion?.fps ?? 30,
+    videoUrl: latestVersion?.videoUrl ?? undefined,
+    status: latestVersion?.status ?? 'pending',
+    versions: versions.map((v) => ({ id: v.id, title: v.title, remotionCode: v.remotionCode, width: v.width, height: v.height, durationInFrames: v.durationInFrames, fps: v.fps, timestamp: v.createdAt.getTime(), prompt: v.prompt ?? undefined, parentVersionId: v.parentVersionId ?? undefined, model: v.model ?? undefined, tokenCount: v.tokenCount ?? undefined, creditCount: v.creditCount ?? undefined, videoUrl: v.videoUrl ?? undefined, status: v.status, url: v.url })),
   };
 }
 
@@ -795,29 +753,9 @@ export async function getVideoVersionById(versionId: string) {
   return version ?? null;
 }
 
-export async function upsertVideo(
-  videoId: string,
-  data: {
-    remotionCode?: string;
-    title?: string;
-    width?: number;
-    height?: number;
-    durationInFrames?: number;
-    fps?: number;
-    videoUrl?: string;
-    status?: string;
-    createVersion?: boolean;
-    prompt?: string;
-    parentVersionId?: string;
-    model?: string;
-  },
-) {
-  let [existing] = await db
-    .select()
-    .from(videos)
-    .where(eq(videos.id, videoId))
-    .limit(1);
-  if (!existing) throw new Error("Video not found");
+export async function upsertVideo(videoId: string, data: { remotionCode?: string; title?: string; width?: number; height?: number; durationInFrames?: number; fps?: number; videoUrl?: string; status?: string; createVersion?: boolean; prompt?: string; parentVersionId?: string; model?: string; tokenCount?: number; creditCount?: number }) {
+  let [existing] = await db.select().from(videos).where(eq(videos.id, videoId)).limit(1);
+  if (!existing) throw new Error('Video not found');
 
   const shouldCreateVersion =
     data.createVersion ??
@@ -857,24 +795,7 @@ export async function upsertVideo(
     .from(videoVersions)
     .where(eq(videoVersions.videoId, existing.id));
   const newVersionNumber = existingVersions.length;
-  const [newVersion] = await db
-    .insert(videoVersions)
-    .values({
-      videoId: existing.id,
-      version: newVersionNumber,
-      title: nextData.title,
-      remotionCode: nextData.remotionCode,
-      width: nextData.width,
-      height: nextData.height,
-      durationInFrames: nextData.durationInFrames,
-      fps: nextData.fps,
-      prompt: data.prompt,
-      parentVersionId: data.parentVersionId,
-      model: data.model,
-      ...(data.videoUrl !== undefined ? { videoUrl: data.videoUrl } : {}),
-      ...(data.status !== undefined ? { status: data.status } : {}),
-    })
-    .returning();
+  const [newVersion] = await db.insert(videoVersions).values({ videoId: existing.id, version: newVersionNumber, title: nextData.title, remotionCode: nextData.remotionCode, width: nextData.width, height: nextData.height, durationInFrames: nextData.durationInFrames, fps: nextData.fps, prompt: data.prompt, parentVersionId: data.parentVersionId, model: data.model, tokenCount: data.tokenCount, creditCount: data.creditCount, ...(data.videoUrl !== undefined ? { videoUrl: data.videoUrl } : {}), ...(data.status !== undefined ? { status: data.status } : {}) }).returning();
 
   const [updated] = await db
     .update(videos)
@@ -891,6 +812,56 @@ export async function upsertVideo(
     totalVersions: existingVersions.length + 1,
     newVersionId: newVersion.id,
   };
+}
+
+export async function createPendingVideoVersion(videoId: string, opts: { prompt?: string; parentVersionId?: string; model?: string } = {}) {
+  const [existing] = await db.select().from(videos).where(eq(videos.id, videoId)).limit(1);
+  if (!existing) throw new Error('Video not found');
+
+  const existingVersions = await db.select({ id: videoVersions.id }).from(videoVersions).where(eq(videoVersions.videoId, existing.id));
+  const newVersionNumber = existingVersions.length;
+
+  const [newVersion] = await db.insert(videoVersions).values({
+    videoId: existing.id,
+    version: newVersionNumber,
+    title: existing.title,
+    remotionCode: '',
+    width: 1920,
+    height: 1080,
+    durationInFrames: 150,
+    fps: 30,
+    status: 'generating',
+    prompt: opts.prompt ?? null,
+    parentVersionId: opts.parentVersionId ?? null,
+    model: opts.model ?? null,
+  }).returning();
+
+  await db.update(videos).set({ currentVersion: newVersionNumber, updatedAt: new Date() }).where(eq(videos.id, existing.id));
+
+  return newVersion.id;
+}
+
+export async function updateVideoVersionContent(versionId: string, data: { remotionCode: string; title?: string; width?: number; height?: number; durationInFrames?: number; fps?: number }) {
+  const [version] = await db.select({ videoId: videoVersions.videoId }).from(videoVersions).where(eq(videoVersions.id, versionId));
+  if (!version) throw new Error('Video version not found');
+
+  await db.update(videoVersions).set({
+    remotionCode: data.remotionCode,
+    ...(data.title ? { title: data.title } : {}),
+    ...(data.width ? { width: data.width } : {}),
+    ...(data.height ? { height: data.height } : {}),
+    ...(data.durationInFrames ? { durationInFrames: data.durationInFrames } : {}),
+    ...(data.fps ? { fps: data.fps } : {}),
+    status: 'pending', // ready for rendering
+  }).where(eq(videoVersions.id, versionId));
+
+  if (data.title) {
+    await db.update(videos).set({ title: data.title, updatedAt: new Date() }).where(eq(videos.id, version.videoId));
+  }
+}
+
+export async function updateVideoVersionStatus2(versionId: string, status: string) {
+  await db.update(videoVersions).set({ status }).where(eq(videoVersions.id, versionId));
 }
 
 export async function getVideoMessages(videoVersionId: string) {
@@ -917,32 +888,14 @@ export async function getBlogArticleById(articleId: string) {
     .limit(1);
   if (!article) return null;
 
-  const versions = await db
-    .select()
-    .from(blogArticleVersions)
-    .where(eq(blogArticleVersions.articleId, article.id))
-    .orderBy(blogArticleVersions.version);
-  const mappedVersions = versions.map((v) => ({
-    id: v.id,
-    title: v.title,
-    content: v.content,
-    bannerImage: v.bannerImage,
-    tags: v.tags || [],
-    timestamp: v.createdAt.getTime(),
-    prompt: v.prompt ?? undefined,
-    parentVersionId: v.parentVersionId ?? undefined,
-    url: v.url,
-  }));
-
-  const currentVersionData = mappedVersions[article.currentVersion ?? 0];
-
+  const versions = await db.select().from(blogArticleVersions).where(eq(blogArticleVersions.articleId, article.id)).orderBy(blogArticleVersions.version);
+  const latestVersion = versions[versions.length - 1];
   return {
     ...article,
-    title: currentVersionData?.title ?? article.title,
-    content: currentVersionData?.content,
-    bannerImage: currentVersionData?.bannerImage ?? null,
-    tags: currentVersionData?.tags ?? [],
-    versions: mappedVersions,
+    content: latestVersion?.content ?? '',
+    bannerImage: latestVersion?.bannerImage ?? null,
+    tags: latestVersion?.tags || [],
+    versions: versions.map((v) => ({ id: v.id, title: v.title, content: v.content, bannerImage: v.bannerImage, tags: v.tags || [], timestamp: v.createdAt.getTime(), prompt: v.prompt ?? undefined, parentVersionId: v.parentVersionId ?? undefined, url: v.url, model: v.model ?? undefined, tokenCount: v.tokenCount ?? undefined, creditCount: v.creditCount ?? undefined })),
   };
 }
 
@@ -955,24 +908,9 @@ export async function getBlogArticleVersionById(versionId: string) {
   return version ?? null;
 }
 
-export async function upsertBlogArticle(
-  articleId: string,
-  data: {
-    content?: string;
-    title?: string;
-    bannerImage?: string | null;
-    tags?: string[];
-    createVersion?: boolean;
-    prompt?: string;
-    parentVersionId?: string;
-  },
-) {
-  let [existing] = await db
-    .select()
-    .from(blogArticles)
-    .where(eq(blogArticles.id, articleId))
-    .limit(1);
-  if (!existing) throw new Error("Blog article not found");
+export async function upsertBlogArticle(articleId: string, data: { content?: string; title?: string; bannerImage?: string | null; tags?: string[]; createVersion?: boolean; prompt?: string; parentVersionId?: string; model?: string; tokenCount?: number; creditCount?: number }) {
+  let [existing] = await db.select().from(blogArticles).where(eq(blogArticles.id, articleId)).limit(1);
+  if (!existing) throw new Error('Blog article not found');
 
   const nextTitle = data.title ?? existing.title;
   const nextContent = data.content ?? "";
@@ -986,34 +924,9 @@ export async function upsertBlogArticle(
       .from(blogArticleVersions)
       .where(eq(blogArticleVersions.articleId, existing.id));
     const newVersionNumber = existingVersions.length;
-    const [newVersion] = await db
-      .insert(blogArticleVersions)
-      .values({
-        articleId: existing.id,
-        version: newVersionNumber,
-        title: nextTitle,
-        content: nextContent,
-        bannerImage: nextBannerImage,
-        tags: nextTags.length > 0 ? nextTags : null,
-        prompt: data.prompt,
-        parentVersionId: data.parentVersionId,
-      })
-      .returning();
-    const [updated] = await db
-      .update(blogArticles)
-      .set({
-        title: nextTitle,
-        currentVersion: newVersionNumber,
-        updatedAt: new Date(),
-      })
-      .where(eq(blogArticles.id, existing.id))
-      .returning();
-    return {
-      ...updated,
-      currentVersion: newVersionNumber,
-      totalVersions: existingVersions.length + 1,
-      newVersionId: newVersion.id,
-    };
+    const [newVersion] = await db.insert(blogArticleVersions).values({ articleId: existing.id, version: newVersionNumber, title: nextTitle, content: nextContent, bannerImage: nextBannerImage, tags: nextTags.length > 0 ? nextTags : null, prompt: data.prompt, parentVersionId: data.parentVersionId, model: data.model, tokenCount: data.tokenCount, creditCount: data.creditCount }).returning();
+    const [updated] = await db.update(blogArticles).set({ title: nextTitle, currentVersion: newVersionNumber, updatedAt: new Date() }).where(eq(blogArticles.id, existing.id)).returning();
+    return { ...updated, currentVersion: newVersionNumber, totalVersions: existingVersions.length + 1, newVersionId: newVersion.id };
   }
 
   const updateData: any = { title: nextTitle, updatedAt: new Date() };
@@ -1023,6 +936,52 @@ export async function upsertBlogArticle(
     .where(eq(blogArticles.id, existing.id))
     .returning();
   return updated;
+}
+
+export async function createPendingBlogArticleVersion(articleId: string, opts: { prompt?: string; parentVersionId?: string; model?: string } = {}) {
+  const [existing] = await db.select().from(blogArticles).where(eq(blogArticles.id, articleId)).limit(1);
+  if (!existing) throw new Error('Blog article not found');
+
+  const existingVersions = await db.select({ id: blogArticleVersions.id }).from(blogArticleVersions).where(eq(blogArticleVersions.articleId, existing.id));
+  const newVersionNumber = existingVersions.length;
+
+  const [newVersion] = await db.insert(blogArticleVersions).values({
+    articleId: existing.id,
+    version: newVersionNumber,
+    title: existing.title,
+    content: '',
+    bannerImage: null,
+    tags: null,
+    status: 'generating',
+    prompt: opts.prompt ?? null,
+    parentVersionId: opts.parentVersionId ?? null,
+    model: opts.model ?? null,
+  }).returning();
+
+  await db.update(blogArticles).set({ currentVersion: newVersionNumber, updatedAt: new Date() }).where(eq(blogArticles.id, existing.id));
+
+  return newVersion.id;
+}
+
+export async function updateBlogArticleVersionContent(versionId: string, data: { content: string; title?: string; bannerImage?: string | null; tags?: string[] }) {
+  const [version] = await db.select({ articleId: blogArticleVersions.articleId }).from(blogArticleVersions).where(eq(blogArticleVersions.id, versionId));
+  if (!version) throw new Error('Blog article version not found');
+
+  await db.update(blogArticleVersions).set({
+    content: data.content,
+    ...(data.title ? { title: data.title } : {}),
+    bannerImage: data.bannerImage ?? null,
+    tags: data.tags && data.tags.length > 0 ? data.tags : null,
+    status: 'done',
+  }).where(eq(blogArticleVersions.id, versionId));
+
+  if (data.title) {
+    await db.update(blogArticles).set({ title: data.title, updatedAt: new Date() }).where(eq(blogArticles.id, version.articleId));
+  }
+}
+
+export async function updateBlogArticleVersionStatus(versionId: string, status: 'generating' | 'done' | 'error') {
+  await db.update(blogArticleVersions).set({ status }).where(eq(blogArticleVersions.id, versionId));
 }
 
 export async function getBlogArticleMessages(articleVersionId: string) {
@@ -1051,33 +1010,16 @@ export async function getSocialPostById(postId: string) {
     .limit(1);
   if (!post) return null;
 
-  const versions = await db
-    .select()
-    .from(socialPostVersions)
-    .where(eq(socialPostVersions.postId, post.id))
-    .orderBy(socialPostVersions.version);
-  const mappedVersions = versions.map((v) => ({
-    id: v.id,
-    title: v.title,
-    content: v.content,
-    hashtags: v.hashtags || [],
-    mediaUrl: v.mediaUrl,
-    mediaType: v.mediaType,
-    timestamp: v.createdAt.getTime(),
-    prompt: v.prompt ?? undefined,
-    parentVersionId: v.parentVersionId ?? undefined,
-    url: v.url,
-  }));
-
-  const currentVersionData = mappedVersions[post.currentVersion ?? 0];
-
+  const versions = await db.select().from(socialPostVersions).where(eq(socialPostVersions.postId, post.id)).orderBy(socialPostVersions.version);
+  const latestVersion = versions[versions.length - 1];
   return {
     ...post,
-    content: currentVersionData?.content,
-    hashtags: currentVersionData?.hashtags ?? [],
-    mediaUrl: currentVersionData?.mediaUrl ?? null,
-    mediaType: currentVersionData?.mediaType ?? null,
-    versions: mappedVersions,
+    platform: 'linkedin',
+    content: latestVersion?.content ?? '',
+    hashtags: latestVersion?.hashtags || [],
+    mediaUrl: latestVersion?.mediaUrl ?? null,
+    mediaType: latestVersion?.mediaType ?? null,
+    versions: versions.map((v) => ({ id: v.id, title: v.title, content: v.content, hashtags: v.hashtags || [], mediaUrl: v.mediaUrl, mediaType: v.mediaType, timestamp: v.createdAt.getTime(), prompt: v.prompt ?? undefined, parentVersionId: v.parentVersionId ?? undefined, url: v.url, model: v.model ?? undefined, tokenCount: v.tokenCount ?? undefined, creditCount: v.creditCount ?? undefined })),
   };
 }
 
@@ -1090,25 +1032,9 @@ export async function getSocialPostVersionById(versionId: string) {
   return version ?? null;
 }
 
-export async function upsertSocialPost(
-  postId: string,
-  data: {
-    content?: string;
-    title?: string;
-    hashtags?: string[];
-    mediaUrl?: string | null;
-    mediaType?: string | null;
-    createVersion?: boolean;
-    prompt?: string;
-    parentVersionId?: string;
-  },
-) {
-  let [existing] = await db
-    .select()
-    .from(socialPosts)
-    .where(eq(socialPosts.id, postId))
-    .limit(1);
-  if (!existing) throw new Error("Social post not found");
+export async function upsertSocialPost(postId: string, data: { content?: string; title?: string; platform?: string; hashtags?: string[]; mediaUrl?: string | null; mediaType?: string | null; createVersion?: boolean; prompt?: string; parentVersionId?: string; model?: string; tokenCount?: number; creditCount?: number }) {
+  let [existing] = await db.select().from(socialPosts).where(eq(socialPosts.id, postId)).limit(1);
+  if (!existing) throw new Error('Social post not found');
 
   const nextTitle = data.title ?? existing.title;
   const nextContent = data.content ?? "";
@@ -1123,35 +1049,9 @@ export async function upsertSocialPost(
       .from(socialPostVersions)
       .where(eq(socialPostVersions.postId, existing.id));
     const newVersionNumber = existingVersions.length;
-    const [newVersion] = await db
-      .insert(socialPostVersions)
-      .values({
-        postId: existing.id,
-        version: newVersionNumber,
-        title: nextTitle,
-        content: nextContent,
-        hashtags: nextHashtags.length > 0 ? nextHashtags : null,
-        mediaUrl: nextMediaUrl,
-        mediaType: nextMediaType,
-        prompt: data.prompt,
-        parentVersionId: data.parentVersionId,
-      })
-      .returning();
-    const [updated] = await db
-      .update(socialPosts)
-      .set({
-        title: nextTitle,
-        currentVersion: newVersionNumber,
-        updatedAt: new Date(),
-      })
-      .where(eq(socialPosts.id, existing.id))
-      .returning();
-    return {
-      ...updated,
-      currentVersion: newVersionNumber,
-      totalVersions: existingVersions.length + 1,
-      newVersionId: newVersion.id,
-    };
+    const [newVersion] = await db.insert(socialPostVersions).values({ postId: existing.id, version: newVersionNumber, title: nextTitle, content: nextContent, hashtags: nextHashtags.length > 0 ? nextHashtags : null, mediaUrl: nextMediaUrl, mediaType: nextMediaType, prompt: data.prompt, parentVersionId: data.parentVersionId, model: data.model, tokenCount: data.tokenCount, creditCount: data.creditCount }).returning();
+    const [updated] = await db.update(socialPosts).set({ title: nextTitle, currentVersion: newVersionNumber, updatedAt: new Date() }).where(eq(socialPosts.id, existing.id)).returning();
+    return { ...updated, currentVersion: newVersionNumber, totalVersions: existingVersions.length + 1, newVersionId: newVersion.id };
   }
 
   const updateData: any = { title: nextTitle, updatedAt: new Date() };
@@ -1181,38 +1081,92 @@ export async function saveSocialPostMessage(
     .values({ postVersionId, role, content });
 }
 
+export async function createPendingSocialPostVersion(postId: string, opts: { prompt?: string; parentVersionId?: string; model?: string } = {}) {
+  let [postData] = await db.select().from(socialPosts).where(eq(socialPosts.id, postId));
+  if (!postData) throw new Error('Social post not found');
+
+  const existingVersions = await db.select({ id: socialPostVersions.id }).from(socialPostVersions).where(eq(socialPostVersions.postId, postData.id));
+  const newVersionNumber = existingVersions.length;
+
+  const [newVersion] = await db.insert(socialPostVersions).values({
+    postId: postData.id,
+    version: newVersionNumber,
+    title: postData.title,
+    content: '',
+    hashtags: null,
+    mediaUrl: null,
+    mediaType: null,
+    prompt: opts.prompt ?? null,
+    parentVersionId: opts.parentVersionId ?? null,
+    model: opts.model ?? null,
+  }).returning();
+
+  await db.update(socialPosts).set({ currentVersion: newVersionNumber, updatedAt: new Date() }).where(eq(socialPosts.id, postData.id));
+
+  return { versionId: newVersion.id, versionNumber: newVersionNumber };
+}
+
+export async function updateSocialPostVersionContent(versionId: string, data: { content?: string; title?: string; platform?: string; hashtags?: string[]; mediaUrl?: string | null; mediaType?: string | null }) {
+  const [version] = await db.select({ postId: socialPostVersions.postId }).from(socialPostVersions).where(eq(socialPostVersions.id, versionId));
+  if (!version) throw new Error('Version not found');
+
+  await db.update(socialPostVersions).set({
+    content: data.content ?? '',
+    title: data.title ?? 'Untitled Post',
+    hashtags: data.hashtags && data.hashtags.length > 0 ? data.hashtags : null,
+    mediaUrl: data.mediaUrl ?? null,
+    mediaType: data.mediaType ?? null,
+  }).where(eq(socialPostVersions.id, versionId));
+
+  const postUpdate: Record<string, any> = { updatedAt: new Date() };
+  if (data.title) postUpdate.title = data.title;
+  await db.update(socialPosts).set(postUpdate).where(eq(socialPosts.id, version.postId));
+}
+
+export async function updateSocialPostVersionStatus(versionId: string, status: 'generating' | 'done' | 'error') {
+  await db.update(socialPostVersions).set({ status } as any).where(eq(socialPostVersions.id, versionId));
+}
+
+// --- Consolidated usage update ---
+async function updateVersionUsageInternal(table: any, versionId: string, tokenCount: number, creditCount: number) {
+  await db.update(table).set({ tokenCount, creditCount }).where(eq(table.id, versionId));
+}
+
+export function updateAssetVersionUsage(versionId: string, tokenCount: number, creditCount: number) {
+  return updateVersionUsageInternal(assetVersions, versionId, tokenCount, creditCount);
+}
+
+export function updateBlogArticleVersionUsage(versionId: string, tokenCount: number, creditCount: number) {
+  return updateVersionUsageInternal(blogArticleVersions, versionId, tokenCount, creditCount);
+}
+
+export function updateSocialPostVersionUsage(versionId: string, tokenCount: number, creditCount: number) {
+  return updateVersionUsageInternal(socialPostVersions, versionId, tokenCount, creditCount);
+}
+
+export function updateVideoVersionUsage(versionId: string, tokenCount: number, creditCount: number) {
+  return updateVersionUsageInternal(videoVersions, versionId, tokenCount, creditCount);
+}
+
+export function updateDocumentVersionUsage(versionId: string, tokenCount: number, creditCount: number) {
+  return updateVersionUsageInternal(documentVersions, versionId, tokenCount, creditCount);
+}
+
 // Experiments
-export async function createExperiment(
-  organizationId: string,
-  entityId: string,
-  entityType: EntityKind,
-  data: {
-    maxDepth?: number;
-    maxIterations?: number;
-    timeLimit?: Date;
-    parameters?: Array<{
-      key: string;
-      description?: string;
-      type: "string" | "number" | "boolean";
-      stringValue?: string;
-      numberValue?: number;
-      numberMin?: number;
-      numberMax?: number;
-      booleanValue?: boolean;
-    }>;
-  },
-) {
-  const [experiment] = await db
-    .insert(experiments)
-    .values({
-      organizationId,
-      entityId,
-      entityType,
-      maxDepth: data.maxDepth ?? 3,
-      maxIterations: data.maxIterations ?? 5,
-      timeLimit: data.timeLimit ?? null,
-    })
-    .returning();
+export async function createExperiment(entityId: string, entityType: EntityKind, data: { name?: string; maxDepth?: number; maxIterations?: number; timeLimit?: Date; startDate?: Date; endDate?: Date; checkInInterval?: number; goalMetric?: string; parameters?: Array<{ key: string; description?: string; type: 'string' | 'number' | 'boolean'; stringValue?: string; numberValue?: number; numberMin?: number; numberMax?: number; booleanValue?: boolean }> }, organizationId: string) {
+  const [experiment] = await db.insert(experiments).values({
+    entityId,
+    entityType,
+    organizationId,
+    name: data.name ?? 'Untitled Experiment',
+    maxDepth: data.maxDepth ?? 3,
+    maxIterations: data.maxIterations ?? 5,
+    timeLimit: data.timeLimit ?? null,
+    startDate: data.startDate ?? null,
+    endDate: data.endDate ?? null,
+    checkInInterval: data.checkInInterval ?? null,
+    goalMetric: data.goalMetric ?? null,
+  }).returning();
 
   if (data.parameters && data.parameters.length > 0) {
     await db.insert(experimentParameters).values(
@@ -1287,4 +1241,35 @@ export async function updateExperimentStatus(
 
 export async function deleteExperiment(experimentId: string) {
   await db.delete(experiments).where(eq(experiments.id, experimentId));
+}
+
+export async function updateExperimentIteration(experimentId: string, data: { currentIteration?: number; scores?: Array<{ iteration: number; score: number; notes?: string }> }) {
+  const update: Record<string, any> = { updatedAt: new Date() };
+  if (data.currentIteration !== undefined) update.currentIteration = data.currentIteration;
+  if (data.scores !== undefined) update.scores = data.scores;
+  const [updated] = await db.update(experiments).set(update).where(eq(experiments.id, experimentId)).returning();
+  return updated ?? null;
+}
+
+export async function addExperimentScore(experimentId: string, score: number, iteration: number, notes?: string) {
+  const experiment = await getExperimentById(experimentId);
+  if (!experiment) throw new Error('Experiment not found');
+
+  const existingScores = (experiment as any).scores as Array<{ iteration: number; score: number; notes?: string }> ?? [];
+  const newScores = [...existingScores, { iteration, score, notes: notes ?? '' }];
+
+  const [updated] = await db.update(experiments).set({
+    scores: newScores,
+    currentIteration: iteration,
+    updatedAt: new Date(),
+  }).where(eq(experiments.id, experimentId)).returning();
+  return updated ?? null;
+}
+
+export async function getExperimentWithScores(experimentId: string) {
+  const experiment = await getExperimentById(experimentId);
+  if (!experiment) return null;
+
+  const scores = (experiment as any).scores as Array<{ iteration: number; score: number; notes?: string }> ?? [];
+  return { ...experiment, scores };
 }

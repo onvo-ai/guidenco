@@ -39,14 +39,17 @@ export async function POST(req: Request) {
     const entity = await createEntity(organizationId, name, type);
 
     if (experiment) {
-      await createExperiment(organizationId, entity.id, type, {
+      await createExperiment(entity.id, type, {
+        name: experiment.name,
         maxDepth: experiment.maxDepth,
         maxIterations: experiment.maxIterations,
-        timeLimit: experiment.timeLimit
-          ? new Date(experiment.timeLimit)
-          : undefined,
+        timeLimit: experiment.timeLimit ? new Date(experiment.timeLimit) : undefined,
+        startDate: experiment.startDate ? new Date(experiment.startDate) : undefined,
+        endDate: experiment.endDate ? new Date(experiment.endDate) : undefined,
+        checkInInterval: experiment.checkInInterval,
+        goalMetric: experiment.goalMetric,
         parameters: experiment.parameters ?? [],
-      });
+      }, organizationId);
     }
 
     return Response.json(entity);

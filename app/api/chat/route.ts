@@ -1,13 +1,13 @@
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { streamText, UIMessage, tool, stepCountIs } from 'ai';
 import { z } from 'zod';
-import { createOrUpdateDocument, getDocumentById, saveDocumentMessage } from '@/lib/db/entities-service';
+import { createOrUpdateDocument, getDocumentById, saveDocumentMessage, updateDocumentVersionUsage } from '@/lib/db/entities-service';
 import { resizeImage } from '@/lib/image-processing';
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { brandAssets, agentSettings } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
-import { getUserCredits, deductCreditsForUsage } from '@/lib/billing';
+import { getUserCredits, deductCreditsForUsage, TOKENS_PER_CREDIT } from '@/lib/billing';
 import { getFileBuffer } from '@/lib/storage';
 import { getOrCreateOrganizationId, getOrganizationId } from '@/lib/organization';
 import { getAuthenticatedUser } from '@/lib/request-auth';
@@ -21,6 +21,12 @@ const tempPageCounts = new Map<string, number>();
 const PAGE_BREAK = '\n<!-- PAGE_BREAK -->\n';
 const PAGE_BREAK_LEGACY_GUIDENCO = '\n<!-- GUIDENCO_PAGE_BREAK -->\n';
 const PAGE_BREAK_LEGACY_ARTISTE = '\n<!-- ARTISTE_PAGE_BREAK -->\n';
+const DEFAULT_MODEL = 'google/gemini-3-flash-preview';
+const ALLOWED_MODELS = [
+  'google/gemini-3-flash-preview',
+  'google/gemini-3.1-flash-lite-preview',
+  'google/gemini-3.1-pro-preview',
+];
 
 function toDataUri(image: string, mimeType: string) {
   if (!image) return image;
@@ -84,7 +90,8 @@ export async function POST(req: Request) {
     apiKey: process.env.OPENROUTER_API_KEY,
   });
 
-  const modelId = (process.env.OPENROUTER_MODEL || '').trim() || 'google/gemini-2.5-pro';
+  const configuredModel = (process.env.OPENROUTER_MODEL || '').trim();
+  const modelId = configuredModel && ALLOWED_MODELS.includes(configuredModel) ? configuredModel : DEFAULT_MODEL;
 
   // Get session and agent settings
   const currentUser = await getAuthenticatedUser(await headers());
@@ -93,6 +100,11 @@ export async function POST(req: Request) {
   }
 
   const { organizationId, designGuidelines } = await getUserTeamAndAgentSettings(currentUser.id);
+
+  // Accumulate token/credit usage across all steps
+  let totalTokens = 0;
+  let totalCredits = 0;
+  let savedVersionId: string | undefined;
 
   // Credit check — reject before touching the LLM
   const creditBalance = await getUserCredits(organizationId);
@@ -419,25 +431,31 @@ Always use the tools to create the document. The user will see the visual output
             pages[targetPageIndex] = updatedPageHTML;
             const htmlToStore = joinPages(pages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+            const result = await createOrUpdateDocument(
               documentId,
               document.title,
               document.width,
               document.height,
               htmlToStore,
-              currentFonts
+              currentFonts,
+              undefined,
+              undefined,
+              modelId,
+              undefined,
+              undefined
             );
+            savedVersionId = (result as any).newVersionId;
 
-            let message = `HTML edited successfully (Version ${currentVersion + 1})`;
+            let message = `HTML edited successfully (Version ${result.currentVersion + 1})`;
             if (pages.length > 1) {
-              message = `HTML edited successfully for page ${targetPageIndex + 1} of ${pages.length} (Version ${currentVersion + 1})`;
+              message = `HTML edited successfully for page ${targetPageIndex + 1} of ${pages.length} (Version ${result.currentVersion + 1})`;
             }
 
             return {
               success: true,
               message,
-              version: currentVersion,
-              totalVersions,
+              version: result.currentVersion,
+              totalVersions: result.totalVersions,
               width: document.width,
               height: document.height,
               pageCount: pages.length,
@@ -485,23 +503,29 @@ Always use the tools to create the document. The user will see the visual output
             const normalizedPages = Array.from({ length: desiredCount }, (_, idx) => pages[idx] ?? '');
             const htmlToStore = joinPages(normalizedPages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+            const result = await createOrUpdateDocument(
               documentId,
               existingDocument?.title ?? 'Untitled Document',
               dimensions.width,
               dimensions.height,
               htmlToStore,
-              googleFonts || []
+              googleFonts || [],
+              undefined,
+              undefined,
+              modelId,
+              undefined,
+              undefined
             );
+            savedVersionId = (result as any).newVersionId;
 
             tempDimensions.delete(documentId);
             tempPageCounts.delete(documentId);
 
             return {
               success: true,
-              message: `HTML updated successfully (Version ${currentVersion + 1})`,
-              version: currentVersion,
-              totalVersions,
+              message: `HTML updated successfully (Version ${result.currentVersion + 1})`,
+              version: result.currentVersion,
+              totalVersions: result.totalVersions,
               width: dimensions.width,
               height: dimensions.height,
               pageCount: normalizedPages.length,
@@ -538,22 +562,28 @@ Always use the tools to create the document. The user will see the visual output
             const nextPages = [...pages.slice(0, insertAt), '', ...pages.slice(insertAt)];
             const nextHTML = joinPages(nextPages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+            const result = await createOrUpdateDocument(
               documentId,
               document.title,
               document.width,
               document.height,
               nextHTML,
-              currentFonts
+              currentFonts,
+              undefined,
+              undefined,
+              modelId,
+              undefined,
+              undefined
             );
+            savedVersionId = (result as any).newVersionId;
 
             return {
               success: true,
-              message: `Page created (Version ${currentVersion + 1})`,
+              message: `Page created (Version ${result.currentVersion + 1})`,
               pageCount: nextPages.length,
               pageIndex: insertAt,
-              version: currentVersion,
-              totalVersions,
+              version: result.currentVersion,
+              totalVersions: result.totalVersions,
             };
           } catch (error: any) {
             console.error('Error in createPage:', error);
@@ -600,22 +630,28 @@ Always use the tools to create the document. The user will see the visual output
             const nextPages = pages.filter((_, idx) => idx !== pageIndex);
             const nextHTML = joinPages(nextPages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+            const result = await createOrUpdateDocument(
               documentId,
               document.title,
               document.width,
               document.height,
               nextHTML,
-              currentFonts
+              currentFonts,
+              undefined,
+              undefined,
+              modelId,
+              undefined,
+              undefined
             );
+            savedVersionId = (result as any).newVersionId;
 
             return {
               success: true,
-              message: `Page deleted (Version ${currentVersion + 1})`,
+              message: `Page deleted (Version ${result.currentVersion + 1})`,
               pageCount: nextPages.length,
               deletedPageIndex: pageIndex,
-              version: currentVersion,
-              totalVersions,
+              version: result.currentVersion,
+              totalVersions: result.totalVersions,
             };
           } catch (error: any) {
             console.error('Error in deletePage:', error);
@@ -827,6 +863,10 @@ Always use the tools to create the document. The user will see the visual output
       }),
     },
     onStepFinish: async ({ text, toolCalls, toolResults, finishReason, usage }) => {
+      const stepTokens = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+      const stepCredits = Math.max(1, Math.ceil(stepTokens / TOKENS_PER_CREDIT));
+      totalTokens += stepTokens;
+      totalCredits += stepCredits;
       // Deduct credits on every step based on actual token usage.
       // Charging per step (not just final) ensures tool-call steps are counted too.
       await deductCreditsForUsage(organizationId, usage).catch(() => { });
@@ -865,6 +905,11 @@ Always use the tools to create the document. The user will see the visual output
         }
       } catch (error) {
         console.error('❌ Error in onStepFinish:', error);
+      }
+    },
+    onFinish: async () => {
+      if (savedVersionId && totalTokens > 0) {
+        await updateDocumentVersionUsage(savedVersionId, totalTokens, totalCredits).catch(() => { });
       }
     },
   });

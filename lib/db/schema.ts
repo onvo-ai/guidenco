@@ -132,6 +132,8 @@ export const documentVersions = pgTable("document_versions", {
   prompt: text("prompt"),
   parentVersionId: uuid("parent_version_id"),
   model: text("model"),
+  tokenCount: integer("token_count"),
+  creditCount: integer("credit_count"),
   status: text("status").notNull().default("done"), // 'generating' | 'done' | 'error'
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
@@ -192,6 +194,7 @@ export const assetVersions = pgTable("asset_versions", {
   model: text("model"),
   tokenCount: integer("token_count"),
   creditCount: integer("credit_count"),
+  status: text("status").notNull().default("done"), // 'generating' | 'done' | 'error'
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
@@ -223,6 +226,8 @@ export const videoVersions = pgTable("video_versions", {
   prompt: text("prompt"),
   parentVersionId: uuid("parent_version_id"),
   model: text("model"),
+  tokenCount: integer("token_count"),
+  creditCount: integer("credit_count"),
   videoUrl: text("video_url"),
   url: text("url"), // URL to the rendered video
   status: text("status").notNull().default("pending"),
@@ -232,12 +237,11 @@ export const videoVersions = pgTable("video_versions", {
 // Chat messages for asset generation
 export const assetChatMessages = pgTable("asset_chat_messages", {
   id: uuid("id").primaryKey().defaultRandom(),
-  assetId: uuid("asset_id")
+  assetVersionId: uuid("asset_version_id")
     .notNull()
-    .references(() => assets.id, { onDelete: "cascade" }),
+    .references(() => assetVersions.id, { onDelete: "cascade" }),
   role: text("role").notNull(),
   content: jsonb("content").notNull(),
-  model: text("model"),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
@@ -366,6 +370,10 @@ export const blogArticleVersions = pgTable("blog_article_versions", {
   url: text("url"), // URL to the rendered article
   prompt: text("prompt"),
   parentVersionId: uuid("parent_version_id"),
+  model: text("model"),
+  tokenCount: integer("token_count"),
+  creditCount: integer("credit_count"),
+  status: text("status").notNull().default("done"), // 'generating' | 'done' | 'error'
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
@@ -405,6 +413,9 @@ export const socialPostVersions = pgTable("social_post_versions", {
   url: text("url"), // URL to the rendered social post
   prompt: text("prompt"),
   parentVersionId: uuid("parent_version_id"),
+  model: text("model"),
+  tokenCount: integer("token_count"),
+  creditCount: integer("credit_count"),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
@@ -437,9 +448,16 @@ export const experiments = pgTable("experiments", {
     .references(() => organizations.id, { onDelete: "cascade" }),
   entityId: uuid("entity_id").notNull(), // The entity (document, asset, video, blog_article, social_post) this experiment is for
   entityType: text("entity_type").notNull(), // 'document' | 'asset' | 'video' | 'blog_article' | 'social_post'
+  name: text("name").notNull().default("Untitled Experiment"),
   maxDepth: integer("max_depth").notNull().default(3), // How many times to iterate
   maxIterations: integer("max_iterations").notNull().default(5), // Maximum number of variations to generate per iteration
   timeLimit: timestamp("time_limit"), // Timestamp until the experiment ends
+  startDate: timestamp("start_date"), // When the experiment starts
+  endDate: timestamp("end_date"), // When the experiment ends
+  checkInInterval: integer("check_in_interval"), // Interval in days between check-ins
+  goalMetric: text("goal_metric"), // e.g. 'CTR', 'engagement_rate', 'conversion'
+  currentIteration: integer("current_iteration").notNull().default(0), // Current iteration number
+  scores: jsonb("scores").default([]), // Array of { iteration: number, score: number, notes: string }
   status: text("status").notNull().default("active"), // 'active' | 'completed' | 'cancelled'
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

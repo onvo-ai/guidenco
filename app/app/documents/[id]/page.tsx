@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { EntitySummary } from '@/lib/types';
 import { VersionFlowCanvas, VersionNode } from '@/components/version-flow-canvas';
+import { Experiment } from '@/components/experiment-details-card';
 
 export default function DocumentPage() {
     const params = useParams();
@@ -15,11 +16,13 @@ export default function DocumentPage() {
     const [docWidth, setDocWidth] = useState(800);
     const [docHeight, setDocHeight] = useState(600);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [experiment, setExperiment] = useState<Experiment | null>(null);
 
     useEffect(() => {
         if (documentId) {
             loadEntity();
             loadDocument();
+            loadExperiment();
         }
     }, [documentId]);
 
@@ -39,7 +42,7 @@ export default function DocumentPage() {
 
     const loadDocument = useCallback(async () => {
         try {
-            const res = await fetch(`/api/document-versions?documentId=${documentId}`);
+            const res = await fetch(`/api/document-versions?documentId=${documentId}`, { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 setDocWidth(data.width ?? 800);
@@ -52,12 +55,36 @@ export default function DocumentPage() {
                     prompt: v.prompt,
                     parentVersionId: v.parentVersionId,
                     model: v.model,
+                    tokenCount: v.tokenCount,
+                    creditCount: v.creditCount,
+                    metric: v.metric,
+                    parameters: v.parameters,
                     status: v.status,
                 }));
                 setVersions(vs);
             }
         } catch (e) {
             console.error('Error loading document:', e);
+        }
+    }, [documentId]);
+
+    const loadExperiment = useCallback(async () => {
+        try {
+            const res = await fetch(`/api/experiments?entityId=${documentId}`);
+            if (res.ok) {
+                const experiments = await res.json();
+                if (experiments && experiments.length > 0) {
+                    const exp = experiments[0];
+                    setExperiment({
+                        ...exp,
+                        parameters: exp.parameters || [],
+                    });
+                } else {
+                    setExperiment(null);
+                }
+            }
+        } catch (e) {
+            console.error('Error loading experiment:', e);
         }
     }, [documentId]);
 
@@ -81,6 +108,7 @@ export default function DocumentPage() {
                 onGeneratingChange={setIsGenerating}
                 docWidth={docWidth}
                 docHeight={docHeight}
+                experiment={experiment}
             />
         </div>
     );

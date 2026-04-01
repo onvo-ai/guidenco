@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { EntitySummary } from '@/lib/types';
 import { VersionFlowCanvas, VersionNode } from '@/components/version-flow-canvas';
+import { Experiment } from '@/components/experiment-details-card';
 
 export default function SocialPostPage() {
   const params = useParams();
@@ -13,11 +14,13 @@ export default function SocialPostPage() {
   const [currentEntity, setCurrentEntity] = useState<EntitySummary | null>(null);
   const [versions, setVersions] = useState<VersionNode[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [experiment, setExperiment] = useState<Experiment | null>(null);
 
   useEffect(() => {
     if (postId) {
       loadEntity();
       loadPost();
+      loadExperiment();
     }
   }, [postId]);
 
@@ -51,11 +54,36 @@ export default function SocialPostPage() {
           timestamp: v.timestamp,
           prompt: v.prompt,
           parentVersionId: v.parentVersionId,
+          model: v.model,
+          tokenCount: v.tokenCount,
+          creditCount: v.creditCount,
+          metric: v.metric,
+          parameters: v.parameters,
         }));
         setVersions(vs);
       }
     } catch (e) {
       console.error('Error loading post:', e);
+    }
+  }, [postId]);
+
+  const loadExperiment = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/experiments?entityId=${postId}`);
+      if (res.ok) {
+        const experiments = await res.json();
+        if (experiments && experiments.length > 0) {
+          const exp = experiments[0];
+          setExperiment({
+            ...exp,
+            parameters: exp.parameters || [],
+          });
+        } else {
+          setExperiment(null);
+        }
+      }
+    } catch (e) {
+      console.error('Error loading experiment:', e);
     }
   }, [postId]);
 
@@ -77,6 +105,7 @@ export default function SocialPostPage() {
         onUpdate={loadPost}
         isGenerating={isGenerating}
         onGeneratingChange={setIsGenerating}
+        experiment={experiment}
       />
     </div>
   );
