@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "concurrently --kill-others-on-fail false \"next dev\" \"ngrok http --url=69548579b876-1535628245315457793.ngrok-free.app 3000\"",
     "build": "next build",
+    "env": "infisical run --env=dev -- sh -c 'PATH=./node_modules/.bin:$PATH yarn dev'",
+    "dev:log": "next build | npx @loghead/terminal --token eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiMzU4YjQ3YS05NjhlLTQ1NjYtYWMyZS05NDFjYTUxZDViYTQiLCJpc3MiOiJsb2doZWFkIiwidGVuYW50SWQiOiJtSml0QVRGZ3Bjd0VJM1hFVzl6RkYwRUxJTk9yTWdaMyIsImlhdCI6MTc3NTAyNTU2OX0.KgIqRs-Zpny0t6K_rvXBCgH31o24i73Kw-HQ20rzl_Z741UTuF7IYRyBOs0qZll4kM7KKst3MVlpfvSRxnSs3Q --base-url https://www.loghead.dev",
     "start": "next start",
     "lint": "eslint",
     "db:generate": "drizzle-kit generate",
