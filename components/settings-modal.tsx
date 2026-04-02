@@ -635,7 +635,23 @@ function WarehouseSection() {
   };
 
   const handleCopy = (id: string, url: string) => {
-    navigator.clipboard.writeText(url);
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).catch(() => {
+        const el = document.createElement('textarea');
+        el.value = url;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      });
+    } else {
+      const el = document.createElement('textarea');
+      el.value = url;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    }
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
@@ -1154,7 +1170,23 @@ function McpSection() {
   };
 
   const copyValue = async (value: string, key: 'url' | 'token' | 'config' | 'oauth-client-id' | 'oauth-client-secret') => {
-    await navigator.clipboard.writeText(value);
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value).catch(() => {
+        const el = document.createElement('textarea');
+        el.value = value;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      });
+    } else {
+      const el = document.createElement('textarea');
+      el.value = value;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    }
     setCopied(key);
     setTimeout(() => setCopied(null), 2000);
   };

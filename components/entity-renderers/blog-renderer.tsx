@@ -53,9 +53,8 @@ function BlogDetailContent({ version }: DetailContentProps) {
           ))}
         </div>
       )}
-      <div className="prose prose-zinc dark:prose-invert max-w-none text-sm leading-6 max-h-64 overflow-hidden relative">
+      <div className="prose prose-zinc dark:prose-invert max-w-none text-sm leading-6">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{version.content || ''}</ReactMarkdown>
-        <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-white dark:from-zinc-900 to-transparent pointer-events-none" />
       </div>
     </div>
   );
