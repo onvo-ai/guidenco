@@ -1,15 +1,40 @@
-import { randomUUID } from 'crypto';
-import { desc, eq, inArray, and, or, ilike } from 'drizzle-orm';
-import { z } from 'zod';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import sharp from 'sharp';
-import { db } from '@/lib/db';
-import { assets, documents, videos, blogArticles, socialPosts, organizationMembers } from '@/lib/db/schema';
-import { createEntity, getAssetById, getDocumentById, getVideoById, getBlogArticleById, getSocialPostById, createExperiment, getExperimentById, getExperimentsForEntity, updateExperimentStatus, addExperimentScore, updateExperimentIteration } from '@/lib/db/entities-service';
-import type { EntityKind } from '@/lib/db/entities-service';
-import { getSignedUrl } from '@/lib/storage';
-import { searchAllPhotos, searchPexelsVideos, searchFreesoundAudio } from '@/lib/media-service';
-import { textToSpeechElevenLabs } from '@/lib/tts-service';
+import { randomUUID } from "crypto";
+import { desc, eq, inArray, and, or, ilike } from "drizzle-orm";
+import { z } from "zod";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import sharp from "sharp";
+import { db } from "@/lib/db";
+import {
+  assets,
+  documents,
+  videos,
+  blogArticles,
+  socialPosts,
+  organizationMembers,
+} from "@/lib/db/schema";
+import {
+  createEntity,
+  getAssetById,
+  getDocumentById,
+  getVideoById,
+  getBlogArticleById,
+  getSocialPostById,
+  createExperiment,
+  getExperimentById,
+  getExperimentsForEntity,
+  updateExperimentStatus,
+  addExperimentScore,
+  updateExperimentIteration,
+  listEntities,
+} from "@/lib/db/entities-service";
+import type { EntityKind } from "@/lib/db/entities-service";
+import { getSignedUrl } from "@/lib/storage";
+import {
+  searchAllPhotos,
+  searchPexelsVideos,
+  searchFreesoundAudio,
+} from "@/lib/media-service";
+import { textToSpeechElevenLabs } from "@/lib/tts-service";
 
 function absoluteUrl(baseUrl: string, pathOrUrl: string) {
   if (/^https?:\/\//i.test(pathOrUrl) || pathOrUrl.startsWith("data:")) {
