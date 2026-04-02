@@ -166,7 +166,7 @@ function ToolInvocationCard({ toolName, args, result }: { toolName: string; args
 
   let resultLines: string[] = [];
   if (result != null) {
-    const r = result?.result ?? result;
+    const r = result?.result ?? result?.output ?? result;
     if (typeof r === 'string') {
       resultLines = [r.slice(0, 200)];
     } else if (Array.isArray(r)) {
@@ -610,7 +610,7 @@ function EntityVersionNode({ data, selected }: NodeProps) {
   }
 
   return (
-    <NodeShell selected={!!selected} isRoot={d.isRoot} onExpand={d.onExpand} onDownload={onDownload} hasError={hasError}>
+    <NodeShell selected={!!selected} isRoot={d.isRoot} onExpand={d.onExpand} onDownload={onDownload} onRetry={d.onRetry} hasError={hasError}>
       <renderer.NodeContent version={d.version} docWidth={d.docWidth} docHeight={d.docHeight} />
     </NodeShell>
   );
@@ -709,6 +709,7 @@ function InnerCanvas({
     position: { x: number; y: number };
   } | null>(null);
   const hasUserSelectedRef = useRef(false);
+  const handleSubmitRef = useRef<(overridePrompt?: string, overrideParentId?: string | null) => void>(() => {});
 
   const effectiveGenerating = !!(isGenerating || generating);
   const setEffectiveGenerating = useCallback((v: boolean) => {
@@ -716,21 +717,24 @@ function InnerCanvas({
     onGeneratingChange?.(v);
   }, [onGeneratingChange]);
 
-  const retryVersion = useCallback(async (v: VersionNode) => {
+  const retryVersion = useCallback((v: VersionNode) => {
     if (!v.prompt || effectiveGenerating) return;
-    if (v.status === 'generating') {
-      await fetch('/api/document-versions', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ versionId: v.id, status: 'error' }),
-      }).catch(() => { });
-    }
-    await onUpdate();
     const parentId = v.parentVersionId || null;
-    setSelectedVersionId(parentId);
-    hasUserSelectedRef.current = true;
-    setPrompt(v.prompt);
-  }, [effectiveGenerating, onUpdate]);
+
+    // Immediately remove the failed node and its edge for instant visual feedback
+    setNodes(prev => prev.filter(n => n.id !== v.id));
+    setEdges(prev => prev.filter(e => e.source !== v.id && e.target !== v.id));
+
+    // Start generation right away (this adds the pending node)
+    handleSubmitRef.current(v.prompt, parentId);
+
+    // Delete from DB and refresh in background
+    if (entityType === 'video') {
+      fetch(`/api/videos?versionId=${encodeURIComponent(v.id)}`, { method: 'DELETE' })
+        .then(() => onUpdate())
+        .catch(() => { });
+    }
+  }, [effectiveGenerating, entityType, onUpdate, setNodes, setEdges]);
 
   const versionMap = new Map(versions.map(v => [v.id, v]));
 
@@ -778,6 +782,9 @@ function InnerCanvas({
           docWidth: docWidth ?? 800,
           docHeight: docHeight ?? 600,
           onRetry: (v.status === 'generating' || v.status === 'error') ? () => retryVersion(v) : undefined,
+        } : {}),
+        ...(entityType !== 'document' && renderers[entityType].hasError(v) ? {
+          onRetry: () => retryVersion(v),
         } : {}),
       },
       selected: v.id === resolvedSelectedId,
@@ -865,15 +872,15 @@ function InnerCanvas({
     e.target.value = '';
   }, []);
 
-  const handleSubmit = useCallback(async () => {
-    if (!prompt.trim() || effectiveGenerating) return;
-    const userPrompt = prompt.trim();
-    const filesToSend = uploadedFiles;
+  const handleSubmit = useCallback(async (overridePrompt?: string, overrideParentId?: string | null) => {
+    const userPrompt = (overridePrompt ?? prompt).trim();
+    if (!userPrompt || effectiveGenerating) return;
+    const filesToSend = overridePrompt ? [] : uploadedFiles;
     setPrompt('');
     setUploadedFiles([]);
     setEffectiveGenerating(true);
 
-    let parentId = selectedVersionId;
+    let parentId = overrideParentId !== undefined ? overrideParentId : selectedVersionId;
     if (!parentId && versions.length > 0) {
       const { roots } = buildTree(versions);
       parentId = roots[0] || versions[0].id;
@@ -981,6 +988,8 @@ function InnerCanvas({
       setEffectiveGenerating(false);
     }
   }, [prompt, effectiveGenerating, selectedVersionId, versions, nodes, apiEndpoint, onUpdate, buildParentPromptChain, setEffectiveGenerating, selectedModel, uploadedFiles]);
+
+  handleSubmitRef.current = handleSubmit;
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); }

@@ -84,10 +84,10 @@ export default function VideosPage() {
                 const data = await res.json();
                 setVersions(buildVersionNodes(data));
 
-                // Auto-render any version that hasn't been rendered yet
+                // Auto-render any version whose code is ready but not yet rendered
                 const versions: any[] = data.versions || [];
                 for (const v of versions) {
-                    if (v.status !== 'done' && v.status !== 'rendering') {
+                    if (v.status === 'pending') {
                         renderVideo(v.id);
                         break; // render one at a time; the next load will pick up the next pending one
                     }

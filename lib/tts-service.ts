@@ -35,6 +35,8 @@ export async function textToSpeechElevenLabs(
     },
   };
 
+  console.log(`[TTS] Requesting ElevenLabs voice=${voiceId} model=${modelId} textLength=${text.length}`);
+
   const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
     method: 'POST',
     headers: {
@@ -47,13 +49,17 @@ export async function textToSpeechElevenLabs(
 
   if (!res.ok) {
     const errText = await res.text();
+    console.error(`[TTS] ElevenLabs error status=${res.status} body=${errText}`);
     throw new Error(`ElevenLabs TTS failed (${res.status}): ${errText}`);
   }
 
   const audioBuffer = Buffer.from(await res.arrayBuffer());
+  console.log(`[TTS] Audio received bytes=${audioBuffer.length}`);
+
   const key = `tts/${randomUUID()}.mp3`;
   await uploadFile(key, audioBuffer, 'audio/mpeg');
 
   const signedUrl = await getSignedUrl(key, 3600 * 24); // 24h signed URL
+  console.log(`[TTS] Uploaded successfully key=${key}`);
   return { signedUrl, key };
 }

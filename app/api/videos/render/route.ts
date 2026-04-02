@@ -7,6 +7,50 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 
+const MEDIA_EXTENSION_RE = /https?:\/\/[^\s'"`,)>\]]+\.(?:mp4|mp3|webm|mov|ogg|wav|avi|m4v|m4a)(?:\?[^\s'"`,)>\]]*)?/gi;
+
+async function predownloadExternalAssets(code: string): Promise<string> {
+  const urls = [...new Set(code.match(MEDIA_EXTENSION_RE) || [])];
+  if (urls.length === 0) return code;
+
+  const { uploadFile, ensureBucket } = await import('@/lib/storage');
+  await ensureBucket();
+
+  const replacements: Record<string, string> = {};
+  await Promise.all(
+    urls.map(async (url) => {
+      try {
+        console.log(`[Render] Pre-downloading asset: ${url}`);
+        const res = await fetch(url, { redirect: 'follow' });
+        if (!res.ok) { console.warn(`[Render] Skip ${url}: HTTP ${res.status}`); return; }
+        const buffer = Buffer.from(await res.arrayBuffer());
+        const rawExt = url.split('?')[0].split('.').pop() ?? 'mp4';
+        const ext = rawExt.toLowerCase();
+        const mimeType = ext === 'mp3' || ext === 'wav' || ext === 'ogg' || ext === 'm4a'
+          ? `audio/${ext === 'mp3' ? 'mpeg' : ext}`
+          : `video/${ext}`;
+        const key = `render-assets/${randomUUID()}.${ext}`;
+        await uploadFile(key, buffer, mimeType);
+        const { getSignedUrl } = await import('@/lib/storage');
+        // Use signed URL so private S3 buckets work; local MinIO also supports signed URLs
+        const accessibleUrl = process.env.S3_ENDPOINT
+          ? `${process.env.S3_ENDPOINT}/${process.env.S3_BUCKET || 'guidenco'}/${key}`
+          : await getSignedUrl(key, 3600 * 2); // 2h — enough for any render
+        replacements[url] = accessibleUrl;
+        console.log(`[Render] Asset cached: ${url} -> ${accessibleUrl}`);
+      } catch (e) {
+        console.error(`[Render] Error downloading asset ${url}:`, e);
+      }
+    })
+  );
+
+  let result = code;
+  for (const [original, replacement] of Object.entries(replacements)) {
+    result = result.split(original).join(replacement);
+  }
+  return result;
+}
+
 export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
@@ -69,12 +113,14 @@ export const RemotionRoot: React.FC = () => {
 registerRoot(RemotionRoot);
 `.trim();
 
+    const remotionCode = await predownloadExternalAssets(targetVersion.remotionCode);
+
     writeFileSync(join(tempDir, 'index.tsx'), indexContent);
-    writeFileSync(join(tempDir, 'composition.tsx'), targetVersion.remotionCode);
+    writeFileSync(join(tempDir, 'composition.tsx'), remotionCode);
     writeFileSync(join(tempDir, 'package.json'), JSON.stringify({ name: 'remotion-render', version: '1.0.0', dependencies: { remotion: '*', react: '*', 'react-dom': '*' } }));
 
     const chromiumOptions = {
-      disableWebSecurity: false,
+      disableWebSecurity: true, // Required to allow fetching cross-origin media assets during headless render
       gl: 'swiftshader' as const,
     };
     const browserExecutable = process.env.REMOTION_CHROME_EXECUTABLE_PATH || undefined;

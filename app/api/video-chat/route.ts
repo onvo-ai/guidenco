@@ -8,6 +8,7 @@ import {
   updateVideoVersionUsage,
 } from '@/lib/db/entities-service';
 import { createEntityChatHandler } from '@/lib/chat/entity-chat-handler';
+import { textToSpeechElevenLabs } from '@/lib/tts-service';
 
 export const maxDuration = 60;
 
@@ -74,6 +75,12 @@ export const POST = createEntityChatHandler({
       '- `Sequence` for composing sub-components with timing',
       '- `AbsoluteFill` for full-canvas layers',
       '- Standard CSS-in-JS for styling (inline styles or CSS modules)',
+      '',
+      'You have access to ElevenLabs text-to-speech:',
+      '- Use `generateTextToSpeech` to convert narration or dialogue text into an MP3 audio file',
+      '- The tool returns a signed URL — use it with `<Audio src={url} />` from remotion',
+      '- Choose an appropriate voice for the content (default is "George", a neutral male voice)',
+      '- Estimate word count * 0.4s for rough duration when planning frame counts',
       '',
       'You have access to Pexels stock media:',
       '- Use `searchPexelsVideos` to find stock video clips by keyword',
@@ -176,6 +183,26 @@ export const POST = createEntityChatHandler({
               return { id: v.id, url: bestFile?.link || null, width: bestFile?.width || v.width, height: bestFile?.height || v.height, duration: v.duration, thumbnail: v.image, photographer: v.user?.name, pexelsUrl: v.url };
             }).filter((v: any) => v.url);
             return { success: true, videos };
+          } catch (error: any) {
+            return { success: false, error: error.message };
+          }
+        },
+      }),
+      generateTextToSpeech: tool({
+        description: 'Generate text-to-speech audio using ElevenLabs. Returns a signed URL to an MP3 file that can be used with <Audio> in Remotion.',
+        inputSchema: z.object({
+          text: z.string().describe('The text to convert to speech'),
+          voiceId: z.string().optional().describe('ElevenLabs voice ID (default: George - JBFqnCBsd6RMkjVDRZzb)'),
+          modelId: z.string().optional().describe('ElevenLabs model ID (default: eleven_multilingual_v2)'),
+          stability: z.number().min(0).max(1).optional().describe('Voice stability 0-1 (default: 0.5)'),
+          similarityBoost: z.number().min(0).max(1).optional().describe('Similarity boost 0-1 (default: 0.75)'),
+        }),
+        execute: async ({ text, voiceId, modelId, stability, similarityBoost }: {
+          text: string; voiceId?: string; modelId?: string; stability?: number; similarityBoost?: number;
+        }) => {
+          try {
+            const result = await textToSpeechElevenLabs(text, { voiceId, modelId, stability, similarityBoost });
+            return { success: true, url: result.signedUrl, key: result.key };
           } catch (error: any) {
             return { success: false, error: error.message };
           }

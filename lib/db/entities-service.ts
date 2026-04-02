@@ -864,6 +864,10 @@ export async function updateVideoVersionStatus2(versionId: string, status: strin
   await db.update(videoVersions).set({ status }).where(eq(videoVersions.id, versionId));
 }
 
+export async function deleteVideoVersion(versionId: string) {
+  await db.delete(videoVersions).where(eq(videoVersions.id, versionId));
+}
+
 export async function getVideoMessages(videoVersionId: string) {
   return await db
     .select()
