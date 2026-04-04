@@ -1,70 +1,46 @@
-import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { streamText, UIMessage, tool, stepCountIs } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
-import { saveAssetMessage, upsertAsset, getAssetById } from '@/lib/db/entities-service';
-import { auth } from '@/lib/auth';
-import { headers } from 'next/headers';
-import { getUserCredits, deductCredit } from '@/lib/billing';
+import {
+  saveAssetMessage,
+  getAssetById,
+  createPendingAssetVersion,
+  updateAssetVersionContent,
+  updateAssetVersionStatus,
+  updateAssetVersionUsage,
+} from '@/lib/db/entities-service';
+import { createEntityChatHandler } from '@/lib/chat/entity-chat-handler';
 
 export const maxDuration = 60;
-const DEFAULT_SVG_MODEL = 'google/gemini-2.5-pro';
 
-export async function POST(req: Request) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const assetId = searchParams.get('assetId');
+const DEFAULT_MODEL = 'google/gemini-3-flash-preview';
+const ALLOWED_MODELS = [
+  "google/gemini-3-flash-preview",
+  "google/gemini-3.1-flash-lite-preview",
+  "google/gemini-3.1-pro-preview",
+];
 
-    if (!assetId) return new Response('Asset ID required', { status: 400 });
-
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (!session) return new Response('Unauthorized', { status: 401 });
-
-    // Credit check — reject before touching the LLM
-    const creditBalance = await getUserCredits(session.user.id);
-    if (creditBalance <= 0) {
-      return new Response('Insufficient credits', { status: 402 });
-    }
-
-    const { messages }: { messages: UIMessage[] } = await req.json();
-
-    const lastUserMessage = messages[messages.length - 1];
-    if (lastUserMessage?.role === 'user') {
-      await saveAssetMessage(assetId, 'user', lastUserMessage.parts || []);
-    }
-
-    const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
-    if (!apiKey) {
-      return new Response('OPENROUTER_API_KEY is not configured.', { status: 500 });
-    }
-
-    const openrouter = createOpenRouter({ apiKey });
-    const configuredSvgModel = (process.env.SVG_MODEL || '').trim();
-    const configuredDefaultModel = (process.env.OPENROUTER_MODEL || '').trim();
-    const selectedConfiguredModel = configuredSvgModel || configuredDefaultModel;
-    const modelId = selectedConfiguredModel.includes('preview') ? DEFAULT_SVG_MODEL : (selectedConfiguredModel || DEFAULT_SVG_MODEL);
-    const currentAsset = await getAssetById(assetId);
-
-    const convertedMessages = messages.map((msg: any) => {
-      const textParts = (msg.parts || [])
-        .filter((p: any) => p.type === 'text')
-        .map((p: any) => ({ type: 'text' as const, text: p.text }));
+export const POST = createEntityChatHandler({
+  entityIdParam: 'assetId',
+  defaultModel: DEFAULT_MODEL,
+  allowedModels: ALLOWED_MODELS,
+  envModelKeys: ['SVG_MODEL'],
+  maxSteps: (entity) => (entity && entity.currentVersion >= 0 ? 3 : 1),
+  getStreamOverrides: (entity) => {
+    if (!entity || entity.currentVersion < 0) {
       return {
-        role: msg.role,
-        content: textParts.length > 0 ? textParts : [{ type: 'text' as const, text: '' }],
+        activeTools: ['saveSVG'],
+        toolChoice: { type: 'tool' as const, toolName: 'saveSVG' as const },
       };
-    });
-
-    const result = streamText({
-      model: openrouter(modelId),
-      messages: convertedMessages as any,
-      stopWhen: currentAsset ? stepCountIs(3) : stepCountIs(1),
-      ...(currentAsset
-        ? {}
-        : {
-          activeTools: ['saveSVG'],
-          toolChoice: { type: 'tool' as const, toolName: 'saveSVG' as const },
-        }),
-      system: `You are an expert SVG designer. Your job is to create high-quality, standalone SVG assets for the user.
+    }
+    return {};
+  },
+  messageConversionMode: 'file-aware',
+  loadEntity: getAssetById,
+  createPendingVersion: createPendingAssetVersion,
+  markVersionError: (versionId) => updateAssetVersionStatus(versionId, 'error'),
+  saveMessage: saveAssetMessage,
+  updateVersionUsage: updateAssetVersionUsage,
+  buildSystemPrompt: ({ chainContext }) => `You are an expert SVG designer. Your job is to create high-quality, standalone SVG assets for the user.${chainContext}
 
 Guidelines:
 - Always output a complete, valid, self-contained SVG (starting with <svg ...> and ending with </svg>)
@@ -84,67 +60,38 @@ When a user asks you to create or modify an SVG asset:
 If the user asks to modify or improve the asset, use getSVG to see the current SVG first, then save an updated version.
 
 CRITICAL: Always end with a text explanation of what you created/changed.`,
-      tools: {
-        saveSVG: tool({
-          description: 'Save the generated SVG asset. This immediately updates the preview.',
-          inputSchema: z.object({
-            svgContent: z.string().describe('The complete SVG markup starting with <svg and ending with </svg>'),
-            title: z.string().optional().describe('Short title for the asset (e.g., "Company Logo", "Star Icon")'),
-          }),
-          execute: async ({ svgContent, title }: { svgContent: string; title?: string }) => {
-            try {
-              await upsertAsset(assetId, { svgContent, title, createVersion: true });
-              return { success: true, message: 'SVG saved successfully' };
-            } catch (error: any) {
-              console.error('Error saving SVG asset:', error);
-              return { success: false, error: error.message };
-            }
-          },
-        }),
-        getSVG: tool({
-          description: 'Get the current SVG asset content so you can modify or improve it.',
-          inputSchema: z.object({}),
-          execute: async () => {
-            const asset = await getAssetById(assetId);
-            if (!asset) return { success: false, error: 'No SVG asset yet' };
+  buildTools: ({ entityId, tracker, userPrompt, parentVersionId, modelId, entity }) => {
+    const parentVersion = parentVersionId ? entity?.versions.find(v => v.id === parentVersionId) : undefined;
+    const parentSvgContent: string | undefined = (parentVersion as any)?.svgContent;
 
-            const image = `data:image/svg+xml;base64,${Buffer.from(asset.svgContent).toString('base64')}`;
-
-            return {
-              success: true,
-              title: asset.title || 'Current SVG Asset',
-              image,
-              mimeType: 'image/svg+xml',
-              message: asset.title ? `Inspecting asset: ${asset.title}` : 'Inspecting current asset...',
-            };
-          },
+    return {
+      saveSVG: tool({
+        description: 'Save the generated SVG asset. This immediately updates the preview.',
+        inputSchema: z.object({
+          svgContent: z.string().describe('The complete SVG markup starting with <svg and ending with </svg>'),
+          title: z.string().optional().describe('Short title for the asset (e.g., "Company Logo", "Star Icon")'),
         }),
-      },
-      onStepFinish: async ({ text, toolCalls, toolResults, finishReason }) => {
-        if (finishReason === 'stop' || finishReason === 'length') {
-          await deductCredit(session.user.id).catch(() => {});
-        }
-        try {
-          const parts: any[] = [];
-          if (toolCalls && toolResults) {
-            for (let i = 0; i < toolCalls.length; i++) {
-              const tc = toolCalls[i] as any;
-              const tr = toolResults[i] as any;
-              parts.push({ type: `tool-${tc.toolName}`, toolCallId: tc.toolCallId, toolName: tc.toolName, args: tc.args, output: tr?.result || tr });
-            }
+        execute: async ({ svgContent, title }: { svgContent: string; title?: string }) => {
+          try {
+            await updateAssetVersionContent(tracker.currentVersionId, { svgContent, title });
+            tracker.contentSaved = true;
+            return { success: true, message: 'SVG saved successfully' };
+          } catch (error: any) {
+            console.error('Error saving SVG asset:', error);
+            return { success: false, error: error.message };
           }
-          if (text) parts.push({ type: 'text', text });
-          if (parts.length > 0) await saveAssetMessage(assetId, 'assistant', parts);
-        } catch (e) {
-          console.error('Error saving asset message:', e);
-        }
-      },
-    });
-
-    return result.toUIMessageStreamResponse();
-  } catch (error) {
-    console.error('Asset chat route failed:', error);
-    const message = error instanceof Error ? error.message : 'Unknown asset chat error';
-    return new Response(`Asset chat failed: ${message}`, { status: 500 });
-  }
-}
+        },
+      }),
+      getSVG: tool({
+        description: 'Get the current SVG asset content so you can modify or improve it.',
+        inputSchema: z.object({}),
+        execute: async () => {
+          const svgContent = parentSvgContent ?? (entity?.versions[entity.currentVersion] as any)?.svgContent as string | undefined;
+          if (!svgContent) return { success: false, error: 'No SVG asset yet' };
+          const image = `data:image/svg+xml;base64,${Buffer.from(svgContent).toString('base64')}`;
+          return { success: true, title: 'Current SVG Asset', image, mimeType: 'image/svg+xml', message: 'Inspecting current asset...' };
+        },
+      }),
+    };
+  },
+});

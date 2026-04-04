@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
-import { getVideoById, upsertVideo } from '@/lib/db/entities-service';
+import { getVideoById, upsertVideo, deleteVideoVersion } from '@/lib/db/entities-service';
 
 export async function GET(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -14,6 +14,17 @@ export async function GET(req: NextRequest) {
   if (!video) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
   return NextResponse.json(video);
+}
+
+export async function DELETE(req: NextRequest) {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const versionId = req.nextUrl.searchParams.get('versionId');
+  if (!versionId) return NextResponse.json({ error: 'versionId required' }, { status: 400 });
+
+  await deleteVideoVersion(versionId);
+  return NextResponse.json({ success: true });
 }
 
 export async function POST(req: NextRequest) {

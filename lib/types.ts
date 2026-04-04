@@ -1,7 +1,7 @@
 export interface EntitySummary {
   id: string;
   name: string;
-  type: 'document' | 'asset' | 'video';
+  type: 'document' | 'asset' | 'video' | 'blog_article' | 'social_post';
   createdAt: number;
   updatedAt: number;
 }

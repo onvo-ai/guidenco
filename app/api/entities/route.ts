@@ -1,20 +1,29 @@
-import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
-import { headers } from 'next/headers';
-import { createEntity, listEntities } from '@/lib/db/entities-service';
+import { NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
+import {
+  createEntity,
+  listEntities,
+  createExperiment,
+} from "@/lib/db/entities-service";
+import { getOrCreateOrganizationId } from "@/lib/organization";
 
 export async function GET() {
   try {
     const session = await auth.api.getSession({ headers: await headers() });
     if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const entities = await listEntities(session.user.id);
+    const organizationId = await getOrCreateOrganizationId(session.user.id);
+    const entities = await listEntities(organizationId);
     return NextResponse.json(entities);
   } catch (error) {
-    console.error('Error fetching entities:', error);
-    return NextResponse.json({ error: 'Failed to fetch entities' }, { status: 500 });
+    console.error("Error fetching entities:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch entities" },
+      { status: 500 },
+    );
   }
 }
 
@@ -22,14 +31,30 @@ export async function POST(req: Request) {
   try {
     const session = await auth.api.getSession({ headers: await headers() });
     if (!session) {
-      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { name, type = 'document' } = await req.json();
-    const entity = await createEntity(session.user.id, name, type);
+    const { name, type = "document", experiment } = await req.json();
+    const organizationId = await getOrCreateOrganizationId(session.user.id);
+    const entity = await createEntity(organizationId, name, type);
+
+    if (experiment) {
+      await createExperiment(entity.id, type, {
+        name: experiment.name,
+        maxDepth: experiment.maxDepth,
+        maxIterations: experiment.maxIterations,
+        timeLimit: experiment.timeLimit ? new Date(experiment.timeLimit) : undefined,
+        startDate: experiment.startDate ? new Date(experiment.startDate) : undefined,
+        endDate: experiment.endDate ? new Date(experiment.endDate) : undefined,
+        checkInInterval: experiment.checkInInterval,
+        goalMetric: experiment.goalMetric,
+        parameters: experiment.parameters ?? [],
+      }, organizationId);
+    }
+
     return Response.json(entity);
   } catch (error) {
-    console.error('Error creating entity:', error);
-    return Response.json({ error: 'Failed to create entity' }, { status: 500 });
+    console.error("Error creating entity:", error);
+    return Response.json({ error: "Failed to create entity" }, { status: 500 });
   }
 }

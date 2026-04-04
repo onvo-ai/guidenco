@@ -1,3 +1,5 @@
+"use client";
+
 import { type VariantProps } from "class-variance-authority";
 import { Menu } from "lucide-react";
 import { ReactNode } from "react";

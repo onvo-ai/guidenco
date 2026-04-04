@@ -1,11 +1,11 @@
-import { auth } from '@/lib/auth';
 import { getAssetById } from '@/lib/db/entities-service';
 import { headers } from 'next/headers';
+import { getAuthenticatedUser } from '@/lib/request-auth';
 
 export async function GET(req: Request) {
   try {
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (!session) return new Response('Unauthorized', { status: 401 });
+    const currentUser = await getAuthenticatedUser(await headers());
+    if (!currentUser) return new Response('Unauthorized', { status: 401 });
 
     const { searchParams } = new URL(req.url);
     const assetId = searchParams.get('assetId');

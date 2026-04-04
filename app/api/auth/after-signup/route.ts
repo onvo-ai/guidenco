@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
-import { teams, teamMembers, teamInvites, users } from '@/lib/db/schema';
+import { organizationMembers, organizationInvitations } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
+import { ensureUserCredits } from '@/lib/billing';
+import { getOrCreateOrganizationId } from '@/lib/organization';
 
 /**
- * Called after a user signs up. Checks for pending invites by email
- * and joins the team if matched, otherwise creates a personal team.
+ * Called after a user signs up. Accepts any pending BetterAuth org invitation
+ * matched by email, otherwise creates a personal organization.
  */
 export async function POST() {
   try {
@@ -16,58 +18,50 @@ export async function POST() {
 
     const { id: userId, email } = session.user;
 
-    // Check if already has a team
-    const ownedTeam = await db
+    // Check if already an org member
+    const [existingMembership] = await db
       .select()
-      .from(teams)
-      .where(eq(teams.ownerId, userId))
+      .from(organizationMembers)
+      .where(eq(organizationMembers.userId, userId))
       .limit(1);
-    if (ownedTeam.length > 0) return Response.json({ joined: false, reason: 'already_has_team' });
 
-    const membership = await db
-      .select()
-      .from(teamMembers)
-      .where(eq(teamMembers.userId, userId))
-      .limit(1);
-    if (membership.length > 0) return Response.json({ joined: false, reason: 'already_member' });
-
-    // Look up pending invites by email
-    const pendingInvites = await db
-      .select()
-      .from(teamInvites)
-      .where(and(eq(teamInvites.email, email), eq(teamInvites.status, 'pending')));
-
-    if (pendingInvites.length > 0) {
-      // Join the first matching team (could handle multiple in future)
-      const invite = pendingInvites[0];
-
-      await db.insert(teamMembers).values({
-        teamId: invite.teamId,
-        userId,
-        role: 'member',
-      });
-
-      // Mark all matching invites as accepted
-      for (const inv of pendingInvites) {
-        await db
-          .update(teamInvites)
-          .set({ status: 'accepted' })
-          .where(eq(teamInvites.id, inv.id));
-      }
-
-      return Response.json({ joined: true, teamId: invite.teamId });
+    if (existingMembership) {
+      await ensureUserCredits(existingMembership.organizationId);
+      return Response.json({ joined: false, reason: 'already_member' });
     }
 
-    // No invite — create a personal team
-    const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-    const teamName = user[0]?.name ? `${user[0].name}'s Team` : 'My Team';
+    // Look up pending BetterAuth org invitations by email
+    const pendingInvites = await db
+      .select()
+      .from(organizationInvitations)
+      .where(and(eq(organizationInvitations.email, email), eq(organizationInvitations.status, 'pending')));
 
-    const [newTeam] = await db
-      .insert(teams)
-      .values({ name: teamName, ownerId: userId })
-      .returning();
+    if (pendingInvites.length > 0) {
+      const invite = pendingInvites[0];
+      const { randomUUID } = await import('crypto');
 
-    return NextResponse.json({ joined: false, createdTeam: newTeam.id });
+      await db.insert(organizationMembers).values({
+        id: randomUUID(),
+        organizationId: invite.organizationId,
+        userId,
+        role: invite.role,
+      });
+
+      for (const inv of pendingInvites) {
+        await db
+          .update(organizationInvitations)
+          .set({ status: 'accepted' })
+          .where(eq(organizationInvitations.id, inv.id));
+      }
+
+      await ensureUserCredits(invite.organizationId);
+      return Response.json({ joined: true, organizationId: invite.organizationId });
+    }
+
+    // No invite — create a personal organization
+    const organizationId = await getOrCreateOrganizationId(userId);
+    await ensureUserCredits(organizationId);
+    return NextResponse.json({ joined: false, createdOrganization: organizationId });
   } catch (error) {
     console.error('Error in after-signup:', error);
     return NextResponse.json({ error: 'After-signup failed' }, { status: 500 });

@@ -31,14 +31,19 @@ services:
     # Environment & Secrets
     # -------------------------------------------------------------------------
     # Secrets loaded at runtime from env file (not baked into image layers)
+    # .env.docker overrides localhost URLs with Docker container hostnames
     env_file:
       - ./.env
+      
 
     # -------------------------------------------------------------------------
     # Network
     # -------------------------------------------------------------------------
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
+      
+    # networks:
+    #   - guidenco-network
     # Uncomment for internal-only access (reverse proxy in front)
     # expose:
     #   - "3000"
@@ -50,9 +55,12 @@ services:
     read_only: true
 
     # Temporary filesystems for directories that need write access
+    # /tmp needs exec permission for Remotion bundler (writes + executes JS bundles)
     tmpfs:
-      - /tmp:size=64m,mode=1777,noexec,nosuid
-      - /app/.next/cache:size=128m,mode=0755,noexec,nosuid
+      - /tmp:size=512m,mode=1777,nosuid
+      - /app/.next/cache:size=128m,mode=0755,noexec,nosuid,uid=10001,gid=10001
+    # Chromium needs /dev/shm for shared memory (default 64MB is too small)
+    shm_size: '256m'
 
     # Security options
     security_opt:
@@ -73,12 +81,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 512M
-          pids: 100
+          cpus: "2.0"
+          memory: 2G
+          pids: 500
         reservations:
-          cpus: "0.25"
-          memory: 128M
+          cpus: "0.5"
+          memory: 512M
 
     # -------------------------------------------------------------------------
     # Restart Policy
@@ -115,13 +123,13 @@ services:
     #   net.ipv4.ip_unprivileged_port_start: 0
 
 # =============================================================================
-# Networks (optional - for multi-container setups)
+# Networks - join the shared network from docker-compose.dev.yml
+# so the app can reach postgres (guidenco-db) and minio by container name
 # =============================================================================
-# networks:
-#   default:
-#     driver: bridge
-#     driver_opts:
-#       com.docker.network.bridge.enable_icc: "false"
+networks:
+  guidenco-network:
+    external: true
+    name: guidenco_guidenco-network
 
 # =============================================================================
 # SECURITY CHECKLIST

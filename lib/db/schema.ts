@@ -28,6 +28,7 @@ export const sessions = pgTable("sessions", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
+  activeOrganizationId: text("active_organization_id"),
   userId: text("user_id")
     .notNull()
     .references(() => users.id),
@@ -60,17 +61,57 @@ export const verifications = pgTable("verification", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const organizations = pgTable("organization", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  logo: text("logo"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const organizationMembers = pgTable("member", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  role: text("role").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const organizationInvitations = pgTable("invitation", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  role: text("role").notNull(),
+  status: text("status").notNull().default("pending"),
+  teamId: text("team_id"),
+  inviterId: text("inviter_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: timestamp("expires_at").notNull(),
+});
+
+export const jwks = pgTable("jwks", {
+  id: text("id").primaryKey(),
+  publicKey: text("public_key").notNull(),
+  privateKey: text("private_key").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 // Documents table
 export const documents = pgTable("documents", {
   id: uuid("id").defaultRandom().primaryKey(),
-  userId: text("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
+  organizationId: text("organization_id")
+    .references(() => organizations.id, { onDelete: "cascade" })
     .notNull(),
   title: text("title").notNull().default("Untitled Document"),
-  width: integer("width").notNull(),
-  height: integer("height").notNull(),
   currentVersion: integer("current_version").default(0).notNull(),
-  thumbnail: text("thumbnail"), // Base64 encoded thumbnail image
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -83,65 +124,37 @@ export const documentVersions = pgTable("document_versions", {
     .references(() => documents.id, { onDelete: "cascade" }),
   version: integer("version").notNull(),
   html: text("html").notNull(),
+  width: integer("width").notNull().default(800),
+  height: integer("height").notNull().default(600),
+  thumbnail: text("thumbnail"), // Base64 encoded thumbnail image
+  url: text("url"), // URL to the rendered document
   googleFonts: text("google_fonts").array(), // Array of Google Font family names
+  prompt: text("prompt"),
+  parentVersionId: uuid("parent_version_id"),
+  model: text("model"),
+  tokenCount: integer("token_count"),
+  creditCount: integer("credit_count"),
+  status: text("status").notNull().default("done"), // 'generating' | 'done' | 'error'
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
-// Teams table
-export const teams = pgTable("teams", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name").notNull(),
-  ownerId: text("owner_id")
-    .notNull()
-    .references(() => users.id),
-  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
-});
-
-// Team members (accepted invites)
-export const teamMembers = pgTable("team_members", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  teamId: uuid("team_id")
-    .notNull()
-    .references(() => teams.id, { onDelete: "cascade" }),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  role: text("role").notNull().default("member"),
-  joinedAt: timestamp("joined_at", { mode: "date" }).defaultNow().notNull(),
-});
-
-// Pending invites (matched by email on signup)
-export const teamInvites = pgTable("team_invites", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  teamId: uuid("team_id")
-    .notNull()
-    .references(() => teams.id, { onDelete: "cascade" }),
-  email: text("email").notNull(),
-  name: text("name"),
-  invitedBy: text("invited_by")
-    .notNull()
-    .references(() => users.id),
-  status: text("status").notNull().default("pending"), // 'pending' | 'accepted'
-  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
-});
-
-// Agent settings (per-team)
+// Agent settings (per-organization)
 export const agentSettings = pgTable("agent_settings", {
   id: uuid("id").primaryKey().defaultRandom(),
-  teamId: uuid("team_id")
+  organizationId: text("organization_id")
     .notNull()
-    .references(() => teams.id, { onDelete: "cascade" }),
+    .references(() => organizations.id, { onDelete: "cascade" }),
   designGuidelines: text("design_guidelines").default(""),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { mode: "date" }).defaultNow().notNull(),
 });
 
-// Design warehouse assets (per-team)
+// Design warehouse assets (per-organization)
 export const brandAssets = pgTable("brand_assets", {
   id: uuid("id").primaryKey().defaultRandom(),
-  teamId: uuid("team_id")
+  organizationId: text("organization_id")
     .notNull()
-    .references(() => teams.id, { onDelete: "cascade" }),
+    .references(() => organizations.id, { onDelete: "cascade" }),
   uploadedBy: text("uploaded_by")
     .notNull()
     .references(() => users.id),
@@ -157,13 +170,10 @@ export const brandAssets = pgTable("brand_assets", {
 // Generated SVG assets
 export const assets = pgTable("assets", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: text("user_id")
+  organizationId: text("organization_id")
     .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
+    .references(() => organizations.id, { onDelete: "cascade" }),
   title: text("title").notNull().default("Untitled Asset"),
-  width: integer("width").notNull().default(1024),
-  height: integer("height").notNull().default(1024),
-  svgContent: text("svg_content").notNull().default(""),
   currentVersion: integer("current_version").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -179,23 +189,23 @@ export const assetVersions = pgTable("asset_versions", {
   title: text("title").notNull().default("Untitled Asset"),
   width: integer("width").notNull().default(1024),
   height: integer("height").notNull().default(1024),
+  prompt: text("prompt"),
+  parentVersionId: uuid("parent_version_id"),
+  model: text("model"),
+  tokenCount: integer("token_count"),
+  creditCount: integer("credit_count"),
+  status: text("status").notNull().default("done"), // 'generating' | 'done' | 'error'
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
 // Generated videos
 export const videos = pgTable("videos", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: text("user_id")
+  organizationId: text("organization_id")
     .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
+    .references(() => organizations.id, { onDelete: "cascade" }),
   title: text("title").notNull().default("Untitled Video"),
   remotionCode: text("remotion_code").notNull().default(""),
-  width: integer("width").notNull().default(1920),
-  height: integer("height").notNull().default(1080),
-  durationInFrames: integer("duration_in_frames").notNull().default(150),
-  fps: integer("fps").notNull().default(30),
-  videoUrl: text("video_url"),
-  status: text("status").notNull().default("pending"), // 'pending' | 'rendering' | 'done' | 'error'
   currentVersion: integer("current_version").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -213,15 +223,23 @@ export const videoVersions = pgTable("video_versions", {
   height: integer("height").notNull().default(1080),
   durationInFrames: integer("duration_in_frames").notNull().default(150),
   fps: integer("fps").notNull().default(30),
+  prompt: text("prompt"),
+  parentVersionId: uuid("parent_version_id"),
+  model: text("model"),
+  tokenCount: integer("token_count"),
+  creditCount: integer("credit_count"),
+  videoUrl: text("video_url"),
+  url: text("url"), // URL to the rendered video
+  status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
 // Chat messages for asset generation
 export const assetChatMessages = pgTable("asset_chat_messages", {
   id: uuid("id").primaryKey().defaultRandom(),
-  assetId: uuid("asset_id")
+  assetVersionId: uuid("asset_version_id")
     .notNull()
-    .references(() => assets.id, { onDelete: "cascade" }),
+    .references(() => assetVersions.id, { onDelete: "cascade" }),
   role: text("role").notNull(),
   content: jsonb("content").notNull(),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
@@ -230,9 +248,9 @@ export const assetChatMessages = pgTable("asset_chat_messages", {
 // Chat messages for video generation
 export const videoChatMessages = pgTable("video_chat_messages", {
   id: uuid("id").primaryKey().defaultRandom(),
-  videoId: uuid("video_id")
+  videoVersionId: uuid("video_version_id")
     .notNull()
-    .references(() => videos.id, { onDelete: "cascade" }),
+    .references(() => videoVersions.id, { onDelete: "cascade" }),
   role: text("role").notNull(),
   content: jsonb("content").notNull(),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
@@ -241,9 +259,9 @@ export const videoChatMessages = pgTable("video_chat_messages", {
 // Subscriptions table
 export const subscriptions = pgTable("subscriptions", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: text("user_id")
+  organizationId: text("organization_id")
     .notNull()
-    .references(() => users.id, { onDelete: "cascade" })
+    .references(() => organizations.id, { onDelete: "cascade" })
     .unique(),
   stripeCustomerId: text("stripe_customer_id").unique(),
   stripeSubscriptionId: text("stripe_subscription_id").unique(),
@@ -259,9 +277,9 @@ export const subscriptions = pgTable("subscriptions", {
 // Credits table
 export const credits = pgTable("credits", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: text("user_id")
+  organizationId: text("organization_id")
     .notNull()
-    .references(() => users.id, { onDelete: "cascade" })
+    .references(() => organizations.id, { onDelete: "cascade" })
     .unique(),
   balance: integer("balance").notNull().default(0),
   lastResetAt: timestamp("last_reset_at").defaultNow().notNull(),
@@ -269,13 +287,195 @@ export const credits = pgTable("credits", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// MCP access tokens
+export const mcpTokens = pgTable("mcp_tokens", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" })
+    .unique(),
+  tokenHash: text("token_hash").notNull(),
+  tokenPreview: text("token_preview").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+  revokedAt: timestamp("revoked_at"),
+});
+
+export const oauthApplications = pgTable("oauth_applications", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  icon: text("icon"),
+  metadata: text("metadata"),
+  clientId: text("client_id").notNull().unique(),
+  clientSecret: text("client_secret"),
+  redirectURLs: text("redirect_urls").notNull(),
+  type: text("type").notNull(),
+  disabled: boolean("disabled").notNull().default(false),
+  userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const oauthAccessTokens = pgTable("oauth_access_tokens", {
+  id: text("id").primaryKey(),
+  accessToken: text("access_token").notNull().unique(),
+  refreshToken: text("refresh_token").notNull().unique(),
+  accessTokenExpiresAt: timestamp("access_token_expires_at").notNull(),
+  refreshTokenExpiresAt: timestamp("refresh_token_expires_at").notNull(),
+  clientId: text("client_id")
+    .notNull()
+    .references(() => oauthApplications.clientId, { onDelete: "cascade" }),
+  userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+  scopes: text("scopes").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const oauthConsents = pgTable("oauth_consents", {
+  id: text("id").primaryKey(),
+  clientId: text("client_id")
+    .notNull()
+    .references(() => oauthApplications.clientId, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  scopes: text("scopes").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  consentGiven: boolean("consent_given").notNull().default(false),
+});
+
+// Blog articles
+export const blogArticles = pgTable("blog_articles", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default("Untitled Article"),
+  currentVersion: integer("current_version").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const blogArticleVersions = pgTable("blog_article_versions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  articleId: uuid("article_id")
+    .notNull()
+    .references(() => blogArticles.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  title: text("title").notNull().default("Untitled Article"),
+  content: text("content").notNull(),
+  bannerImage: text("banner_image"),
+  tags: text("tags").array(),
+  url: text("url"), // URL to the rendered article
+  prompt: text("prompt"),
+  parentVersionId: uuid("parent_version_id"),
+  model: text("model"),
+  tokenCount: integer("token_count"),
+  creditCount: integer("credit_count"),
+  status: text("status").notNull().default("done"), // 'generating' | 'done' | 'error'
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+});
+
+export const blogArticleChatMessages = pgTable("blog_article_chat_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  articleVersionId: uuid("article_version_id")
+    .notNull()
+    .references(() => blogArticleVersions.id, { onDelete: "cascade" }),
+  role: text("role").notNull(),
+  content: jsonb("content").notNull(),
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+});
+
+// Social media posts
+export const socialPosts = pgTable("social_posts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default("Untitled Post"),
+  currentVersion: integer("current_version").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const socialPostVersions = pgTable("social_post_versions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  postId: uuid("post_id")
+    .notNull()
+    .references(() => socialPosts.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  title: text("title").notNull().default("Untitled Post"),
+  content: text("content").notNull(),
+  hashtags: text("hashtags").array(),
+  mediaUrl: text("media_url"),
+  mediaType: text("media_type"),
+  url: text("url"), // URL to the rendered social post
+  prompt: text("prompt"),
+  parentVersionId: uuid("parent_version_id"),
+  model: text("model"),
+  tokenCount: integer("token_count"),
+  creditCount: integer("credit_count"),
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+});
+
+export const socialPostChatMessages = pgTable("social_post_chat_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  postVersionId: uuid("post_version_id")
+    .notNull()
+    .references(() => socialPostVersions.id, { onDelete: "cascade" }),
+  role: text("role").notNull(),
+  content: jsonb("content").notNull(),
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+});
+
 // Chat messages table
 export const documentChatMessages = pgTable("document_chat_messages", {
   id: uuid("id").primaryKey().defaultRandom(),
-  documentId: uuid("document_id")
+  documentVersionId: uuid("document_version_id")
     .notNull()
-    .references(() => documents.id, { onDelete: "cascade" }),
+    .references(() => documentVersions.id, { onDelete: "cascade" }),
   role: text("role").notNull(), // 'user' | 'assistant'
   content: jsonb("content").notNull(), // Store parts array as JSON
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+});
+
+// Experiments for iterative content generation
+export const experiments = pgTable("experiments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  entityId: uuid("entity_id").notNull(), // The entity (document, asset, video, blog_article, social_post) this experiment is for
+  entityType: text("entity_type").notNull(), // 'document' | 'asset' | 'video' | 'blog_article' | 'social_post'
+  name: text("name").notNull().default("Untitled Experiment"),
+  maxDepth: integer("max_depth").notNull().default(3), // How many times to iterate
+  maxIterations: integer("max_iterations").notNull().default(5), // Maximum number of variations to generate per iteration
+  timeLimit: timestamp("time_limit"), // Timestamp until the experiment ends
+  startDate: timestamp("start_date"), // When the experiment starts
+  endDate: timestamp("end_date"), // When the experiment ends
+  checkInInterval: integer("check_in_interval"), // Interval in days between check-ins
+  goalMetric: text("goal_metric"), // e.g. 'CTR', 'engagement_rate', 'conversion'
+  currentIteration: integer("current_iteration").notNull().default(0), // Current iteration number
+  scores: jsonb("scores").default([]), // Array of { iteration: number, score: number, notes: string }
+  status: text("status").notNull().default("active"), // 'active' | 'completed' | 'cancelled'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Experiment parameters - key-value pairs for experiment configuration
+export const experimentParameters = pgTable("experiment_parameters", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  experimentId: uuid("experiment_id")
+    .notNull()
+    .references(() => experiments.id, { onDelete: "cascade" }),
+  key: text("key").notNull(), // Parameter name
+  description: text("description"), // Parameter description
+  type: text("type").notNull().default("string"), // 'string' | 'number' | 'boolean'
+  stringValue: text("string_value"), // Value for string type
+  numberValue: integer("number_value"), // Value for number type
+  numberMin: integer("number_min"), // Optional min for number type
+  numberMax: integer("number_max"), // Optional max for number type
+  booleanValue: boolean("boolean_value"), // Value for boolean type
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });

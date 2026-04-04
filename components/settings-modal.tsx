@@ -5,10 +5,8 @@ import { useSession, signOut } from '@/lib/auth-client';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { MarkdownEditor } from '@/components/ui/markdown-editor';
-import { VisualMarkdownEditor } from '@/components/ui/visual-markdown-editor';
-import { WysiwygMarkdownEditor } from '@/components/ui/wysiwyg-markdown-editor';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { TiptapMarkdownEditor } from '@/components/ui/tiptap-markdown-editor';
 import {
   User,
   Users,
@@ -22,20 +20,19 @@ import {
   Copy,
   Check,
   X,
-  FileImage,
   FileText,
-  Film,
   Music,
   Bot,
+  Server,
 } from 'lucide-react';
 
-type Section = 'profile' | 'team' | 'billing' | 'warehouse' | 'agent';
+type Section = 'profile' | 'team' | 'billing' | 'warehouse' | 'agent' | 'mcp';
 
 interface TeamData {
   team: { id: string; name: string; ownerId: string };
   owner: { name: string; email: string } | null;
   members: Array<{ id: string; userId: string; name: string; email: string; role: string; joinedAt: string }>;
-  invites: Array<{ id: string; email: string; name: string | null; status: string; createdAt: string }>;
+  invites: Array<{ id: string; email: string; name?: string | null; status: string; createdAt: string }>;
 }
 
 interface Asset {
@@ -60,6 +57,7 @@ const NAV_ITEMS: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'billing', label: 'Billing', icon: <CreditCard className="h-4 w-4" /> },
   { id: 'warehouse', label: 'Assets', icon: <Package className="h-4 w-4" /> },
   { id: 'agent', label: 'Agent', icon: <Bot className="h-4 w-4" /> },
+  { id: 'mcp', label: 'MCP', icon: <Server className="h-4 w-4" /> },
 ];
 
 // ─── Profile Section ──────────────────────────────────────────────────────────
@@ -141,11 +139,6 @@ function ProfileSection() {
         {/* Right: edit form */}
         <form onSubmit={handleSave} className="flex-1 flex flex-col gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Email</label>
-            <Input value={session?.user?.email || ''} disabled className="bg-muted" />
-            <p className="text-xs text-zinc-500 mt-1">Email cannot be changed</p>
-          </div>
-          <div>
             <label className="block text-sm font-medium mb-1">Name</label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" required disabled={isLoading} />
           </div>
@@ -220,6 +213,15 @@ function TeamSection() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'removeMember', memberId }),
+    });
+    loadTeam();
+  };
+
+  const handleCancelInvite = async (invitationId: string) => {
+    await fetch('/api/settings/team', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'cancelInvite', invitationId }),
     });
     loadTeam();
   };
@@ -332,6 +334,11 @@ function TeamSection() {
                       {inv.name && <div className="text-xs text-zinc-500 truncate">{inv.email}</div>}
                     </div>
                     <span className="text-[10px] font-medium bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 px-2 py-0.5 rounded-full shrink-0">Pending</span>
+                    {isOwner && (
+                      <button onClick={() => handleCancelInvite(inv.id)} className="text-zinc-400 hover:text-red-500 p-1 rounded shrink-0" title="Cancel invite">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -628,7 +635,23 @@ function WarehouseSection() {
   };
 
   const handleCopy = (id: string, url: string) => {
-    navigator.clipboard.writeText(url);
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).catch(() => {
+        const el = document.createElement('textarea');
+        el.value = url;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      });
+    } else {
+      const el = document.createElement('textarea');
+      el.value = url;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    }
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
@@ -906,9 +929,9 @@ function AgentSection() {
 
       <div className="flex-1 min-w-0 flex flex-col gap-6">
         {/* URL Analysis Section */}
-        <div className="border rounded-xl p-4">
-          <h3 className="text-sm font-semibold mb-3">Analyze Website Design</h3>
-          <div className="flex flex-col sm:flex-row gap-2">
+        <div className="border-b border-t pt-4 pb-4">
+          <div className="flex flex-col sm:flex-row gap-2 items-center">
+            <h3 className="text-sm font-semibold">Analyze website</h3>
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
@@ -948,7 +971,7 @@ function AgentSection() {
               </Button>
             </form>
           </div>
-          <WysiwygMarkdownEditor
+          <TiptapMarkdownEditor
             value={designGuidelines}
             onChange={setDesignGuidelines}
             placeholder="## Design Guidelines
@@ -995,6 +1018,340 @@ Enter your design guidelines here. Use the toolbar to format text with headers, 
   );
 }
 
+// ─── MCP Section ─────────────────────────────────────────────────────────────
+
+interface McpTokenState {
+  hasToken: boolean;
+  tokenPreview: string | null;
+  createdAt: string | null;
+  lastUsedAt: string | null;
+}
+
+interface McpOAuthClientState {
+  hasClient: boolean;
+  clientId: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  disabled: boolean;
+  clientSecret?: string | null;
+  redirectURLs: string[];
+}
+
+
+function McpSection() {
+  const [serverUrl, setServerUrl] = useState('');
+  const [tokenState, setTokenState] = useState<McpTokenState | null>(null);
+  const [oauthClientState, setOauthClientState] = useState<McpOAuthClientState | null>(null);
+  const [newToken, setNewToken] = useState('');
+  const [newClientSecret, setNewClientSecret] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [generatingOAuthClient, setGeneratingOAuthClient] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [revokingOAuthClient, setRevokingOAuthClient] = useState(false);
+  const [copied, setCopied] = useState<'url' | 'token' | 'config' | 'oauth-client-id' | 'oauth-client-secret' | null>(null);
+  const [error, setError] = useState('');
+
+  const loadMcpState = async () => {
+    try {
+      const [tokenRes, oauthClientRes] = await Promise.all([
+        fetch('/api/settings/mcp-token'),
+        fetch('/api/settings/mcp-oauth-client'),
+      ]);
+
+      const tokenData = await tokenRes.json();
+      const oauthClientData = await oauthClientRes.json();
+
+      if (!tokenRes.ok) throw new Error(tokenData.error || 'Failed to load MCP token');
+      if (!oauthClientRes.ok) throw new Error(oauthClientData.error || 'Failed to load MCP OAuth client');
+
+      setTokenState(tokenData);
+      setOauthClientState(oauthClientData);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load MCP settings');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setServerUrl(`${window.location.origin}/api/mcp`);
+    }
+    void loadMcpState();
+  }, []);
+
+  const handleGenerate = async () => {
+    setError('');
+    setGenerating(true);
+    try {
+      const res = await fetch('/api/settings/mcp-token', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to generate token');
+      setNewToken(data.token);
+      setTokenState({
+        hasToken: true,
+        tokenPreview: data.tokenPreview,
+        createdAt: data.createdAt,
+        lastUsedAt: data.lastUsedAt,
+      });
+    } catch (err: any) {
+      setError(err.message || 'Failed to generate token');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleRevoke = async () => {
+    setError('');
+    setRevoking(true);
+    try {
+      const res = await fetch('/api/settings/mcp-token', { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to revoke token');
+      setNewToken('');
+      setTokenState({
+        hasToken: false,
+        tokenPreview: null,
+        createdAt: null,
+        lastUsedAt: null,
+      });
+    } catch (err: any) {
+      setError(err.message || 'Failed to revoke token');
+    } finally {
+      setRevoking(false);
+    }
+  };
+
+  const handleGenerateOAuthClient = async () => {
+    setError('');
+    setGeneratingOAuthClient(true);
+    try {
+      const res = await fetch('/api/settings/mcp-oauth-client', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to generate MCP OAuth client');
+      setNewClientSecret(data.clientSecret || '');
+      setOauthClientState({
+        hasClient: true,
+        clientId: data.clientId,
+        createdAt: data.createdAt,
+        updatedAt: data.createdAt,
+        disabled: false,
+        redirectURLs: data.redirectURLs || [],
+      });
+    } catch (err: any) {
+      setError(err.message || 'Failed to generate MCP OAuth client');
+    } finally {
+      setGeneratingOAuthClient(false);
+    }
+  };
+
+  const handleRevokeOAuthClient = async () => {
+    setError('');
+    setRevokingOAuthClient(true);
+    try {
+      const res = await fetch('/api/settings/mcp-oauth-client', { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to revoke MCP OAuth client');
+      setNewClientSecret('');
+      setOauthClientState({
+        hasClient: false,
+        clientId: null,
+        createdAt: null,
+        updatedAt: null,
+        disabled: false,
+        redirectURLs: [],
+      });
+    } catch (err: any) {
+      setError(err.message || 'Failed to revoke MCP OAuth client');
+    } finally {
+      setRevokingOAuthClient(false);
+    }
+  };
+
+  const copyValue = async (value: string, key: 'url' | 'token' | 'config' | 'oauth-client-id' | 'oauth-client-secret') => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value).catch(() => {
+        const el = document.createElement('textarea');
+        el.value = value;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      });
+    } else {
+      const el = document.createElement('textarea');
+      el.value = value;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    }
+    setCopied(key);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+
+
+  return (
+    <div className="h-full flex flex-col gap-0">
+      <div className="mb-5">
+        <h2 className="text-lg font-semibold">MCP Server</h2>
+        <p className="text-sm text-zinc-500">Connect Guidenco to an external MCP client over Streamable HTTP.</p>
+      </div>
+
+      <div className="flex-1 min-w-0 overflow-y-auto pr-1 space-y-5">
+        <div className="rounded-xl border p-4 bg-zinc-50 dark:bg-zinc-800/40 space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="text-sm font-semibold">Server URL</h3>
+              <p className="text-xs text-zinc-500 mt-0.5">Use the Streamable HTTP endpoint below in your MCP client.</p>
+            </div>
+            {serverUrl && (
+              <Button type="button" size="sm" variant="outline" className="gap-2" onClick={() => void copyValue(serverUrl, 'url')}>
+                {copied === 'url' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied === 'url' ? 'Copied' : 'Copy URL'}
+              </Button>
+            )}
+          </div>
+          <Input value={serverUrl} readOnly className="font-mono text-xs" />
+          <div className="text-xs text-zinc-500 space-y-1">
+            <p>The primary transport is `streamable-http`.</p>
+            <p>Remote MCP clients must send an `Authorization: Bearer ...` header when connecting to this endpoint.</p>
+          </div>
+        </div>
+
+        <div className="rounded-xl border p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="text-sm font-semibold">Access Token</h3>
+              <p className="text-xs text-zinc-500 mt-0.5">Generate a token for MCP clients. Regenerating revokes the previous one.</p>
+            </div>
+            <div className="flex gap-2">
+              <Button type="button" size="sm" onClick={handleGenerate} disabled={generating} className="gap-2">
+                {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                {tokenState?.hasToken ? 'Regenerate Token' : 'Generate Token'}
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={handleRevoke} disabled={revoking || !tokenState?.hasToken} className="gap-2">
+                {revoking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Revoke
+              </Button>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="flex items-center gap-2 text-sm text-zinc-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading token state...
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              <div className="rounded-lg border bg-zinc-50 dark:bg-zinc-900/40 p-3">
+                <p className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">Current Token</p>
+                <p className="text-sm font-medium">{tokenState?.tokenPreview || 'No active token'}</p>
+                {tokenState?.createdAt && (
+                  <p className="text-xs text-zinc-500 mt-2">
+                    Created {new Date(tokenState.createdAt).toLocaleString()}
+                  </p>
+                )}
+                {tokenState?.lastUsedAt && (
+                  <p className="text-xs text-zinc-500">
+                    Last used {new Date(tokenState.lastUsedAt).toLocaleString()}
+                  </p>
+                )}
+              </div>
+
+            </div>
+          )}
+
+          {newToken && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-950/20 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Copy this token now</p>
+                <Button type="button" size="sm" variant="outline" className="gap-2" onClick={() => void copyValue(newToken, 'token')}>
+                  {copied === 'token' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copied === 'token' ? 'Copied' : 'Copy Token'}
+                </Button>
+              </div>
+              <Input value={newToken} readOnly className="font-mono text-xs bg-white dark:bg-zinc-900" />
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                This full token is only shown immediately after generation.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-xl border p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="text-sm font-semibold">Claude OAuth Client</h3>
+              <p className="text-xs text-zinc-500 mt-0.5">Generate a Better Auth OAuth client for Claude's native remote MCP flow.</p>
+            </div>
+            <div className="flex gap-2">
+              <Button type="button" size="sm" onClick={handleGenerateOAuthClient} disabled={generatingOAuthClient} className="gap-2">
+                {generatingOAuthClient ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                {oauthClientState?.hasClient ? 'Regenerate Client' : 'Generate Client'}
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={handleRevokeOAuthClient} disabled={revokingOAuthClient || !oauthClientState?.hasClient} className="gap-2">
+                {revokingOAuthClient ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Revoke
+              </Button>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="flex items-center gap-2 text-sm text-zinc-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading OAuth client state...
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              <div className="rounded-lg border bg-zinc-50 dark:bg-zinc-900/40 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] uppercase tracking-wide text-zinc-500">Current Client ID</p>
+                  {oauthClientState?.clientId && (
+                    <Button type="button" size="sm" variant="outline" className="gap-2" onClick={() => void copyValue(oauthClientState.clientId!, 'oauth-client-id')}>
+                      {copied === 'oauth-client-id' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                      {copied === 'oauth-client-id' ? 'Copied' : 'Copy Client ID'}
+                    </Button>
+                  )}
+                </div>
+                <p className="text-sm font-medium break-all">{oauthClientState?.clientId || 'No active OAuth client'}</p>
+                {oauthClientState?.createdAt && (
+                  <p className="text-xs text-zinc-500">Created {new Date(oauthClientState.createdAt).toLocaleString()}</p>
+                )}
+                {newClientSecret && (
+                  <div className="mt-2 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] uppercase tracking-wide text-zinc-500">Client Secret <span className="text-amber-500">(shown once — copy now)</span></p>
+                      <Button type="button" size="sm" variant="outline" className="gap-2" onClick={() => void copyValue(newClientSecret, 'oauth-client-secret')}>
+                        {copied === 'oauth-client-secret' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                        {copied === 'oauth-client-secret' ? 'Copied' : 'Copy Secret'}
+                      </Button>
+                    </div>
+                    <p className="text-sm font-mono break-all bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded px-2 py-1">{newClientSecret}</p>
+                  </div>
+                )}
+                {oauthClientState?.redirectURLs?.length ? (
+                  <div className="text-xs text-zinc-500 space-y-1">
+                    {oauthClientState.redirectURLs.map((redirectUrl) => (
+                      <p key={redirectUrl}>{redirectUrl}</p>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          )}
+
+        </div>
+
+
+        {error && <p className="text-sm text-red-500">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Modal ───────────────────────────────────────────────────────────────
 
 export function SettingsModal({ open, onOpenChange, defaultSection = 'profile' }: SettingsModalProps) {
@@ -1006,7 +1363,7 @@ export function SettingsModal({ open, onOpenChange, defaultSection = 'profile' }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="!fixed !inset-0 !top-0 !left-0 !translate-x-0 !translate-y-0 !w-full !max-w-full !h-dvh !rounded-none !border-0 p-0 gap-0 overflow-hidden flex flex-col md:!inset-auto md:!top-[50%] md:!left-[50%] md:!translate-x-[-50%] md:!translate-y-[-50%] md:!w-[min(90vw,1100px)] md:!max-w-[min(90vw,1100px)] md:!h-[min(640px,90dvh)] md:!rounded-lg md:!border">
+      <DialogContent className="!fixed !inset-0 !top-0 !left-0 !translate-x-0 !translate-y-0 !w-full !max-w-full !h-dvh !rounded-none !border-0 p-0 gap-0 overflow-hidden flex flex-col md:!inset-auto md:!top-[50%] md:!left-[50%] md:!translate-x-[-50%] md:!translate-y-[-50%] md:w-[min(94vw,1240px)]! md:max-w-[min(94vw,1240px)]! md:h-[min(820px,94dvh)]! md:rounded-lg! md:border!">
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <div className="flex flex-col md:flex-row flex-1 min-h-0">
           {/* Nav — horizontal on mobile, vertical on desktop */}
@@ -1038,6 +1395,7 @@ export function SettingsModal({ open, onOpenChange, defaultSection = 'profile' }
             {section === 'billing' && <BillingSection />}
             {section === 'warehouse' && <WarehouseSection />}
             {section === 'agent' && <AgentSection />}
+            {section === 'mcp' && <McpSection />}
           </div>
         </div>
       </DialogContent>

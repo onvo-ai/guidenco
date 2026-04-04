@@ -1,16 +1,16 @@
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { streamText, convertToModelMessages, UIMessage, tool, stepCountIs } from 'ai';
+import { streamText, UIMessage, tool, stepCountIs } from 'ai';
 import { z } from 'zod';
-import { createOrUpdateDocument, getDocumentById, saveDocumentMessage } from '@/lib/db/entities-service';
+import { createOrUpdateDocument, getDocumentById, saveDocumentMessage, updateDocumentVersionUsage } from '@/lib/db/entities-service';
 import { resizeImage } from '@/lib/image-processing';
-import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
-import { brandAssets, teams, teamMembers, agentSettings } from '@/lib/db/schema';
+import { brandAssets, agentSettings } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
-import { getUserCredits, deductCredit } from '@/lib/billing';
+import { getUserCredits, deductCreditsForUsage, TOKENS_PER_CREDIT } from '@/lib/billing';
 import { getFileBuffer } from '@/lib/storage';
-import { users } from '@/lib/db/schema';
+import { getOrCreateOrganizationId, getOrganizationId } from '@/lib/organization';
+import { getAuthenticatedUser } from '@/lib/request-auth';
 
 export const maxDuration = 60;
 
@@ -21,6 +21,12 @@ const tempPageCounts = new Map<string, number>();
 const PAGE_BREAK = '\n<!-- PAGE_BREAK -->\n';
 const PAGE_BREAK_LEGACY_GUIDENCO = '\n<!-- GUIDENCO_PAGE_BREAK -->\n';
 const PAGE_BREAK_LEGACY_ARTISTE = '\n<!-- ARTISTE_PAGE_BREAK -->\n';
+const DEFAULT_MODEL = 'google/gemini-3-flash-preview';
+const ALLOWED_MODELS = [
+  'google/gemini-3-flash-preview',
+  'google/gemini-3.1-flash-lite-preview',
+  'google/gemini-3.1-pro-preview',
+];
 
 function toDataUri(image: string, mimeType: string) {
   if (!image) return image;
@@ -47,49 +53,16 @@ function clampPageIndex(pageIndex: number, pageCount: number): number {
 }
 
 async function getUserTeamAndAgentSettings(userId: string) {
-  // Check if user is a team owner
-  const ownedTeam = await db
-    .select()
-    .from(teams)
-    .where(eq(teams.ownerId, userId))
-    .limit(1);
+  const organizationId = await getOrCreateOrganizationId(userId);
 
-  let team;
-  if (ownedTeam.length > 0) {
-    team = ownedTeam[0];
-  } else {
-    // Check if user is a member of a team
-    const membership = await db
-      .select({ team: teams })
-      .from(teamMembers)
-      .innerJoin(teams, eq(teamMembers.teamId, teams.id))
-      .where(eq(teamMembers.userId, userId))
-      .limit(1);
-
-    if (membership.length > 0) {
-      team = membership[0].team;
-    } else {
-      // Create a default team for this user
-      const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-      const teamName = user[0]?.name ? `${user[0].name}'s Team` : 'My Team';
-
-      const [newTeam] = await db
-        .insert(teams)
-        .values({ name: teamName, ownerId: userId })
-        .returning();
-      team = newTeam;
-    }
-  }
-
-  // Get agent settings for this team
   const agentData = await db
     .select()
     .from(agentSettings)
-    .where(eq(agentSettings.teamId, team.id))
+    .where(eq(agentSettings.organizationId, organizationId))
     .limit(1);
 
   return {
-    team,
+    organizationId,
     designGuidelines: agentData[0]?.designGuidelines || ''
   };
 }
@@ -117,21 +90,27 @@ export async function POST(req: Request) {
     apiKey: process.env.OPENROUTER_API_KEY,
   });
 
-  const modelId = (process.env.OPENROUTER_MODEL || '').trim() || 'google/gemini-2.5-pro';
+  const configuredModel = (process.env.OPENROUTER_MODEL || '').trim();
+  const modelId = configuredModel && ALLOWED_MODELS.includes(configuredModel) ? configuredModel : DEFAULT_MODEL;
 
   // Get session and agent settings
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) {
+  const currentUser = await getAuthenticatedUser(await headers());
+  if (!currentUser) {
     return new Response('Unauthorized', { status: 401 });
   }
 
+  const { organizationId, designGuidelines } = await getUserTeamAndAgentSettings(currentUser.id);
+
+  // Accumulate token/credit usage across all steps
+  let totalTokens = 0;
+  let totalCredits = 0;
+  let savedVersionId: string | undefined;
+
   // Credit check — reject before touching the LLM
-  const creditBalance = await getUserCredits(session.user.id);
+  const creditBalance = await getUserCredits(organizationId);
   if (creditBalance <= 0) {
     return new Response('Insufficient credits', { status: 402 });
   }
-
-  const { designGuidelines } = await getUserTeamAndAgentSettings(session.user.id);
 
   // Manually convert messages to handle images properly
   const convertedMessages = await Promise.all(messages.map(async (msg: any) => {
@@ -452,25 +431,31 @@ Always use the tools to create the document. The user will see the visual output
             pages[targetPageIndex] = updatedPageHTML;
             const htmlToStore = joinPages(pages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+            const result = await createOrUpdateDocument(
               documentId,
               document.title,
               document.width,
               document.height,
               htmlToStore,
-              currentFonts
+              currentFonts,
+              undefined,
+              undefined,
+              modelId,
+              undefined,
+              undefined
             );
+            savedVersionId = (result as any).newVersionId;
 
-            let message = `HTML edited successfully (Version ${currentVersion + 1})`;
+            let message = `HTML edited successfully (Version ${result.currentVersion + 1})`;
             if (pages.length > 1) {
-              message = `HTML edited successfully for page ${targetPageIndex + 1} of ${pages.length} (Version ${currentVersion + 1})`;
+              message = `HTML edited successfully for page ${targetPageIndex + 1} of ${pages.length} (Version ${result.currentVersion + 1})`;
             }
 
             return {
               success: true,
               message,
-              version: currentVersion,
-              totalVersions,
+              version: result.currentVersion,
+              totalVersions: result.totalVersions,
               width: document.width,
               height: document.height,
               pageCount: pages.length,
@@ -518,23 +503,29 @@ Always use the tools to create the document. The user will see the visual output
             const normalizedPages = Array.from({ length: desiredCount }, (_, idx) => pages[idx] ?? '');
             const htmlToStore = joinPages(normalizedPages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+            const result = await createOrUpdateDocument(
               documentId,
               existingDocument?.title ?? 'Untitled Document',
               dimensions.width,
               dimensions.height,
               htmlToStore,
-              googleFonts || []
+              googleFonts || [],
+              undefined,
+              undefined,
+              modelId,
+              undefined,
+              undefined
             );
+            savedVersionId = (result as any).newVersionId;
 
             tempDimensions.delete(documentId);
             tempPageCounts.delete(documentId);
 
             return {
               success: true,
-              message: `HTML updated successfully (Version ${currentVersion + 1})`,
-              version: currentVersion,
-              totalVersions,
+              message: `HTML updated successfully (Version ${result.currentVersion + 1})`,
+              version: result.currentVersion,
+              totalVersions: result.totalVersions,
               width: dimensions.width,
               height: dimensions.height,
               pageCount: normalizedPages.length,
@@ -571,22 +562,28 @@ Always use the tools to create the document. The user will see the visual output
             const nextPages = [...pages.slice(0, insertAt), '', ...pages.slice(insertAt)];
             const nextHTML = joinPages(nextPages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+            const result = await createOrUpdateDocument(
               documentId,
               document.title,
               document.width,
               document.height,
               nextHTML,
-              currentFonts
+              currentFonts,
+              undefined,
+              undefined,
+              modelId,
+              undefined,
+              undefined
             );
+            savedVersionId = (result as any).newVersionId;
 
             return {
               success: true,
-              message: `Page created (Version ${currentVersion + 1})`,
+              message: `Page created (Version ${result.currentVersion + 1})`,
               pageCount: nextPages.length,
               pageIndex: insertAt,
-              version: currentVersion,
-              totalVersions,
+              version: result.currentVersion,
+              totalVersions: result.totalVersions,
             };
           } catch (error: any) {
             console.error('Error in createPage:', error);
@@ -633,22 +630,28 @@ Always use the tools to create the document. The user will see the visual output
             const nextPages = pages.filter((_, idx) => idx !== pageIndex);
             const nextHTML = joinPages(nextPages);
 
-            const { currentVersion, totalVersions } = await createOrUpdateDocument(
+            const result = await createOrUpdateDocument(
               documentId,
               document.title,
               document.width,
               document.height,
               nextHTML,
-              currentFonts
+              currentFonts,
+              undefined,
+              undefined,
+              modelId,
+              undefined,
+              undefined
             );
+            savedVersionId = (result as any).newVersionId;
 
             return {
               success: true,
-              message: `Page deleted (Version ${currentVersion + 1})`,
+              message: `Page deleted (Version ${result.currentVersion + 1})`,
               pageCount: nextPages.length,
               deletedPageIndex: pageIndex,
-              version: currentVersion,
-              totalVersions,
+              version: result.currentVersion,
+              totalVersions: result.totalVersions,
             };
           } catch (error: any) {
             console.error('Error in deletePage:', error);
@@ -798,21 +801,10 @@ Always use the tools to create the document. The user will see the visual output
         inputSchema: z.object({}),
         execute: async () => {
           try {
-            const session = await auth.api.getSession({ headers: await headers() });
-            if (!session) return { success: false, error: 'Not authenticated', assets: [] };
+            const organizationId = await getOrganizationId(currentUser.id);
+            if (!organizationId) return { success: true, assets: [], message: 'No organization found — no assets available.' };
 
-            const userId = session.user.id;
-            const ownedTeam = await db.select({ id: teams.id }).from(teams).where(eq(teams.ownerId, userId)).limit(1);
-            let teamId = ownedTeam[0]?.id;
-
-            if (!teamId) {
-              const membership = await db.select({ teamId: teamMembers.teamId }).from(teamMembers).where(eq(teamMembers.userId, userId)).limit(1);
-              teamId = membership[0]?.teamId;
-            }
-
-            if (!teamId) return { success: true, assets: [], message: 'No team found — no assets available.' };
-
-            const teamAssets = await db.select().from(brandAssets).where(eq(brandAssets.teamId, teamId));
+            const teamAssets = await db.select().from(brandAssets).where(eq(brandAssets.organizationId, organizationId));
             return {
               success: true,
               assets: teamAssets.map(a => ({
@@ -871,10 +863,13 @@ Always use the tools to create the document. The user will see the visual output
       }),
     },
     onStepFinish: async ({ text, toolCalls, toolResults, finishReason, usage }) => {
-      // Deduct 1 credit on the final step
-      if (finishReason === 'stop' || finishReason === 'length') {
-        await deductCredit(session.user.id).catch(() => {});
-      }
+      const stepTokens = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+      const stepCredits = Math.max(1, Math.ceil(stepTokens / TOKENS_PER_CREDIT));
+      totalTokens += stepTokens;
+      totalCredits += stepCredits;
+      // Deduct credits on every step based on actual token usage.
+      // Charging per step (not just final) ensures tool-call steps are counted too.
+      await deductCreditsForUsage(organizationId, usage).catch(() => { });
       // Save each step as a separate message for better timeline
       try {
         const parts: any[] = [];
@@ -910,6 +905,11 @@ Always use the tools to create the document. The user will see the visual output
         }
       } catch (error) {
         console.error('❌ Error in onStepFinish:', error);
+      }
+    },
+    onFinish: async () => {
+      if (savedVersionId && totalTokens > 0) {
+        await updateDocumentVersionUsage(savedVersionId, totalTokens, totalCredits).catch(() => { });
       }
     },
   });
