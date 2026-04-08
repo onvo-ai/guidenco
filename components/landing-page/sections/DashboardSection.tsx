@@ -45,15 +45,16 @@ export function DashboardSection() {
                 { label: "YT", value: 74, color: "#FF0000" },
                 { label: "Reddit", value: 45, color: "#FF4500" },
                 { label: "Blog", value: 58, color: "#FF6A00" },
-              ].map((item, index) => (
+              ].map((item) => (
                 <div key={item.label} className="relative z-10 flex flex-1 flex-col items-center justify-end h-full group">
                   <motion.div
                     initial={{ height: 0 }}
                     whileInView={{ height: `${item.value}%` }}
                     viewport={{ once: true }}
-                    transition={{ duration: 1, delay: index * 0.1, type: "spring", bounce: 0.2 }}
+                    transition={{ duration: 1, type: "spring", bounce: 0.2 }}
                     className="w-full max-w-[48px] rounded-t-md opacity-80 transition-opacity group-hover:opacity-100"
                     style={{ backgroundColor: item.color }}
+                    aria-hidden="true"
                   >
                     <div className="absolute -top-8 left-1/2 -translate-x-1/2 rounded bg-[#111] px-2 py-1 text-[10px] font-bold text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
                       {item.value}%
@@ -78,14 +79,14 @@ export function DashboardSection() {
                 "Double down on LinkedIn thought leadership this week",
                 "Repurpose top webinar into YouTube Shorts",
                 "Test niche-specific landing page messaging",
-              ].map((rec, index) => (
+              ].map((rec) => (
                 <motion.div
-                  key={rec}
                   initial={{ opacity: 0, x: -10 }}
                   whileInView={{ opacity: 1, x: 0 }}
                   viewport={{ once: true }}
-                  transition={{ delay: 0.2 + index * 0.1 }}
-                  className="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[0.02] p-4 transition-colors hover:border-[#ff6a00]/30 hover:bg-[#ff6a00]/[0.02]"
+                  transition={{ delay: 0.2 }}
+                  key={rec}
+                  className="flex items-start gap-3 rounded-xl border border-white/5 bg-white/2 p-4 transition-colors hover:border-[#ff6a00]/30 hover:bg-[#ff6a00]/2"
                 >
                   <Sparkles className="mt-0.5 size-4 shrink-0 text-[#ff6a00]" />
                   <span className="text-sm leading-snug text-white/80">{rec}</span>

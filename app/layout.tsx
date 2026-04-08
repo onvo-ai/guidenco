@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Guidenco - AI Digital Asset Creator",
-  description: "Create digital assets using AI and HTML canvas",
+  title: "Guidenco - AI Growth Engine",
+  description: "Guidenco helps teams discover what works, create content faster, and turn growth into a measurable system.",
 };
 
 export default function RootLayout({

@@ -1,6 +1,3 @@
-"use client";
-
-import { motion } from "framer-motion";
 import { Lightbulb, Users, MessageSquareText, TrendingUp } from "lucide-react";
 import { LandingSection, SurfaceCard } from "../primitives";
 
@@ -28,42 +25,32 @@ export function AdvancedFeaturesSection() {
               
               {/* Connecting vertical line */}
               <div className="absolute bottom-0 left-[28px] top-0 w-px bg-gradient-to-b from-white/20 via-[#ff6a00]/50 to-white/20" />
-              
-              {/* Animated pulse traveling down the line */}
-              <motion.div
-                className="absolute left-[27px] top-0 h-20 w-[3px] rounded-full bg-[#ff6a00]"
-                animate={{ top: ["0%", "100%"], opacity: [0, 1, 0] }}
-                transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
-              />
+
+              {/* Pulse marker */}
+              <div className="absolute left-[27px] top-0 h-20 w-[3px] rounded-full bg-[#ff6a00] opacity-80" />
 
               {[
-                { title: "Audience Signals", desc: "ICP & intent data", delay: 0 },
-                { title: "Message Testing", desc: "Hook performance", delay: 0.2 },
-                { title: "Revenue Impact", desc: "Pipeline attribution", delay: 0.4 },
-              ].map((node, index) => (
-                <motion.div
+                { title: "Audience Signals", desc: "ICP & intent data" },
+                { title: "Message Testing", desc: "Hook performance" },
+                { title: "Revenue Impact", desc: "Pipeline attribution" },
+              ].map((node) => (
+                <div
                   key={node.title}
-                  initial={{ opacity: 0, x: -20 }}
-                  whileInView={{ opacity: 1, x: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ delay: index * 0.2, type: "spring" }}
                   className="relative z-10 flex items-center gap-6"
                 >
                   {/* Node point */}
-                  <motion.div 
-                    animate={{ boxShadow: ["0 0 0px rgba(255,106,0,0)", "0 0 20px rgba(255,106,0,0.5)", "0 0 0px rgba(255,106,0,0)"] }}
-                    transition={{ duration: 2, delay: index * 0.5, repeat: Infinity }}
+                  <div 
                     className="flex size-14 shrink-0 items-center justify-center rounded-2xl border border-[#ff6a00]/30 bg-[#111]"
                   >
                     <div className="size-3 rounded-full bg-[#ff6a00]" />
-                  </motion.div>
+                  </div>
                   
                   {/* Node content */}
-                  <div className="flex flex-1 flex-col justify-center rounded-2xl border border-white/10 bg-black/40 px-5 py-4 backdrop-blur-sm transition-colors hover:border-[#ff6a00]/30 hover:bg-white/[0.02]">
+                  <div className="flex flex-1 flex-col justify-center rounded-2xl border border-white/10 bg-black/40 px-5 py-4 backdrop-blur-sm transition-colors hover:border-[#ff6a00]/30 hover:bg-white/2">
                     <div className="font-semibold text-white">{node.title}</div>
                     <div className="mt-1 text-xs text-white/50">{node.desc}</div>
                   </div>
-                </motion.div>
+                </div>
               ))}
             </div>
           </div>
@@ -78,10 +65,10 @@ export function AdvancedFeaturesSection() {
 
         {/* Advanced features grid */}
         <div className="grid gap-4 sm:grid-cols-2 lg:gap-6">
-          {advancedFeatures.map((feature, index) => {
+          {advancedFeatures.map((feature) => {
             const Icon = feature.icon;
             return (
-              <SurfaceCard key={feature.title} delay={index * 0.1} className="transition-colors hover:bg-white/[0.02]">
+              <SurfaceCard key={feature.title} className="transition-colors hover:bg-white/2">
                 <div className="mb-4 flex size-12 items-center justify-center rounded-xl border border-[#ff6a00]/15 bg-[#ff6a00]/10 text-[#ff6a00]">
                   <Icon className="size-5" />
                 </div>

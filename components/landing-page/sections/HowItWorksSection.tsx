@@ -44,7 +44,7 @@ export function HowItWorksSection() {
                 {/* Progress dot (Desktop only) */}
                 <div className="absolute left-1/2 top-5 hidden size-2.5 -translate-x-1/2 rounded-full border-2 border-[#111] bg-[#ff6a00] shadow-[0_0_15px_rgba(255,106,0,0.5)] lg:block" />
                 
-                <SurfaceCard delay={index * 0.1} className="relative flex h-full flex-col p-6 sm:p-8">
+                <SurfaceCard className="relative flex h-full flex-col p-6 sm:p-8">
                   {/* Top gradient border highlight */}
                   <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#ff6a00]/50 to-transparent" />
                   

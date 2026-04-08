@@ -17,7 +17,7 @@ export function SolutionSection() {
       id="solution"
       badge="The solution"
       title="Guidenco Removes the Guesswork"
-      description="Instead of guessing channels, formats, and messaging every week, you get a system that understands your product, experiments intelligently, and compounds learnings."
+      description="Instead of guessing channels, formats, and messaging every week, you get a system that turns product context into repeatable experiments and compounding learnings."
     >
       <div className="grid gap-8 lg:grid-cols-2">
         {/* Solution points */}
@@ -28,7 +28,7 @@ export function SolutionSection() {
             viewport={{ once: true }}
             className="mb-2 inline-flex w-fit rounded-full border border-[#ff6a00]/30 bg-[#ff6a00]/10 px-3 py-1 text-xs uppercase tracking-[0.24em] text-[#ffb17a]"
           >
-            Clean system replacing chaos
+            Growth system replacing guesswork
           </motion.div>
           
           {solutionPoints.map((point, index) => (
@@ -83,11 +83,15 @@ export function SolutionSection() {
                   y: Math.sin((angle * Math.PI) / 180) * 80,
                   opacity: [0, 1, 0],
                 }}
-                transition={{ 
-                  duration: 2, 
+                transition={{
+                  duration: 2,
                   delay: i * 0.3,
                   repeat: Infinity,
-                  ease: "easeInOut" 
+                  ease: "easeInOut",
+                }}
+                style={{
+                  marginLeft: -6,
+                  marginTop: -6,
                 }}
                 className="absolute left-1/2 top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#ff6a00]"
               />
