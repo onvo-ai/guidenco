@@ -38,12 +38,12 @@ export function FinalCtaSection() {
                   ]}}
                   transition={{ duration: 2, repeat: Infinity }}
                 >
-                  <CtaButton href="/app">
-                    Start Free
+                  <CtaButton href="/book-demo">
+                    Book Demo
                     <ArrowRight className="ml-2 size-4" />
                   </CtaButton>
                 </motion.div>
-                <CtaButton href="/auth/sign-up" variant="outline">
+                <CtaButton href="/book-demo" variant="outline">
                   Book Demo
                 </CtaButton>
               </div>

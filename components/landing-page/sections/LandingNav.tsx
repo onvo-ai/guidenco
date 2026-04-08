@@ -36,7 +36,7 @@ export function LandingNav() {
           <CtaButton href="/auth/sign-in" variant="outline" className="hidden sm:inline-flex">
             Sign In
           </CtaButton>
-          <CtaButton href="/app">Start Growing</CtaButton>
+          <CtaButton href="/book-demo">Book Demo</CtaButton>
         </div>
       </div>
     </header>
