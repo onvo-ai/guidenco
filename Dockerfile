@@ -96,6 +96,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && printf '#!/bin/sh\nexec /usr/bin/chromium --disable-crash-reporter --crash-dumps-dir=/tmp "$@"\n' \
        > /usr/local/bin/chromium-wrapper \
     && chmod +x /usr/local/bin/chromium-wrapper \
+    && printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/chrome_crashpad_handler \
+    && chmod +x /usr/local/bin/chrome_crashpad_handler \
     # Remove unnecessary utilities that could be exploited
     && rm -rf /usr/bin/apt* /usr/bin/dpkg* /usr/bin/wget /usr/bin/curl 2>/dev/null || true \
     # Remove shell access for added security (comment out if debugging needed)

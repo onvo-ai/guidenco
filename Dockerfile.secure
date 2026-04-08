@@ -124,11 +124,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxss1 \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     && apt-get clean \
-    # Wrapper script: adds --disable-crash-reporter so Chrome's crashpad handler
-    # doesn't fail in containers where it can't create its crash database
+    # Wrapper script: forwards all args to system chromium
     && printf '#!/bin/sh\nexec /usr/bin/chromium --disable-crash-reporter --crash-dumps-dir=/tmp "$@"\n' \
        > /usr/local/bin/chromium-wrapper \
-    && chmod +x /usr/local/bin/chromium-wrapper
+    && chmod +x /usr/local/bin/chromium-wrapper \
+    # Stub crashpad handler: Debian's chromium forks chrome_crashpad_handler as a
+    # subprocess regardless of --disable-crash-reporter. The stub exits 0 immediately
+    # so Chrome doesn't abort waiting for the IPC handshake to fail.
+    && printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/chrome_crashpad_handler \
+    && chmod +x /usr/local/bin/chrome_crashpad_handler
 
 # -----------------------------------------------------------------------------
 # ✅ Control 4: Remove package manager & dangerous utilities
