@@ -93,7 +93,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     && apt-get clean \
-    && printf '#!/bin/sh\nexec /usr/bin/chromium --disable-crash-reporter --crash-dumps-dir=/tmp "$@"\n' \
+    && printf '#!/bin/sh\nexec /usr/bin/chromium --disable-crash-reporter --disable-gpu --crash-dumps-dir=/tmp "$@"\n' \
        > /usr/local/bin/chromium-wrapper \
     && chmod +x /usr/local/bin/chromium-wrapper \
     && printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/chrome_crashpad_handler \

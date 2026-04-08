@@ -128,8 +128,8 @@ registerRoot(RemotionRoot);
         '--disable-crash-reporter',
         '--disable-dev-shm-usage',
         '--no-zygote',
-        '--single-process',
-        '--disable-gpu-sandbox',
+        '--disable-gpu',
+        '--headless',
       ],
     };
     const browserExecutable = process.env.REMOTION_CHROME_EXECUTABLE_PATH || undefined;

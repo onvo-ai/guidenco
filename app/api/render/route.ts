@@ -106,8 +106,8 @@ export async function POST(req: Request) {
         "--disable-crash-reporter",
         "--disable-dev-shm-usage",
         "--no-zygote",
-        "--single-process",
-        "--disable-gpu-sandbox",
+        "--disable-gpu",
+        "--headless",
       ],
     });
 
