@@ -9,11 +9,11 @@ import { getSignedUrl as awsGetSignedUrl } from '@aws-sdk/s3-request-presigner';
 const isLocal = !!process.env.S3_ENDPOINT;
 
 export const s3 = new S3Client({
-  region: process.env.AWS_REGION || 'us-east-1',
-  ...(isLocal
+  region: process.env.AWS_REGION,
+  ...(process.env.S3_ENDPOINT
     ? {
         endpoint: process.env.S3_ENDPOINT,
-        forcePathStyle: true, // Required for MinIO
+        forcePathStyle: true,
       }
     : {}),
   credentials: {
@@ -22,7 +22,7 @@ export const s3 = new S3Client({
   },
 });
 
-export const BUCKET = process.env.S3_BUCKET || 'guidenco';
+export const BUCKET = process.env.S3_BUCKET || '';
 
 export async function uploadFile(
   key: string,
@@ -38,11 +38,10 @@ export async function uploadFile(
     })
   );
 
-  if (isLocal) {
-    // Return a publicly accessible MinIO URL
+  if (process.env.S3_ENDPOINT) {
     return `${process.env.S3_ENDPOINT}/${BUCKET}/${key}`;
   }
-  return `https://${BUCKET}.s3.${process.env.AWS_REGION || 'us-east-1'}.amazonaws.com/${key}`;
+  return `https://${BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
 }
 
 export async function getSignedUrl(key: string, expiresIn = 3600): Promise<string> {
