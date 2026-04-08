@@ -1141,7 +1141,7 @@ function InnerCanvas({
               </div>
 
               <button
-                onClick={handleSubmit}
+                onClick={() => handleSubmit()}
                 disabled={(!prompt.trim() && uploadedFiles.length === 0) || effectiveGenerating}
                 className="h-8 w-8 flex items-center justify-center rounded-full bg-zinc-900 dark:bg-zinc-100 hover:bg-zinc-700 dark:hover:bg-zinc-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
