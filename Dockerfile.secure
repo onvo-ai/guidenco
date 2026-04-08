@@ -132,7 +132,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # subprocess regardless of --disable-crash-reporter. The stub exits 0 immediately
     # so Chrome doesn't abort waiting for the IPC handshake to fail.
     && printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/chrome_crashpad_handler \
-    && chmod +x /usr/local/bin/chrome_crashpad_handler
+    && chmod +x /usr/local/bin/chrome_crashpad_handler \
+    && find /usr -name "chrome_crashpad_handler" -not -path "/usr/local/*" -exec sh -c 'printf "#!/bin/sh\nexit 0\n" > "$1" && chmod +x "$1"' _ {} \;
 
 # -----------------------------------------------------------------------------
 # ✅ Control 4: Remove package manager & dangerous utilities

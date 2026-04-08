@@ -98,6 +98,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chmod +x /usr/local/bin/chromium-wrapper \
     && printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/chrome_crashpad_handler \
     && chmod +x /usr/local/bin/chrome_crashpad_handler \
+    && find /usr -name "chrome_crashpad_handler" -not -path "/usr/local/*" -exec sh -c 'printf "#!/bin/sh\nexit 0\n" > "$1" && chmod +x "$1"' _ {} \; \
     # Remove unnecessary utilities that could be exploited
     && rm -rf /usr/bin/apt* /usr/bin/dpkg* /usr/bin/wget /usr/bin/curl 2>/dev/null || true \
     # Remove shell access for added security (comment out if debugging needed)
