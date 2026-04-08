@@ -125,10 +125,7 @@ registerRoot(RemotionRoot);
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-crash-reporter',
         '--disable-dev-shm-usage',
-        '--disable-gpu-sandbox',
-        '--no-zygote',
       ],
     };
     const browserExecutable = process.env.REMOTION_CHROME_EXECUTABLE_PATH || undefined;
