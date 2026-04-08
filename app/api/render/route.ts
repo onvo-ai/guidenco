@@ -105,6 +105,7 @@ export async function POST(req: Request) {
         "--disable-setuid-sandbox",
         "--disable-crash-reporter",
         "--disable-dev-shm-usage",
+        "--no-zygote",
       ],
     });
 

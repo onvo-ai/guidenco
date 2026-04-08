@@ -122,6 +122,13 @@ registerRoot(RemotionRoot);
     const chromiumOptions = {
       disableWebSecurity: true, // Required to allow fetching cross-origin media assets during headless render
       gl: 'swiftshader' as const,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-crash-reporter',
+        '--disable-dev-shm-usage',
+        '--no-zygote',
+      ],
     };
     const browserExecutable = process.env.REMOTION_CHROME_EXECUTABLE_PATH || undefined;
 
