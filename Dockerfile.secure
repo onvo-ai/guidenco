@@ -29,6 +29,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy only dependency files for layer caching
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
+# Skip Puppeteer Chrome download — system Chromium is used at runtime
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
 # Install with security audit
 RUN npm ci && \
     npm audit --audit-level=moderate || true && \
@@ -120,7 +123,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 \
     libxss1 \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
-    && apt-get clean
+    && apt-get clean \
+    # Wrapper script: adds --disable-crash-reporter so Chrome's crashpad handler
+    # doesn't fail in containers where it can't create its crash database
+    && printf '#!/bin/sh\nexec /usr/bin/chromium --disable-crash-reporter --crash-dumps-dir=/tmp "$@"\n' \
+       > /usr/local/bin/chromium-wrapper \
+    && chmod +x /usr/local/bin/chromium-wrapper
 
 # -----------------------------------------------------------------------------
 # ✅ Control 4: Remove package manager & dangerous utilities
@@ -199,9 +207,11 @@ ENV NODE_ENV=production \
     # Standalone server config
     HOSTNAME="0.0.0.0" \
     PORT=3000 \
-    # Chromium for Remotion rendering (--no-sandbox: safe inside container
-    # with cap_drop ALL + non-root user + read-only FS)
-    REMOTION_CHROME_EXECUTABLE_PATH="/usr/bin/chromium" \
+    # Chromium wrapper for Remotion & Puppeteer rendering.
+    # The wrapper adds --disable-crash-reporter so Chrome's crashpad handler
+    # doesn't abort when it can't create a crash database in a hardened container.
+    REMOTION_CHROME_EXECUTABLE_PATH="/usr/local/bin/chromium-wrapper" \
+    PUPPETEER_EXECUTABLE_PATH="/usr/local/bin/chromium-wrapper" \
     # Disable Chromium's sandbox since we rely on container-level isolation
     CHROMIUM_FLAGS="--no-sandbox --disable-gpu --disable-dev-shm-usage"
 

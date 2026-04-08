@@ -99,7 +99,13 @@ export async function POST(req: Request) {
     // Launch Puppeteer and render
     const browser = await puppeteer.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-crash-reporter",
+        "--disable-dev-shm-usage",
+      ],
     });
 
     const page = await browser.newPage();

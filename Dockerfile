@@ -25,6 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy only dependency files for better layer caching
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
+# Skip Puppeteer Chrome download — system Chromium is used at runtime
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
 # Install all dependencies (need devDependencies for build)
 RUN npm ci && \
     npm audit --audit-level=moderate || true
@@ -76,8 +79,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libgif7 \
     ca-certificates \
+    chromium \
+    fonts-liberation \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libnspr4 \
+    libnss3 \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     && apt-get clean \
+    && printf '#!/bin/sh\nexec /usr/bin/chromium --disable-crash-reporter --crash-dumps-dir=/tmp "$@"\n' \
+       > /usr/local/bin/chromium-wrapper \
+    && chmod +x /usr/local/bin/chromium-wrapper \
     # Remove unnecessary utilities that could be exploited
     && rm -rf /usr/bin/apt* /usr/bin/dpkg* /usr/bin/wget /usr/bin/curl 2>/dev/null || true \
     # Remove shell access for added security (comment out if debugging needed)
@@ -104,7 +122,9 @@ RUN mkdir -p /app/.next/cache /tmp \
 # Production environment variables
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
-    NODE_OPTIONS="--max-old-space-size=512 --no-experimental-fetch"
+    NODE_OPTIONS="--max-old-space-size=512 --no-experimental-fetch" \
+    REMOTION_CHROME_EXECUTABLE_PATH="/usr/local/bin/chromium-wrapper" \
+    PUPPETEER_EXECUTABLE_PATH="/usr/local/bin/chromium-wrapper"
 
 # Drop all capabilities except what's needed
 # Note: This requires --cap-drop=ALL --cap-add=... at runtime

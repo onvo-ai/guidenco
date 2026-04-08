@@ -38,17 +38,26 @@ export async function getOrCreateOrganizationId(userId: string): Promise<string>
   const orgName = user?.name ? `${user.name}'s Team` : "My Team";
   const slug = buildUniqueSlug(orgName, userId);
 
-  const [newOrg] = await db
-    .insert(organizations)
-    .values({ id: randomUUID(), name: orgName, slug })
-    .returning();
+  try {
+    const [newOrg] = await db
+      .insert(organizations)
+      .values({ id: randomUUID(), name: orgName, slug })
+      .returning();
 
-  await db.insert(organizationMembers).values({
-    id: randomUUID(),
-    organizationId: newOrg.id,
-    userId,
-    role: "owner",
-  });
+    await db.insert(organizationMembers).values({
+      id: randomUUID(),
+      organizationId: newOrg.id,
+      userId,
+      role: "owner",
+    });
 
-  return newOrg.id;
+    return newOrg.id;
+  } catch (err: any) {
+    // Handle race condition: a concurrent request already created the org
+    if (err?.code === "23505") {
+      const existing = await getOrganizationId(userId);
+      if (existing) return existing;
+    }
+    throw err;
+  }
 }
