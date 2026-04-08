@@ -51,10 +51,10 @@ export function ResultsSection() {
 
         {/* Result metrics */}
         <div className="grid gap-4 sm:grid-cols-2">
-          {results.map((result, index) => {
+          {results.map((result) => {
             const Icon = result.icon;
             return (
-              <SurfaceCard key={result.label} delay={index * 0.1}>
+              <SurfaceCard key={result.label}>
                 <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-[#ff6a00]/10 text-[#ff6a00]">
                   <Icon className="size-6" />
                 </div>
@@ -62,7 +62,7 @@ export function ResultsSection() {
                   initial={{ opacity: 0, scale: 0.5 }}
                   whileInView={{ opacity: 1, scale: 1 }}
                   viewport={{ once: true }}
-                  transition={{ delay: 0.3 + index * 0.1, type: "spring" }}
+                  transition={{ delay: 0.3, type: "spring" }}
                   className="mb-1 text-3xl font-bold text-white"
                 >
                   {result.value}

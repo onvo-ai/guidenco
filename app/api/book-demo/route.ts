@@ -177,7 +177,7 @@ async function loadNotionDatabase(databaseId: string, token: string) {
   });
 
   if (!response.ok) {
-    throw new Error(`Unable to load Notion database: ${extractNotionError(await response.text())}`);
+    throw new Error(`Unable to load the demo submission database: ${extractNotionError(await response.text())}`);
   }
 
   return (await response.json()) as NotionDatabase;
@@ -198,7 +198,7 @@ async function createNotionPage(databaseId: string, token: string, properties: R
   });
 
   if (!response.ok) {
-    throw new Error(`Unable to create Notion page: ${extractNotionError(await response.text())}`);
+    throw new Error(`Unable to save the demo request: ${extractNotionError(await response.text())}`);
   }
 }
 
@@ -206,14 +206,14 @@ export async function POST(request: Request) {
   try {
     if (!notionToken) {
       return NextResponse.json(
-        { error: "Notion is not configured. Set NOTION_API_KEY (or NOTION_TOKEN)." },
+        { error: "Demo submissions are not configured. Set the required integration token." },
         { status: 500 },
       );
     }
 
     if (!notionDatabaseId) {
       return NextResponse.json(
-        { error: "Notion database is not configured. Set NOTION_DEMO_REQUESTS_DATABASE_ID." },
+        { error: "Demo submissions are not configured. Set the required database ID." },
         { status: 500 },
       );
     }

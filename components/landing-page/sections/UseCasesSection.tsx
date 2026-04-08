@@ -50,13 +50,17 @@ export function UseCasesSection() {
       <div className="grid gap-8 lg:grid-cols-[0.35fr_0.65fr] lg:gap-12">
         {/* Toggle buttons */}
         <div className="flex flex-col gap-4">
-          {useCases.map((useCase) => {
+          {useCases.map((useCase, index) => {
             const Icon = useCase.icon;
             const isActive = activeCase === useCase.id;
             return (
               <motion.button
                 key={useCase.id}
                 onClick={() => setActiveCase(useCase.id)}
+                initial={{ opacity: 0, x: -12 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ delay: index * 0.08 }}
                 whileHover={{ x: 4 }}
                 whileTap={{ scale: 0.98 }}
                 className={`flex items-center gap-4 rounded-2xl border p-4 text-left transition-all sm:p-5 ${
@@ -92,12 +96,14 @@ export function UseCasesSection() {
             >
               <SurfaceCard className="flex flex-1 flex-col justify-between p-8 sm:p-12">
                 <div>
-                  <div
+                  <motion.div
+                    animate={{ scale: [1, 1.04, 1] }}
+                    transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
                     className="mb-8 flex size-20 items-center justify-center rounded-3xl"
                     style={{ backgroundColor: `${active.color}15`, color: active.color }}
                   >
                     <ActiveIcon className="size-10" />
-                  </div>
+                  </motion.div>
                   <h3 className="mb-6 text-3xl font-bold text-white sm:text-4xl">{active.title}</h3>
                   <p className="max-w-xl text-lg leading-8 text-white/70 sm:text-xl">{active.description}</p>
                 </div>

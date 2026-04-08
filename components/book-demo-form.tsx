@@ -78,7 +78,7 @@ export function BookDemoForm() {
 
       setStatus({
         type: "success",
-        message: "Thanks — your demo request has been sent and saved to our Notion workspace.",
+        message: "Thanks — your demo request has been sent. Our team will review it and get back to you soon.",
       });
       setForm(initialState);
     } catch (error) {
@@ -104,7 +104,7 @@ export function BookDemoForm() {
           Tell us a little about your growth goals.
         </h2>
         <p className="mt-3 text-sm leading-6 text-white/60 sm:text-base">
-          We’ll store your request in Notion so our team can review it and get back to you quickly.
+          We’ll review your request so our team can get back to you quickly.
         </p>
       </div>
 
@@ -185,7 +185,7 @@ export function BookDemoForm() {
         <Select value={form.budget} onValueChange={(value) => updateField("budget", value)}>
           <SelectTrigger
             id="budget"
-            className="w-full border-white/10 bg-black/20 text-white data-[placeholder]:text-white/30"
+            className="w-full border-white/10 bg-black/20 text-white data-placeholder:text-white/30"
           >
             <SelectValue placeholder="Choose a monthly range" />
           </SelectTrigger>

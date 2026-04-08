@@ -1,6 +1,3 @@
-"use client";
-
-import { motion } from "framer-motion";
 import { AlertCircle, ArrowDownRight, RefreshCcw, Search } from "lucide-react";
 import { LandingSection } from "../primitives";
 import { ProblemVisualization } from "./ProblemVisualization";
@@ -41,16 +38,11 @@ export function ProblemSection() {
 
         {/* Problem points */}
         <div className="flex flex-col justify-center gap-4">
-          {problemPoints.map((point, index) => {
+          {problemPoints.map((point) => {
             const Icon = point.icon;
             return (
-              <motion.div
+              <div
                 key={point.title}
-                initial={{ opacity: 0, x: 20 }}
-                whileInView={{ opacity: 1, x: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: index * 0.1 }}
-                whileHover={{ scale: 1.02, x: -5 }}
                 className="group flex items-start gap-4 rounded-2xl border border-white/5 bg-white/[0.02] p-5 transition-all hover:border-red-500/30 hover:bg-white/[0.04]"
               >
                 <div className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-white/5 text-white/40 transition-colors group-hover:bg-red-500/10 group-hover:text-red-400">
@@ -60,7 +52,7 @@ export function ProblemSection() {
                   <h4 className="text-base font-semibold text-white group-hover:text-red-100">{point.title}</h4>
                   <p className="mt-1 text-sm text-white/60">{point.description}</p>
                 </div>
-              </motion.div>
+              </div>
             );
           })}
         </div>

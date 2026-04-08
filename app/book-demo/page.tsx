@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowLeft, CalendarDays, CheckCircle2, Sparkles, Target, Zap } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCircle2, Target, Zap } from "lucide-react";
 
 import { BookDemoForm } from "@/components/book-demo-form";
 
 export const metadata: Metadata = {
   title: "Book a Demo | Guidenco",
   description:
-    "Submit your demo request, share your company details and budget, and we’ll save everything in Notion for follow-up.",
+    "Submit your demo request, share your company details and budget, and we’ll review everything for follow-up.",
 };
 
 const highlights = [
@@ -23,8 +23,8 @@ const highlights = [
   },
   {
     icon: Zap,
-    title: "Saved in Notion",
-    description: "Every submission is captured in your Notion workspace.",
+    title: "Tracked securely",
+    description: "Every submission is organized for our team to review.",
   },
 ];
 
@@ -41,11 +41,6 @@ export default function BookDemoPage() {
             <ArrowLeft className="size-4" />
             Back to home
           </Link>
-
-          <div className="hidden items-center gap-2 rounded-full border border-[#ff6a00]/20 bg-[#ff6a00]/10 px-4 py-2 text-xs font-medium uppercase tracking-[0.24em] text-white/70 sm:inline-flex">
-            <Sparkles className="size-4 text-[#ff6a00]" />
-            Demo requests saved to Notion
-          </div>
         </header>
 
         <main className="grid flex-1 items-center gap-12 py-10 lg:grid-cols-[1.05fr_0.95fr] lg:py-14">
@@ -60,7 +55,7 @@ export default function BookDemoPage() {
             </h1>
 
             <p className="mt-6 max-w-xl text-lg leading-8 text-white/65 sm:text-xl">
-              Share your name, company, contact details, and marketing budget. We’ll save the request in Notion and use it to prepare for a focused demo.
+              Share your name, company, contact details, and marketing budget. We’ll use it to prepare for a focused demo.
             </p>
 
             <div className="mt-10 grid gap-4">

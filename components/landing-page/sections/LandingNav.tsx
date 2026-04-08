@@ -4,10 +4,11 @@ import { CtaButton } from "../primitives";
 
 const navItems = [
   { label: "Problem", href: "#problem" },
-  { label: "Solution", href: "#solution" },
-  { label: "How it works", href: "#how-it-works" },
-  { label: "Features", href: "#features" },
+  { label: "Before/After", href: "#before-after" },
+  { label: "Benefits", href: "#benefits" },
+  { label: "Audience", href: "#audience" },
   { label: "Results", href: "#results" },
+  { label: "FAQ", href: "#faq" },
 ];
 
 export function LandingNav() {
