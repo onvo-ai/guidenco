@@ -127,9 +127,8 @@ registerRoot(RemotionRoot);
         '--disable-setuid-sandbox',
         '--disable-crash-reporter',
         '--disable-dev-shm-usage',
+        '--disable-gpu-sandbox',
         '--no-zygote',
-        '--disable-gpu',
-        '--headless',
       ],
     };
     const browserExecutable = process.env.REMOTION_CHROME_EXECUTABLE_PATH || undefined;
@@ -164,7 +163,8 @@ registerRoot(RemotionRoot);
     await upsertVideo(videoId, { videoUrl, status: 'done', createVersion: false });
     return NextResponse.json({ success: true, videoUrl, versionId: targetVersion.id });
   } catch (error: any) {
-    console.error('Video render error:', error);
+    console.error('Video render error:', error?.message ?? error);
+    if (error?.stack) console.error('Stack:', error.stack);
     await updateVideoVersion(targetVersion.id, { status: 'error' });
     await upsertVideo(videoId, { status: 'error', createVersion: false });
     return NextResponse.json({ error: error.message }, { status: 500 });

@@ -105,9 +105,8 @@ export async function POST(req: Request) {
         "--disable-setuid-sandbox",
         "--disable-crash-reporter",
         "--disable-dev-shm-usage",
+        "--disable-gpu-sandbox",
         "--no-zygote",
-        "--disable-gpu",
-        "--headless",
       ],
     });
 
