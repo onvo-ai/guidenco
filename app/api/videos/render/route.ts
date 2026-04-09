@@ -122,11 +122,13 @@ registerRoot(RemotionRoot);
     const chromiumOptions = {
       disableWebSecurity: true,
       gl: 'swiftshader' as const,
-      enableMultiProcessOnLinux: true,
     };
+    // Pass browserExecutable explicitly so Remotion uses it instead of
+    // triggering its own Chrome download/discovery at runtime.
+    const browserExecutable = process.env.REMOTION_CHROME_EXECUTABLE_PATH || undefined;
 
     const bundled = await bundle({ entryPoint: join(tempDir, 'index.tsx') });
-    const compositions = await getCompositions(bundled, { chromiumOptions });
+    const compositions = await getCompositions(bundled, { chromiumOptions, browserExecutable });
     const composition = compositions.find((c: any) => c.id === 'MainComposition');
     if (!composition) throw new Error('Composition not found after bundling');
 
@@ -137,6 +139,7 @@ registerRoot(RemotionRoot);
       codec: 'h264',
       outputLocation: outputPath,
       chromiumOptions,
+      browserExecutable,
     });
 
     const { uploadFile, ensureBucket } = await import('@/lib/storage');
