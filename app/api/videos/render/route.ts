@@ -120,21 +120,13 @@ registerRoot(RemotionRoot);
     writeFileSync(join(tempDir, 'package.json'), JSON.stringify({ name: 'remotion-render', version: '1.0.0', dependencies: { remotion: '*', react: '*', 'react-dom': '*' } }));
 
     const chromiumOptions = {
-      disableWebSecurity: true, // Required to allow fetching cross-origin media assets during headless render
+      disableWebSecurity: true,
       gl: 'swiftshader' as const,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-      ],
+      enableMultiProcessOnLinux: true,
     };
-    const browserExecutable = process.env.REMOTION_CHROME_EXECUTABLE_PATH || undefined;
 
     const bundled = await bundle({ entryPoint: join(tempDir, 'index.tsx') });
-    const compositions = await getCompositions(bundled, {
-      chromiumOptions,
-      browserExecutable,
-    });
+    const compositions = await getCompositions(bundled, { chromiumOptions });
     const composition = compositions.find((c: any) => c.id === 'MainComposition');
     if (!composition) throw new Error('Composition not found after bundling');
 
@@ -145,7 +137,6 @@ registerRoot(RemotionRoot);
       codec: 'h264',
       outputLocation: outputPath,
       chromiumOptions,
-      browserExecutable,
     });
 
     const { uploadFile, ensureBucket } = await import('@/lib/storage');

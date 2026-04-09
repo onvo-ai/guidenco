@@ -6,7 +6,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Builder - Install dependencies and build the application
 # -----------------------------------------------------------------------------
-FROM node:20-slim AS builder
+FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -25,12 +25,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy only dependency files for better layer caching
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
-# Skip Puppeteer Chrome download — system Chromium is used at runtime
-ENV PUPPETEER_SKIP_DOWNLOAD=true
-
 # Install all dependencies (need devDependencies for build)
 RUN npm ci && \
     npm audit --audit-level=moderate || true
+
+# Download Remotion-managed Chrome Headless Shell into the image
+# This avoids all system Chromium compatibility issues at runtime
+RUN npx remotion browser ensure
 
 # Accept build arguments
 ARG COOLIFY_URL
@@ -60,7 +61,7 @@ RUN npm run build
 # -----------------------------------------------------------------------------
 # Stage 2: Production Runtime - Minimal secure image
 # -----------------------------------------------------------------------------
-FROM node:20-slim AS runner
+FROM node:22-bookworm-slim AS runner
 
 # Metadata labels (OCI standard)
 LABEL org.opencontainers.image.title="Guidenco" \
@@ -71,52 +72,47 @@ LABEL org.opencontainers.image.title="Guidenco" \
 
 WORKDIR /app
 
-# Install only runtime dependencies + security hardening
+# Install runtime dependencies
+# Chrome deps per https://www.remotion.dev/docs/docker
+# canvas/pango deps for native modules
 RUN apt-get update && apt-get install -y --no-install-recommends \
     dumb-init \
+    ca-certificates \
     libcairo2 \
     libjpeg62-turbo \
     libpango-1.0-0 \
     libgif7 \
-    ca-certificates \
-    chromium \
-    fonts-liberation \
+    libnss3 \
+    libdbus-1-3 \
     libatk1.0-0 \
     libatk-bridge2.0-0 \
-    libdrm2 \
+    libgbm-dev \
+    libasound2 \
+    libxrandr2 \
+    libxkbcommon-dev \
+    libxfixes3 \
     libxcomposite1 \
     libxdamage1 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
+    libdrm2 \
     libnspr4 \
-    libnss3 \
+    fonts-liberation \
+    fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
-    && apt-get clean \
-    && printf '#!/bin/sh\nexec /usr/bin/chromium --disable-crash-reporter --crash-dumps-dir=/tmp "$@"\n' \
-       > /usr/local/bin/chromium-wrapper \
-    && chmod +x /usr/local/bin/chromium-wrapper \
-    && printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/chrome_crashpad_handler \
-    && chmod +x /usr/local/bin/chrome_crashpad_handler \
-    && find /usr -name "chrome_crashpad_handler" -not -path "/usr/local/*" -exec sh -c 'printf "#!/bin/sh\nexit 0\n" > "$1" && chmod +x "$1"' _ {} \; \
-    # Remove unnecessary utilities that could be exploited
-    && rm -rf /usr/bin/apt* /usr/bin/dpkg* /usr/bin/wget /usr/bin/curl 2>/dev/null || true \
-    # Remove shell access for added security (comment out if debugging needed)
-    # && rm -rf /bin/sh /bin/bash 2>/dev/null || true \
-    # Set restrictive umask
-    && echo "umask 027" >> /etc/profile
+    && apt-get clean
 
 # Create non-root user with specific UID/GID (no home directory, no shell)
 RUN groupadd --gid 1001 nextjs && \
     useradd --uid 1001 --gid 1001 --no-create-home --shell /usr/sbin/nologin nextjs
 
 # Copy built application with proper ownership (using standalone output)
-# Copy standalone build
 COPY --from=builder --chown=nextjs:nextjs /app/.next/standalone /app/.next/standalone
 COPY --from=builder --chown=nextjs:nextjs /app/.next/static /app/.next/static
 COPY --from=builder --chown=nextjs:nextjs /app/public /app/public
 
-# Set file permissions (readable/executable for user and group)
+# Copy Remotion-managed Chrome downloaded during build
+COPY --from=builder --chown=nextjs:nextjs /root/.cache/puppeteer /root/.cache/puppeteer
+
+# Set file permissions
 RUN mkdir -p /app/.next/cache /tmp \
     && chown -R nextjs:nextjs /app /tmp \
     && chmod -R 750 /app \
@@ -125,12 +121,7 @@ RUN mkdir -p /app/.next/cache /tmp \
 # Production environment variables
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
-    NODE_OPTIONS="--max-old-space-size=512 --no-experimental-fetch" \
-    REMOTION_CHROME_EXECUTABLE_PATH="/usr/local/bin/chromium-wrapper" \
-    PUPPETEER_EXECUTABLE_PATH="/usr/local/bin/chromium-wrapper"
-
-# Drop all capabilities except what's needed
-# Note: This requires --cap-drop=ALL --cap-add=... at runtime
+    NODE_OPTIONS="--max-old-space-size=512 --no-experimental-fetch"
 
 # Switch to non-root user
 USER nextjs:nextjs
