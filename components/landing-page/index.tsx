@@ -24,8 +24,9 @@ export default function LandingPage() {
       <LandingNav />
       <main>
         <HeroSection />
-        <SocialProofSection />
         <ProblemSection />
+        <SocialProofSection />
+        
         <BeforeAfterSection />
         <SolutionSection />
         <HowItWorksSection />
@@ -38,7 +39,7 @@ export default function LandingPage() {
         <UseCasesSection />
         <DashboardSection />
         <RoiSection />
-        <TestimonialsSection />
+        {/* <TestimonialsSection /> */}
         <FaqSection />
         <FinalCtaSection />
       </main>

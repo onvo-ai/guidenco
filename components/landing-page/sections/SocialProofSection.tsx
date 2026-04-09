@@ -1,4 +1,4 @@
-import { Award, Building2, ShieldCheck, Star } from "lucide-react";
+import { Building2, ShieldCheck, Star, Users } from "lucide-react";
 
 import { LandingSection, SurfaceCard } from "../primitives";
 
@@ -14,9 +14,9 @@ const proofPoints = [
     icon: ShieldCheck,
   },
   {
-    value: "4.8/5",
-    label: "average team satisfaction",
-    icon: Award,
+    value: "2x",
+    label: "higher engagement",
+    icon: Users,
   },
   {
     value: "3x",
@@ -26,9 +26,9 @@ const proofPoints = [
 ];
 
 const proofBars = [
-  "Founders use it to validate messaging faster",
+  "Founders use it to find product-market fit better",
   "Growth teams use it to unify content ops",
-  "Agencies use it to prove measurable outcomes",
+  "Agencies use it to identify the marketing channels that work best",
 ];
 
 export function SocialProofSection() {

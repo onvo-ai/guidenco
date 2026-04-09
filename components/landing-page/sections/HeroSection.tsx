@@ -39,7 +39,7 @@ export function HeroSection() {
               See How It Works
             </CtaButton>
           </div>
-          <p className="mt-6 text-sm text-white/50">Used by startups to find product-market fit faster</p>
+          <p className="mt-6 text-sm text-white/50">Built for companies of every size to grow faster</p>
         </motion.div>
 
         {/* Clean Dashboard/Flow Visualization */}
