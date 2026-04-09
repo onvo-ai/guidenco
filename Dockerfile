@@ -95,6 +95,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxdamage1 \
     libdrm2 \
     libnspr4 \
+    libcups2 \
     fonts-liberation \
     fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
@@ -109,8 +110,10 @@ COPY --from=builder --chown=nextjs:nextjs /app/.next/standalone /app/.next/stand
 COPY --from=builder --chown=nextjs:nextjs /app/.next/static /app/.next/static
 COPY --from=builder --chown=nextjs:nextjs /app/public /app/public
 
-# Copy Remotion-managed Chrome downloaded during build
-COPY --from=builder --chown=nextjs:nextjs /root/.cache/puppeteer /root/.cache/puppeteer
+# Copy Remotion-managed Chrome Headless Shell downloaded during build.
+# Remotion looks for it at <cwd>/node_modules/.remotion at runtime.
+# The app runs with CWD=/app so we place it at /app/node_modules/.remotion.
+COPY --from=builder --chown=nextjs:nextjs /app/node_modules/.remotion /app/node_modules/.remotion
 
 # Set file permissions
 RUN mkdir -p /app/.next/cache /tmp \
