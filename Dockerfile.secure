@@ -35,9 +35,9 @@ RUN npm ci && \
     npm cache clean --force
 
 # Download Remotion-managed Chrome Headless Shell.
-# node_modules is carried into the runner stage, so Chrome travels with it.
-# Setting REMOTION_CHROME_EXECUTABLE_PATH at runtime bypasses download logic.
-RUN npx --yes remotion browser ensure
+# @remotion/cli is not installed (no bin entry in 'remotion' package), so we
+# call ensureBrowser() from @remotion/renderer directly via a node one-liner.
+RUN node -e "const {ensureBrowser} = require('@remotion/renderer'); ensureBrowser().then(() => { console.log('Browser ready'); process.exit(0); }).catch(e => { console.error(e); process.exit(1); })"
 
 # -----------------------------------------------------------------------------
 # Stage 2: Builder - Compile the Next.js application
