@@ -19,42 +19,44 @@ export function SolutionSection() {
       title="Guidenco Removes the Guesswork"
       description="Instead of guessing channels, formats, and messaging every week, you get a system that turns product context into repeatable experiments and compounding learnings."
     >
-      <div className="grid gap-8 lg:grid-cols-2">
-        {/* Solution points */}
-        <div className="flex flex-col justify-center gap-4">
+      <div className="flex flex-col items-center gap-16 lg:flex-row">
+        {/* Solution points - New Left Side Layout */}
+        <div className="flex w-full flex-col justify-center gap-6 lg:w-1/3">
           <motion.div
             initial={{ opacity: 0 }}
             whileInView={{ opacity: 1 }}
             viewport={{ once: true }}
-            className="mb-2 inline-flex w-fit rounded-full border border-[#ff6a00]/30 bg-[#ff6a00]/10 px-3 py-1 text-xs uppercase tracking-[0.24em] text-[#ffb17a]"
+            className="mb-4 inline-flex w-fit rounded-full border border-[#ff6a00]/30 bg-[#ff6a00]/10 px-3 py-1 text-xs uppercase tracking-[0.24em] text-[#ffb17a]"
           >
             Growth system replacing guesswork
           </motion.div>
           
-          {solutionPoints.map((point, index) => (
-            <motion.div
-              key={point}
-              initial={{ opacity: 0, x: -20 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: index * 0.15 }}
-              className="flex items-center gap-4 rounded-2xl border border-[#ff6a00]/20 bg-white/[0.03] p-5"
-            >
-              <div className="flex size-10 items-center justify-center rounded-full bg-[#ff6a00]/10 text-[#ff6a00]">
-                <CheckCircle2 className="size-5" />
-              </div>
-              <p className="text-lg text-white/80">{point}</p>
-            </motion.div>
-          ))}
+          <div className="space-y-4">
+            {solutionPoints.map((point, index) => (
+              <motion.div
+                key={point}
+                initial={{ opacity: 0, x: -20 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ delay: index * 0.15 }}
+                className="group relative flex items-start gap-4"
+              >
+                <div className="mt-1 flex size-6 shrink-0 items-center justify-center rounded-full border border-[#ff6a00]/30 bg-[#ff6a00]/10 text-[#ff6a00]">
+                  <CheckCircle2 className="size-3.5" />
+                </div>
+                <p className="text-base leading-relaxed text-white/70 group-hover:text-white/90 transition-colors">{point}</p>
+              </motion.div>
+            ))}
+          </div>
         </div>
 
-        {/* Clean System Visualization */}
+        {/* System Visualization - Now Center/Right */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           whileInView={{ opacity: 1, scale: 1 }}
           viewport={{ once: true }}
           transition={{ duration: 0.5 }}
-          className="relative flex min-h-[420px] items-center justify-center overflow-hidden rounded-3xl border border-[#ff6a00]/20 bg-gradient-to-br from-[#ff6a00]/10 to-transparent p-8"
+          className="relative flex min-h-[580px] flex-1 items-center justify-center overflow-hidden rounded-3xl border border-[#ff6a00]/20 bg-linear-to-br from-[#ff6a00]/10 to-transparent p-8"
         >
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,106,0,0.08),transparent_60%)]" />
 
@@ -95,21 +97,21 @@ export function SolutionSection() {
                 title: "Posting",
                 subtitle: "LinkedIn · Instagram · Reddit",
                 icon: MessageSquare,
-                className: "-translate-y-[150px]",
+                className: "-translate-y-[190px]",
                 accent: "text-[#ffb17a]",
               },
               {
                 title: "Insights",
                 subtitle: "CTR · comments · saves",
                 icon: BarChart3,
-                className: "translate-x-[150px] translate-y-[10px]",
+                className: "translate-x-[200px] translate-y-[60px]",
                 accent: "text-[#7cb5ff]",
               },
               {
                 title: "Experimentation",
                 subtitle: "New hooks · formats · angles",
                 icon: RefreshCcw,
-                className: "-translate-x-[150px] translate-y-[72px]",
+                className: "-translate-x-[200px] translate-y-[60px]",
                 accent: "text-emerald-300",
               },
             ].map((node, index) => {
@@ -123,15 +125,15 @@ export function SolutionSection() {
                     opacity: [0.88, 1, 0.88],
                   }}
                   transition={{ duration: 3.8, repeat: Infinity, ease: "easeInOut", delay: index * 0.22 }}
-                  className={`absolute z-20 w-[184px] rounded-3xl border border-white/10 bg-[#151515]/92 p-4 shadow-[0_18px_42px_rgba(0,0,0,0.22)] backdrop-blur-sm ${node.className}`}
+                  className={`absolute z-20 w-[220px] rounded-3xl border border-white/10 bg-[#151515]/92 p-4 shadow-[0_18px_42px_rgba(0,0,0,0.22)] backdrop-blur-sm ${node.className}`}
                 >
-                  <div className="flex flex-col items-center gap-3 text-center">
+                  <div className="flex items-center gap-4 text-left">
                     <div className={`flex size-11 shrink-0 items-center justify-center rounded-2xl bg-white/5 ${node.accent}`}>
-                      <Icon className="size-4" />
+                      <Icon className="size-5" />
                     </div>
-                    <div className="max-w-[150px]">
-                      <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">{node.title}</div>
-                      <div className="mt-1 text-sm leading-5 text-white/85">{node.subtitle}</div>
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/35">{node.title}</div>
+                      <div className="mt-0.5 text-sm leading-tight text-white/85">{node.subtitle}</div>
                     </div>
                   </div>
                 </motion.div>
@@ -147,9 +149,6 @@ export function SolutionSection() {
             </motion.div>
           </div>
 
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-white/10 bg-black/40 px-4 py-2 text-xs text-white/70 sm:text-sm">
-            posting → insights → AI → experiments
-          </div>
         </motion.div>
       </div>
     </LandingSection>
