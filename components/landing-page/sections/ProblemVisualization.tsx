@@ -32,27 +32,111 @@ export function ProblemVisualization() {
 
         <div className="relative flex-1">
           <svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none" viewBox="0 0 100 100">
+            <defs>
+              <linearGradient id="problem-grid" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor="rgba(255,255,255,0.12)" />
+                <stop offset="100%" stopColor="rgba(255,255,255,0.03)" />
+              </linearGradient>
+              <linearGradient id="problem-cac" x1="0" x2="1" y1="0" y2="0">
+                <stop offset="0%" stopColor="rgba(239,68,68,0.15)" />
+                <stop offset="100%" stopColor="rgba(239,68,68,0.95)" />
+              </linearGradient>
+              <linearGradient id="problem-conversion" x1="0" x2="1" y1="0" y2="0">
+                <stop offset="0%" stopColor="rgba(245,158,11,0.15)" />
+                <stop offset="100%" stopColor="rgba(245,158,11,0.95)" />
+              </linearGradient>
+              <linearGradient id="problem-traffic" x1="0" x2="1" y1="0" y2="0">
+                <stop offset="0%" stopColor="rgba(56,189,248,0.15)" />
+                <stop offset="100%" stopColor="rgba(56,189,248,0.95)" />
+              </linearGradient>
+              <linearGradient id="problem-traffic-fill" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor="rgba(56,189,248,0.22)" />
+                <stop offset="100%" stopColor="rgba(56,189,248,0.02)" />
+              </linearGradient>
+            </defs>
+
+            <rect width="100" height="100" fill="url(#problem-grid)" opacity="0.08" />
+            <g opacity="0.22">
+              {[14, 32, 50, 68, 86].map((y) => (
+                <line key={y} x1="0" x2="100" y1={y} y2={y} stroke="white" strokeDasharray="2.5 3.5" strokeWidth="0.45" />
+              ))}
+              {[16, 36, 56, 76, 96].map((x) => (
+                <line key={x} x1={x} x2={x} y1="0" y2="100" stroke="white" strokeDasharray="2.5 3.5" strokeWidth="0.35" />
+              ))}
+            </g>
+
             <motion.path
-              d="M0,50 Q10,20 20,60 T40,30 T60,80 T80,40 T100,70"
+              d="M0,76 C10,74 18,66 28,56 C38,46 48,38 58,40 C70,42 82,34 92,24 C96,20 98,18 100,16"
               fill="none"
-              stroke="rgba(239,68,68,0.4)"
-              strokeWidth="2"
+              stroke="url(#problem-cac)"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2.4"
               initial={{ pathLength: 0 }}
               whileInView={{ pathLength: 1 }}
               viewport={{ once: true }}
-              transition={{ duration: 1.5, ease: "easeOut" }}
+              transition={{ duration: 1.7, ease: "easeOut" }}
             />
             <motion.path
-              d="M0,80 Q15,90 25,40 T50,60 T75,20 T100,50"
+              d="M0,56 C12,52 20,58 30,50 C42,40 52,48 64,42 C76,36 86,38 100,30"
               fill="none"
-              stroke="rgba(255,255,255,0.1)"
-              strokeWidth="1.5"
-              strokeDasharray="4,4"
+              stroke="url(#problem-conversion)"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2.4"
+              strokeDasharray="1 0"
               initial={{ pathLength: 0 }}
               whileInView={{ pathLength: 1 }}
               viewport={{ once: true }}
-              transition={{ duration: 2, ease: "easeOut" }}
+              transition={{ duration: 1.9, ease: "easeOut", delay: 0.12 }}
             />
+            <motion.path
+              d="M0,84 C12,82 22,78 34,66 C46,54 58,60 70,46 C80,34 90,30 100,22 L100,100 L0,100 Z"
+              fill="url(#problem-traffic-fill)"
+              stroke="none"
+              initial={{ opacity: 0 }}
+              whileInView={{ opacity: 1 }}
+              viewport={{ once: true }}
+              transition={{ duration: 1.4, ease: "easeOut", delay: 0.08 }}
+            />
+            <motion.path
+              d="M0,84 C12,82 22,78 34,66 C46,54 58,60 70,46 C80,34 90,30 100,22"
+              fill="none"
+              stroke="url(#problem-traffic)"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2.6"
+              initial={{ pathLength: 0 }}
+              whileInView={{ pathLength: 1 }}
+              viewport={{ once: true }}
+              transition={{ duration: 2.1, ease: "easeOut", delay: 0.08 }}
+            />
+
+            {[
+              { cx: 28, cy: 56, fill: "#ef4444" },
+              { cx: 58, cy: 40, fill: "#ef4444" },
+              { cx: 92, cy: 24, fill: "#ef4444" },
+              { cx: 30, cy: 50, fill: "#f59e0b" },
+              { cx: 64, cy: 42, fill: "#f59e0b" },
+              { cx: 100, cy: 30, fill: "#f59e0b" },
+              { cx: 34, cy: 66, fill: "#38bdf8" },
+              { cx: 70, cy: 46, fill: "#38bdf8" },
+              { cx: 100, cy: 22, fill: "#38bdf8" },
+            ].map((point, index) => (
+              <motion.circle
+                key={`${point.cx}-${point.cy}-${point.fill}`}
+                cx={point.cx}
+                cy={point.cy}
+                r="1.15"
+                fill={point.fill}
+                stroke="rgba(17,17,17,0.9)"
+                strokeWidth="0.9"
+                initial={{ scale: 0, opacity: 0 }}
+                whileInView={{ scale: 1, opacity: 1 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.35, delay: 0.35 + index * 0.05 }}
+              />
+            ))}
           </svg>
 
           <div className="absolute inset-0 flex flex-col justify-center gap-4 py-8">

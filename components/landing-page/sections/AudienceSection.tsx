@@ -1,4 +1,4 @@
-import { Building2, Rocket, Users, Wrench } from "lucide-react";
+import { Building2, Megaphone, Rocket, Users } from "lucide-react";
 
 import { LandingSection, SurfaceCard } from "../primitives";
 
@@ -28,11 +28,11 @@ const audienceSegments = [
     accent: "from-[#22c55e]/20 via-[#22c55e]/10 to-transparent",
   },
   {
-    title: "Operators",
-    description: "Need visibility into what is driving demand so they can prioritize work with confidence.",
-    icon: Wrench,
-    badge: "Prioritize well",
-    outcome: "Focus the team on what is actually creating demand.",
+    title: "Creators",
+    description: "Need a simple way to see which posts, formats, and platforms are growing their audience.",
+    icon: Megaphone,
+    badge: "Grow audience",
+    outcome: "Double down on content that drives reach, engagement, and conversions.",
     accent: "from-[#f59e0b]/20 via-[#f59e0b]/10 to-transparent",
   },
 ];

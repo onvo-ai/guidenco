@@ -4,9 +4,7 @@ import { CtaButton } from "../primitives";
 
 const navItems = [
   { label: "Problem", href: "#problem" },
-  { label: "Before/After", href: "#before-after" },
   { label: "Benefits", href: "#benefits" },
-  { label: "Audience", href: "#audience" },
   { label: "Results", href: "#results" },
   { label: "FAQ", href: "#faq" },
 ];
@@ -34,9 +32,6 @@ export function LandingNav() {
         </nav>
 
         <div className="flex items-center gap-3">
-          <CtaButton href="/auth/sign-in" variant="outline" className="hidden sm:inline-flex">
-            Sign In
-          </CtaButton>
           <CtaButton href="/book-demo">Book Demo</CtaButton>
         </div>
       </div>

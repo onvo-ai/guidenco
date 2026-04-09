@@ -135,9 +135,9 @@ export function BeforeAfterSection() {
 
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               {[
-                { label: "Faster tests", value: "3x" },
-                { label: "Time saved", value: "15 hrs" },
-                { label: "Clearer focus", value: "1 system" },
+                { label: "Growth experiments tracked", value: "120+" },
+                { label: "Saved per week on manual planning", value: "18 hrs" },
+                { label: "Higher engagement", value: "2x" },
               ].map((metric) => (
                 <div key={metric.label} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                   <div className="text-xl font-semibold text-white">{metric.value}</div>

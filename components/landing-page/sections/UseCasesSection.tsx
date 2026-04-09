@@ -111,11 +111,11 @@ export function UseCasesSection() {
                 <div className="mt-12 grid gap-4 sm:grid-cols-2">
                   <div className="rounded-2xl border border-white/10 bg-black/40 p-5">
                     <div className="text-sm font-medium text-white/50">Typical Result</div>
-                    <div className="mt-2 text-2xl font-bold text-white">3x faster iteration</div>
+                    <div className="mt-2 text-2xl font-bold text-white">3x faster content iteration cycles</div>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-black/40 p-5">
                     <div className="text-sm font-medium text-white/50">Time Saved</div>
-                    <div className="mt-2 text-2xl font-bold text-white">15 hrs/week</div>
+                    <div className="mt-2 text-2xl font-bold text-white">18 hrs/week</div>
                   </div>
                 </div>
               </SurfaceCard>
