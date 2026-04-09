@@ -120,24 +120,15 @@ registerRoot(RemotionRoot);
     writeFileSync(join(tempDir, 'package.json'), JSON.stringify({ name: 'remotion-render', version: '1.0.0', dependencies: { remotion: '*', react: '*', 'react-dom': '*' } }));
 
     const chromiumOptions = {
-      disableWebSecurity: true, // Required to allow fetching cross-origin media assets during headless render
+      disableWebSecurity: true,
       gl: 'swiftshader' as const,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-crash-reporter',
-        '--disable-dev-shm-usage',
-        '--disable-gpu-sandbox',
-        '--no-zygote',
-      ],
     };
+    // Pass browserExecutable explicitly so Remotion uses it instead of
+    // triggering its own Chrome download/discovery at runtime.
     const browserExecutable = process.env.REMOTION_CHROME_EXECUTABLE_PATH || undefined;
 
     const bundled = await bundle({ entryPoint: join(tempDir, 'index.tsx') });
-    const compositions = await getCompositions(bundled, {
-      chromiumOptions,
-      browserExecutable,
-    });
+    const compositions = await getCompositions(bundled, { chromiumOptions, browserExecutable });
     const composition = compositions.find((c: any) => c.id === 'MainComposition');
     if (!composition) throw new Error('Composition not found after bundling');
 

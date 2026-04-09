@@ -103,10 +103,7 @@ export async function POST(req: Request) {
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--disable-crash-reporter",
         "--disable-dev-shm-usage",
-        "--disable-gpu-sandbox",
-        "--no-zygote",
       ],
     });
 
