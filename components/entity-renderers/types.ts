@@ -34,7 +34,12 @@ export interface VersionNode {
   status?: string; // 'generating' | 'done' | 'error'
 }
 
-export type EntityType = 'asset' | 'video' | 'blog_article' | 'social_post' | 'document';
+export type EntityType =
+  | "asset"
+  | "video"
+  | "blog_article"
+  | "social_post"
+  | "document";
 
 export interface NodeContentProps {
   version: VersionNode;
@@ -51,7 +56,15 @@ export interface DetailContentProps {
 export interface EntityRenderer {
   NodeContent: React.FC<NodeContentProps>;
   DetailContent: React.FC<DetailContentProps>;
-  HeaderActions?: React.FC<{ version: VersionNode }>;
+  HeaderActions?: React.FC<{
+    version: VersionNode;
+    docWidth?: number;
+    docHeight?: number;
+  }>;
   hasError: (version: VersionNode) => boolean;
-  getDownload?: (version: VersionNode) => (() => void) | undefined;
+  getDownload?: (
+    version: VersionNode,
+    docWidth?: number,
+    docHeight?: number,
+  ) => (() => void | Promise<void>) | undefined;
 }
