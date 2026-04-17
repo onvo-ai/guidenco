@@ -1,7 +1,5 @@
-version: "3.8"
-
-# Environment: Use .env.docker file
-# Run with: docker compose --env-file .env.docker up
+# Environment: Use .env file
+# Run with: docker compose -f docker-compose.dev.yml up
 
 services:
   postgres:
