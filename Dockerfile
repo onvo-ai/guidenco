@@ -49,10 +49,15 @@ WORKDIR /app
 # Build arguments - only for PUBLIC env vars needed at build time
 # NEXT_PUBLIC_* vars are embedded in the JS bundle during build
 ARG NEXT_PUBLIC_APP_URL
+# Dummy POSTGRES_URL satisfies lib/db/index.ts module-level throw during
+# next build page-data collection. Never used for real connections —
+# Infisical injects the real value at runtime. Not present in runner stage.
+ARG POSTGRES_URL=postgresql://build:build@localhost:5432/build
 
 # Environment for build (non-sensitive only)
-# Sensitive vars (POSTGRES_URL, BETTER_AUTH_SECRET) are passed at RUNTIME via env file
+# Sensitive vars (POSTGRES_URL, BETTER_AUTH_SECRET) are passed at RUNTIME via Infisical
 ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL} \
+    POSTGRES_URL=${POSTGRES_URL} \
     NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     NODE_OPTIONS="--max-old-space-size=1024"
@@ -107,6 +112,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgif7 \
     # TLS certificates for HTTPS (OpenRouter API, PostgreSQL)
     ca-certificates \
+    # Needed temporarily to install Infisical CLI via setup script
+    curl \
+    bash \
     # Runtime libs for Chrome Headless Shell (Remotion-managed, per remotion.dev/docs/docker)
     fonts-liberation \
     fonts-noto-color-emoji \
@@ -126,6 +134,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcups2 \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     && apt-get clean
+
+# Install Infisical CLI for secrets injection at runtime
+RUN curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | bash && \
+    apt-get install -y --no-install-recommends infisical && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # -----------------------------------------------------------------------------
 # ✅ Control 4: Remove package manager & dangerous utilities
@@ -225,8 +238,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # -----------------------------------------------------------------------------
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Start standalone server directly (smallest footprint)
-CMD ["node", "server.js"]
+# Inject secrets via Infisical at runtime, then start the server
+CMD ["sh", "-c", "infisical run --token $INFISICAL_TOKEN --domain $INFISICAL_API_URL --projectId $INFISICAL_PROJECT_ID --env $INFISICAL_ENV -- node server.js"]
 
 # ============================================================================
 # RUNTIME HARDENING (apply when running the container)
