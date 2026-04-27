@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.DS_Store
+temp/
+*.bak
+.env
+.env.deploy
+.api_key
+venv/
+node_modules/

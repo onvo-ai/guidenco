@@ -1,0 +1,21 @@
+{
+  "network": {
+    "type": "wifi",
+    "ssid": "",
+    "password": ""
+  },
+  "io": {
+    "input": "hdmi",
+    "output": "usb",
+    "machine": "windows"
+  },
+  "llm": {
+    "provider": "ollama_cloud",
+    "url": "https://ollama.com/v1",
+    "model": "qwen3-vl:235b-instruct-cloud",
+    "api_key": ""
+  },
+  "instructions": {
+    "additionalInstructions": ""
+  }
+}
