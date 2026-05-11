@@ -51,10 +51,25 @@ echo "Files synced. Fixing permissions and restarting guidenco service..."
 
 if [ -n "${PI_PASS:-}" ]; then
   sshpass -p "$PI_PASS" ssh -o StrictHostKeyChecking=no "$PI_USER@$PI_HOST" \
-    "chmod +x $PI_PATH/setup_hid_gadget.sh && echo '$PI_PASS' | sudo -S systemctl restart guidenco.service && sleep 2 && echo '$PI_PASS' | sudo -S systemctl status guidenco.service --no-pager -l | head -20"
+    "chmod +x $PI_PATH/setup_hid_gadget.sh $PI_PATH/cloudflared-setup.sh && echo '$PI_PASS' | sudo -S systemctl restart guidenco.service && sleep 2 && echo '$PI_PASS' | sudo -S systemctl status guidenco.service --no-pager -l | head -20"
 else
   ssh -o StrictHostKeyChecking=no "$PI_USER@$PI_HOST" \
-    "chmod +x $PI_PATH/setup_hid_gadget.sh && sudo systemctl restart guidenco.service && sleep 2 && sudo systemctl status guidenco.service --no-pager -l | head -20"
+    "chmod +x $PI_PATH/setup_hid_gadget.sh $PI_PATH/cloudflared-setup.sh && sudo systemctl restart guidenco.service && sleep 2 && sudo systemctl status guidenco.service --no-pager -l | head -20"
+fi
+
+if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
+  echo ""
+  echo "Setting up Cloudflare Tunnel..."
+  if [ -n "${PI_PASS:-}" ]; then
+    sshpass -p "$PI_PASS" ssh -o StrictHostKeyChecking=no "$PI_USER@$PI_HOST" \
+      "CLOUDFLARE_TUNNEL_TOKEN='$CLOUDFLARE_TUNNEL_TOKEN' bash $PI_PATH/cloudflared-setup.sh"
+  else
+    ssh -o StrictHostKeyChecking=no "$PI_USER@$PI_HOST" \
+      "CLOUDFLARE_TUNNEL_TOKEN='$CLOUDFLARE_TUNNEL_TOKEN' bash $PI_PATH/cloudflared-setup.sh"
+  fi
+else
+  echo ""
+  echo "Skipping Cloudflare Tunnel setup (CLOUDFLARE_TUNNEL_TOKEN not set in .env.deploy)."
 fi
 
 echo ""
