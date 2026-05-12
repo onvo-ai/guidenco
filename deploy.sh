@@ -37,7 +37,7 @@ echo ""
 rsync -avz \
   --exclude='__pycache__' --exclude='*.pyc' --exclude='temp/' \
   --exclude='*.bak' --exclude='.DS_Store' --exclude='deploy.sh' \
-  --exclude='.env' --exclude='.env.deploy' \
+  --exclude='.env' --exclude='.env.deploy' --exclude='settings.json' \
   --exclude='node_modules/' --exclude='.git/' \
   --exclude='package-lock.json' --exclude='frontend/src/' \
   --exclude='frontend/node_modules/' --exclude='frontend/.vite/' \
@@ -45,6 +45,24 @@ rsync -avz \
   -e "$SSH_CMD" \
   "$LOCAL_PATH/" \
   "$PI_USER@$PI_HOST:$PI_PATH/"
+
+# Merge settings.json — add any new keys from local without overwriting Pi's existing values
+echo "Merging settings.json (preserving Pi's runtime config)..."
+if [ -n "${PI_PASS:-}" ]; then
+  sshpass -p "$PI_PASS" scp -o StrictHostKeyChecking=no \
+    "$LOCAL_PATH/settings.json" "$PI_USER@$PI_HOST:/tmp/settings_local.json"
+  sshpass -p "$PI_PASS" scp -o StrictHostKeyChecking=no \
+    "$LOCAL_PATH/merge_settings.py" "$PI_USER@$PI_HOST:/tmp/merge_settings.py"
+  sshpass -p "$PI_PASS" ssh -o StrictHostKeyChecking=no "$PI_USER@$PI_HOST" \
+    "python3 /tmp/merge_settings.py /tmp/settings_local.json $PI_PATH/settings.json"
+else
+  scp -o StrictHostKeyChecking=no \
+    "$LOCAL_PATH/settings.json" "$PI_USER@$PI_HOST:/tmp/settings_local.json"
+  scp -o StrictHostKeyChecking=no \
+    "$LOCAL_PATH/merge_settings.py" "$PI_USER@$PI_HOST:/tmp/merge_settings.py"
+  ssh -o StrictHostKeyChecking=no "$PI_USER@$PI_HOST" \
+    "python3 /tmp/merge_settings.py /tmp/settings_local.json $PI_PATH/settings.json"
+fi
 
 echo ""
 echo "Files synced. Fixing permissions and restarting guidenco service..."
