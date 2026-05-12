@@ -1,7 +1,8 @@
 from flask import Response, request, stream_with_context
 
 from .helpers import err, ok, parse_fps, stream_headers
-from .streaming import iter_capture_stream_safe, MULTIPART_BOUNDARY
+from .streaming import iter_capture_stream_safe
+from .helpers import MULTIPART_BOUNDARY
 from tools.capture_card_manager import get_manager
 
 
