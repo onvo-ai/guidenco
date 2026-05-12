@@ -8,7 +8,7 @@
 set -euo pipefail
 
 PI_USER="${PI_USER:-ronnel}"
-PI_HOST="${PI_HOST:-ronnel.local}"
+PI_HOST="${PI_HOST:-pi.local}"
 PI_PATH="${PI_PATH:-/home/ronnel/Desktop/guidenco}"
 LOCAL_PATH="$(cd "$(dirname "$0")" && pwd)"
 
