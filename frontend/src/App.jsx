@@ -26,6 +26,7 @@ export default function App() {
   const [items, setItems] = useState([]);
   const [currentGoal, setCurrentGoal] = useState('');
   const [todoItems, setTodoItems] = useState([]);
+  const [queueState, setQueueState] = useState({ current: null, pending: [] });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { settings, updateSettings } = useSettings();
   const shellRef = useRef(null);
@@ -48,7 +49,15 @@ export default function App() {
     setItems((prev) => [...prev, { id: Date.now() + Math.random(), ...item }]);
   }, []);
 
-  const { running, startAgent, stopAgent } = useAgent(addItem);
+  const handleGoalChange = useCallback((goal) => {
+    setCurrentGoal(goal);
+  }, []);
+
+  const handleQueueStateChange = useCallback((state) => {
+    setQueueState({ current: state.current || null, pending: state.pending || [] });
+  }, []);
+
+  const { running, startAgent, stopAgent } = useAgent(addItem, handleGoalChange, handleQueueStateChange);
 
   const { setHoverActive, sendKeyEvent, sendMouseMove, sendMouseDown, sendMouseUp, cancelDrag } =
     useManualInput(mode, imgRef);
@@ -56,8 +65,6 @@ export default function App() {
   async function handleSend() {
     const goal = input.trim();
     if (!goal) return;
-    addItem({ kind: 'clear' });
-    setCurrentGoal(goal);
     await startAgent(goal, { additionalInstructions: settings.additionalInstructions });
     setInput('');
   }
@@ -139,6 +146,7 @@ export default function App() {
             onSend={handleSend}
             onStop={stopAgent}
             running={running}
+            queueState={queueState}
           />
         </FloatingSidebar>
       )}
@@ -301,7 +309,7 @@ function FloatingSidebar({ children }) {
 
 // ── Sidebar content ───────────────────────────────────────────────────────────
 
-function SidebarContent({ currentGoal, todoItems, completed, stepCount, taskStatus, taskResultText, items, input, setInput, onSend, onStop, running }) {
+function SidebarContent({ currentGoal, todoItems, completed, stepCount, taskStatus, taskResultText, items, input, setInput, onSend, onStop, running, queueState }) {
   const initSections = getSaved(SIDEBAR_SECTIONS_KEY, { todo: true, steps: true });
   const [todoOpen, setTodoOpen] = useState(initSections.todo ?? true);
   const [stepsOpen, setStepsOpen] = useState(initSections.steps ?? true);
@@ -351,6 +359,24 @@ function SidebarContent({ currentGoal, todoItems, completed, stepCount, taskStat
             </div>
           )}
         </div>
+
+        {/* Queue — only shown when there are pending jobs */}
+        {queueState?.pending?.length > 0 && (
+          <div style={sectionStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={labelStyle}>Queue</span>
+              <span style={countStyle}>{queueState.pending.length} pending</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {queueState.pending.map((job, i) => (
+                <div key={job.id} style={queueItemStyle}>
+                  <span style={queueIndexStyle}>{i + 1}</span>
+                  <span style={queueGoalStyle}>{job.goal}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Todo */}
         <div style={sectionStyle}>
@@ -499,4 +525,33 @@ const todoDoneStyle = {
   ...todoTextStyle,
   color: 'rgba(255,255,255,0.28)',
   textDecoration: 'line-through',
+};
+
+const queueItemStyle = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 7,
+};
+
+const queueIndexStyle = {
+  flexShrink: 0,
+  width: 16,
+  height: 16,
+  borderRadius: '50%',
+  background: 'rgba(255,255,255,0.08)',
+  border: '1px solid rgba(255,255,255,0.14)',
+  fontSize: 9,
+  fontWeight: 700,
+  color: 'rgba(255,255,255,0.4)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginTop: 2,
+};
+
+const queueGoalStyle = {
+  fontSize: 12,
+  color: 'rgba(255,255,255,0.5)',
+  lineHeight: 1.4,
+  wordBreak: 'break-word',
 };
