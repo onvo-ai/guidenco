@@ -17,5 +17,8 @@
   },
   "instructions": {
     "additionalInstructions": ""
+  },
+  "agent": {
+    "timeout_seconds": 180
   }
 }

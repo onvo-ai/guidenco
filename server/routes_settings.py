@@ -21,6 +21,7 @@ DEFAULTS = {
         "api_key": "",
     },
     "instructions": {"additionalInstructions": ""},
+    "agent": {"timeout_seconds": 180},
 }
 
 PROVIDER_URLS = {

@@ -1,4 +1,5 @@
 import json
+import os
 import time
 
 from tools.get_screenshot_capture_card import get_screenshot_capture_card
@@ -12,6 +13,16 @@ from .prompts import build_system_prompt
 from .vlm import vlm_step, screenshot_to_b64, cleanup_temp, _emit_viz
 
 MAX_STEPS = 100
+
+_SETTINGS_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json")
+
+
+def _get_timeout():
+    try:
+        with open(_SETTINGS_PATH) as f:
+            return int(json.load(f).get("agent", {}).get("timeout_seconds", 180))
+    except Exception:
+        return 180
 
 
 def _cancelled(cancel_event):
@@ -39,10 +50,17 @@ def run(goal, cancel_event=None, instructions=""):
     prev_signatures = []
     loop_warning = None
     todo_items = []
+    timeout_seconds = _get_timeout()
+    start_time = time.time()
 
     for step in range(1, MAX_STEPS + 1):
         if _cancelled(cancel_event):
             print("\nCANCELLED: Stop requested.")
+            return
+        elapsed = time.time() - start_time
+        if elapsed > timeout_seconds:
+            print(f"\nTIMEOUT: Agent exceeded {timeout_seconds}s limit.")
+            _emit_viz("task_result", result=f"Timed out after {timeout_seconds}s", success=False)
             return
         screenshot_path = get_screenshot_capture_card()
         if not screenshot_path:
