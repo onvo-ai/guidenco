@@ -135,6 +135,5 @@ UDC=$(ls /sys/class/udc | head -1)
 echo "$UDC" > "$GADGET/UDC"
 echo "HID gadget bound to $UDC (kbd=hidg0, mouse=hidg1)"
 
-# Allow the guidenco service user (non-root) to rebind the UDC at runtime
-# so it can re-enumerate the gadget to wake a sleeping host.
-chmod 666 "$GADGET/UDC" 2>/dev/null || true
+# Allow the guidenco service user (non-root) to write HID reports and rebind UDC.
+chmod 666 /dev/hidg0 /dev/hidg1 "$GADGET/UDC" 2>/dev/null || true
