@@ -26,15 +26,23 @@ Good sub-task examples for "search Google for Apple stock price":
 2. Navigate to google.com
 3. Search for "Apple stock price AAPL"
 
-### 3. Execute each sub-task in sequence
+### 3. Enqueue all sub-tasks at once
 
-For each sub-task, run this and **wait for it to finish** before starting the next:
+Post each sub-task to the queue in order. The server runs them sequentially — no need to wait between calls:
 
 ```bash
-curl -sN "https://bot.ronnel.cloud/api/agent/action?q=<TASK_DESCRIPTION>"
+curl -s -X POST "https://bot.ronnel.cloud/api/agent/queue" -d "q=<TASK_1_DESCRIPTION>"
+curl -s -X POST "https://bot.ronnel.cloud/api/agent/queue" -d "q=<TASK_2_DESCRIPTION>"
+# ... repeat for each sub-task
 ```
 
-The command streams SSE and exits when the agent completes the task. Do not start the next task until the current curl exits.
+Each call returns immediately with a `job_id`. The agent processes them in the order they were posted.
+
+Then wait for the queue to drain:
+
+```bash
+until curl -s "https://bot.ronnel.cloud/api/agent/queue" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d['current'] is None and not d['pending'] else 1)"; do sleep 5; done
+```
 
 ### 4. Verify with a screenshot
 
@@ -61,6 +69,6 @@ Summarize what was accomplished and show the final screenshot to the user.
 ## Hard Rules
 
 - **NEVER** call `/api/mouse/click`, `/api/keyboard/type`, `/api/keyboard/key`, `/api/mouse/move`, or any other low-level endpoint directly
-- **ALL** execution goes through `/api/agent/action`
+- **ALL** execution goes through `POST /api/agent/queue` — enqueue each sub-task, then wait for the queue to drain
 - **Screenshots only** via `/api/display/screenshot`
 - **Max 5 sub-tasks** per execution loop
