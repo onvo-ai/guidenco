@@ -5,15 +5,12 @@ from .streaming import (
     run_agent_stream,
     request_agent_cancel,
     subscribe_global_stream,
-    start_processor,
     enqueue,
     get_queue_state,
 )
 
 
 def register_routes(app, agent_run):
-    # Start the background job processor on first registration
-    start_processor(agent_run)
 
     @app.route("/agent/action")
     def action():

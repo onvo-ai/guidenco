@@ -9,6 +9,7 @@ sys.path.insert(0, ROOT)
 from server.app import app
 from tools.send_keyboard_events_usb import cleanup as usb_cleanup
 from tools.capture_card_manager import get_manager as _get_capture_manager
+from agent import run as _agent_run
 
 
 def main():
@@ -27,7 +28,10 @@ def main():
             mgr = _get_capture_manager()
             mgr._running = False
             mgr.start()
-            print(f"[worker] Capture manager started in worker {worker.pid}", flush=True)
+            # Start the job processor thread in the worker (threads don't survive fork)
+            from server.streaming import start_processor_in_worker
+            start_processor_in_worker(_agent_run)
+            print(f"[worker] Capture manager and job processor started in worker {worker.pid}", flush=True)
 
         class _App(gunicorn.app.base.BaseApplication):
             def __init__(self, application, options=None):
@@ -44,7 +48,7 @@ def main():
             "bind": f"{args.host}:{args.port}",
             "workers": 1,
             "worker_class": "gthread",
-            "threads": 4,
+            "threads": 20,
             "timeout": 300,
             "keepalive": 5,
             "loglevel": "info",

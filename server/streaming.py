@@ -236,6 +236,16 @@ def start_processor(agent_run):
     t.start()
 
 
+def start_processor_in_worker(agent_run):
+    """Called in the post_fork hook so the processor runs in the worker process.
+    Threads do not survive fork, so we must (re)start here unconditionally."""
+    global _agent_run_fn, _processor_started
+    _agent_run_fn = agent_run
+    _processor_started = True
+    t = threading.Thread(target=_processor, daemon=True, name="guidenco-queue-processor")
+    t.start()
+
+
 # ── SSE streaming generators ──────────────────────────────────────────────────
 
 def subscribe_global_stream():
@@ -259,7 +269,6 @@ def subscribe_global_stream():
 def run_agent_stream(goal, agent_run, instructions=""):
     """Backward-compatible generator for /api/agent/action.
     Enqueues the job and streams global events until that specific job is done."""
-    start_processor(agent_run)
     job_id = enqueue(goal, instructions)
 
     q = _subscribe_global()
