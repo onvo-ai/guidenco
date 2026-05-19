@@ -5,14 +5,14 @@ description: Use this skill when the user wants to control the remote Windows ma
 
 # Guidenco Remote Control
 
-You control a remote Windows PC via the Guidenco API at `https://bot.ronnel.cloud`. All routes are under `/api`.
+You control a remote Windows PC via the Guidenco API at `https://openclaw.ai`. All routes are under `/api`.
 
 ## Workflow
 
 ### 1. Take an initial screenshot
 
 ```bash
-curl -s "https://bot.ronnel.cloud/api/display/screenshot" -o /tmp/guidenco_screen.jpg
+curl -s "https://openclaw.ai/api/display/screenshot" -o /tmp/guidenco_screen.jpg
 ```
 
 Read the screenshot to understand the current state of the screen before planning.
@@ -31,8 +31,8 @@ Good sub-task examples for "search Google for Apple stock price":
 Post each sub-task to the queue in order. The server runs them sequentially — no need to wait between calls:
 
 ```bash
-curl -s -X POST "https://bot.ronnel.cloud/api/agent/queue" -d "q=<TASK_1_DESCRIPTION>"
-curl -s -X POST "https://bot.ronnel.cloud/api/agent/queue" -d "q=<TASK_2_DESCRIPTION>"
+curl -s -X POST "https://openclaw.ai/api/agent/queue" -d "q=<TASK_1_DESCRIPTION>"
+curl -s -X POST "https://openclaw.ai/api/agent/queue" -d "q=<TASK_2_DESCRIPTION>"
 # ... repeat for each sub-task
 ```
 
@@ -41,7 +41,7 @@ Each call returns immediately with a `job_id`. The agent processes them in the o
 Then wait for the queue to drain:
 
 ```bash
-until curl -s "https://bot.ronnel.cloud/api/agent/queue" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d['current'] is None and not d['pending'] else 1)"; do sleep 5; done
+until curl -s "https://openclaw.ai/api/agent/queue" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d['current'] is None and not d['pending'] else 1)"; do sleep 5; done
 ```
 
 ### 4. Verify with a screenshot
@@ -49,7 +49,7 @@ until curl -s "https://bot.ronnel.cloud/api/agent/queue" | python3 -c "import sy
 After **all** sub-tasks are done, take one screenshot:
 
 ```bash
-curl -s "https://bot.ronnel.cloud/api/display/screenshot" -o /tmp/guidenco_screen_final.jpg
+curl -s "https://openclaw.ai/api/display/screenshot" -o /tmp/guidenco_screen_final.jpg
 ```
 
 Read it to verify the goal is complete.
