@@ -17,7 +17,9 @@ Guidenco captures screenshots of a remote machine (via HDMI capture card), sends
 - **AI/LLM Engine**: OpenAI-compatible client → Qwen3-VL via Ollama cloud
 - **Hardware Interfaces**:
   - V4L2 + ffmpeg (HDMI capture card on `/dev/video0`)
-  - USB HID gadget (`/dev/hidg0`) — keyboard (Report ID 1, 9 bytes) + absolute mouse (Report ID 2, 7 bytes, no wheel)
+  - USB HID gadgets:
+    - `/dev/hidg0` (boot keyboard interface)
+    - `/dev/hidg1` (absolute mouse interface)
 
 ---
 
@@ -26,59 +28,70 @@ Guidenco captures screenshots of a remote machine (via HDMI capture card), sends
 ```
 guidenco/
 ├── server.py               # Entry point — starts Gunicorn server
-├── config.py               # Screen resolution, coordinate space, device paths
-├── utils.py                # Shared helpers (scale, coord_to_abs)
+├── config.py               # Native/scaled resolution, coord space, video device path
+├── utils.py                # Coordinate helpers (scale, coord_to_abs)
+├── settings_store.py       # Single reader/writer for settings.json (schema + provider URLs)
+├── settings.json           # Runtime config (LLM, network, agent timeout) — editable via UI
+├── merge_settings.py       # Deploy helper — merges new setting keys without clobbering Pi values
 ├── deploy.sh               # Rsync deploy script to Pi
 ├── setup_hid_gadget.sh     # USB HID gadget setup (runs as ExecStartPre)
+├── cloudflared-setup.sh    # Optional Cloudflare Tunnel installer
 ├── requirements.txt        # Python pip dependencies
 ├── guidenco.service        # systemd unit file
 │
 ├── ansible/                # One-time Pi provisioning
 │   ├── provision.yml       # Ansible playbook
-│   ├── inventory.yml        # Host config
-│   └── ansible.cfg          # Ansible settings
+│   ├── inventory.yml       # Host config
+│   └── ansible.cfg         # Ansible settings
 │
 ├── server/                 # Flask server package
 │   ├── __init__.py
-│   ├── app.py              # Flask app creation + route registration
-│   ├── helpers.py          # Response helpers, temp file serving, multipart
-│   ├── streaming.py        # SSE agent streaming, MJPEG capture streaming
+│   ├── app.py              # Flask app creation + blueprint registration
+│   ├── api.py              # /api blueprint — wires up all route modules
+│   ├── helpers.py          # Response helpers, temp dir, SSE/multipart framing
+│   ├── streaming.py        # Job queue, global SSE broadcast, MJPEG capture streaming
 │   ├── routes_capture.py   # /display/screenshot, /display/stream
-│   ├── routes_action.py    # /agent/action, /agent/stop, /settings/network
-│   ├── routes_test.py      # /keyboard/key, /keyboard/type, /mouse/* (manual HID endpoints)
-│   └── routes_static.py    # Static serving, /status, debug temp files
+│   ├── routes_action.py    # /agent/action, /agent/stream, /agent/queue, /agent/stop
+│   ├── routes_settings.py  # /settings, /settings/network, /settings/wifi-networks, /settings/models
+│   ├── routes_test.py      # /keyboard/*, /mouse/* (manual HID endpoints)
+│   └── routes_static.py    # Static serving, /status, /api/temp/<file>
 │
 ├── agent/                  # VLM agent package
 │   ├── __init__.py
-│   ├── __main__.py          # CLI entry (`python3 -m agent "goal"`)
+│   ├── __main__.py         # CLI entry (`python3 -m agent "goal"`)
 │   ├── prompts.py          # System prompt + tool definitions
 │   ├── actions.py          # Action normalization, describe, signature, coord math
-│   ├── vlm.py              # VLM API calls, screenshot helpers, viz emission
+│   ├── vlm.py              # VLM API calls, screenshot helpers, viz emission, web search
 │   └── loop.py             # Main agent loop (screenshot → VLM → execute → repeat)
 │
 ├── tools/                  # Hardware interaction layer
 │   ├── __init__.py
-│   ├── capture_card_manager.py   # Persistent ffmpeg process, frame pub/sub
-│   ├── get_screenshot_capture_card.py  # Single-frame capture (uses manager or fallback)
-│   └── send_keyboard_events_usb.py     # USB HID keyboard + mouse event sender
+│   ├── hid_maps.py                    # HID codes and keyboard layouts mapping configurations
+│   ├── capture_card_manager.py        # Persistent ffmpeg process, frame pub/sub
+│   ├── get_screenshot_capture_card.py # Single-frame capture (uses manager or fallback)
+│   └── send_keyboard_events_usb.py    # USB HID keyboard + mouse event sender
+│
+├── docs/                   # Design specs
 │
 └── frontend/               # React web UI
     ├── src/
     │   ├── main.jsx
-    │   ├── App.jsx               # Main layout: toolbar + viewer + chat sidebar
+    │   ├── App.jsx               # Main layout: viewer + floating sidebar
     │   ├── index.css
-    │   ├── lib/constants.js       # API_BASE
+    │   ├── lib/constants.js      # API_BASE
     │   ├── hooks/
-    │   │   ├── useAgent.js         # SSE connection to agent
+    │   │   ├── useAgent.js         # Global agent SSE stream + job submission
     │   │   ├── useManualInput.js   # Manual HID forwarding (mouse/keyboard)
-    │   │   └── useScreenshot.js    # Polling screenshot viewer
+    │   │   ├── useScreenshot.js    # MJPEG viewer + FPS measurement
+    │   │   └── useSettings.js      # Local settings persistence
     │   └── components/
     │       ├── Viewer.jsx          # Live display viewer
     │       ├── ChatFeed.jsx        # Agent reasoning feed
     │       ├── ChatInput.jsx       # Goal input + stop button
+    │       ├── SettingsModal.jsx   # Settings panel
     │       ├── Toolbar.jsx         # Mode toggle, snapshot, FPS display
     │       └── ToolBubble.jsx      # Tool call visualization
-    ├── dist/                # Built output (served by Flask)
+    ├── dist/               # Built output (served by Flask)
     └── package.json
 ```
 
@@ -92,14 +105,21 @@ guidenco/
 | GET | `/status` | Server health + HID + capture card status |
 | GET | `/api/display/screenshot` | JPEG from capture card (instant, no warmup) |
 | GET | `/api/display/stream` | MJPEG stream from capture card |
-| GET | `/api/agent/action?q=<goal>` | VLM agent controlling the remote machine (SSE) |
+| GET | `/api/agent/action?q=<goal>` | Enqueue a goal and stream its events until done (SSE) |
+| GET | `/api/agent/stream` | Always-on global SSE stream of all agent events |
+| POST | `/api/agent/queue?q=<goal>` | Enqueue a goal; returns `job_id` immediately |
+| GET | `/api/agent/queue` | Current queue state (running + pending jobs) |
 | POST/GET | `/api/agent/stop` | Cancel the running agent |
-| GET | `/api/keyboard/key?k=cmd+space` | Press key/combo via USB HID |
+| GET | `/api/keyboard/key?k=ctrl+c` | Press key/combo via USB HID |
 | GET | `/api/keyboard/type?text=hello` | Type text via USB HID |
 | GET | `/api/mouse/move?x=500&y=500` | Move mouse (1–1000 coord space) |
 | GET | `/api/mouse/click?b=left` | Click (left / right / double) |
-| GET | `/api/mouse/scroll?n=3` | Scroll via PageUp/PageDown keys (positive = down) |
 | GET | `/api/mouse/drag?x1=100&y1=200&x2=800&y2=200` | Click-drag |
+| GET/POST | `/api/settings` | Read / update runtime settings (LLM, network, agent) |
+| GET | `/api/settings/network` | Configured or live Wi-Fi SSID |
+| GET | `/api/settings/wifi-networks` | Scan available Wi-Fi networks |
+| GET | `/api/settings/models` | List models from the configured LLM provider |
+| GET | `/api/temp/<file>` | Serve a temp file (visualization images / thumbnails) |
 
 ---
 
@@ -221,25 +241,31 @@ Use `sudo -E` to preserve `OLLAMA_API_KEY`. For the systemd unit, add:
 Environment=OLLAMA_API_KEY=your-key-here
 ```
 
+> **Note:** LLM provider, model, API key, agent timeout, and network settings are
+> primarily configured at runtime via `settings.json` (editable from the Settings
+> panel in the web UI). The `OLLAMA_API_KEY` / `GUIDENCO_MODEL` environment
+> variables are only used as a fallback when the matching `settings.json` field is
+> empty.
+
 ---
 
 ## USB HID Design
 
-The Pi emulates a single USB HID device with two report types:
+The Pi emulates two independent USB HID gadget interfaces:
 
-- **Report ID 1 — Keyboard** (9 bytes): modifier byte + 6-key rollover
-- **Report ID 2 — Absolute Mouse** (7 bytes): 3 button bits + 5 padding bits + 16-bit X + 16-bit Y + 8-bit padding
+- **`/dev/hidg0` — Keyboard** (8 bytes): Boot keyboard layout with modifier byte + 6-key rollover.
+- **`/dev/hidg1` — Absolute Mouse** (5 bytes): 3 button bits + 16-bit X (0–32767) + 16-bit Y (0–32767).
 
-The mouse report intentionally has **no wheel field**. Scrolling is done by sending PageUp/PageDown key presses (Report ID 1). This avoids a Windows HID driver bug where absolute mouse position changes were sometimes misinterpreted as scroll events.
+The mouse report layout matches a standard absolute pointer report and has no wheel field. Scrolling is emulated by sending PageUp/PageDown key presses on the keyboard interface. This design prevents compatibility issues where absolute cursor placement conflicts with scroll input.
 
-The HID gadget is configured by `setup_hid_gadget.sh`, which runs automatically as `ExecStartPre` in the systemd service. It always force-recreates the gadget on boot so descriptor changes take effect without manual intervention.
+The HID gadget configuration is handled by `setup_hid_gadget.sh` on the Pi, running as a systemd `ExecStartPre` script. It always force-recreates the gadget on boot so descriptor changes take effect without manual intervention.
 
 ---
 
 ## Development Notes
 
 - The frontend is a React app built with Vite, served as static files from `frontend/dist/` by Flask
-- The agent emits `__GUIDENCO_VIZ__` JSON events via stdout, captured by the server and streamed as SSE
+- The agent logs structured events using Python's logging library; visualizations are prefixed with `__GUIDENCO_VIZ__` and captured via a thread-safe SSEHandler filter on the worker thread
 - Coordinate space: X and Y are 1–1000, mapped directly to HID absolute values (0–32767) without any pixel intermediate
 - The capture card manager runs a persistent ffmpeg process, publishing frames to subscriber queues
 - The `_unpack_xy()` and `_unpack_amount()` helpers in `agent/actions.py` handle VLM quirks where coordinates may be returned as arrays
