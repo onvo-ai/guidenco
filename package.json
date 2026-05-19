@@ -1,0 +1,7 @@
+{
+  "name": "guidenco",
+  "private": true,
+  "workspaces": [
+    "web"
+  ]
+}
