@@ -9,15 +9,17 @@ When called standalone it starts its own manager instance and waits
 for the first frame (up to 15 s warmup, then falls back to direct ffmpeg).
 """
 
+import logging
 import os
 import subprocess
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import NATIVE_W, NATIVE_H, VIDEO_DEV
+from config import NATIVE_W, NATIVE_H, VIDEO_DEV, TEMP_DIR
 
-TEMP_DIR        = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+logger = logging.getLogger("guidenco")
+
 SCREENSHOT_PATH = os.path.join(TEMP_DIR, "screenshot_capture_card.jpg")
 
 
@@ -72,7 +74,7 @@ def get_screenshot_capture_card() -> str | None:
                 f.write(frame)
             return SCREENSHOT_PATH
     except Exception as exc:
-        print(f"[capture_card] fallback failed: {exc}")
+        logger.error(f"[capture_card] fallback failed: {exc}")
         return None
 
 

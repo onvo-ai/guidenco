@@ -1,4 +1,8 @@
+import logging
+
 from utils import scale
+
+logger = logging.getLogger("guidenco")
 
 CLICK_TYPES = {"left_click", "right_click", "double_click"}
 VIZ_PREFIX = "__GUIDENCO_VIZ__"
@@ -156,7 +160,7 @@ def normalize_actions(actions):
             a["x2"] = scale(_int(a.get("x2"), 500))
             a["y2"] = scale(_int(a.get("y2"), 500))
             if a["x1"] == 0 or a["y1"] == 0 or a["x2"] == 0 or a["y2"] == 0:
-                print(f"[agent] Dropping drag with zero coord: {a}")
+                logger.warning(f"[agent] Dropping drag with zero coord: {a}")
                 continue
             fixed.append(a)
         elif atype in ("hover", "scroll") or atype in CLICK_TYPES:
@@ -164,7 +168,7 @@ def normalize_actions(actions):
             if result:
                 fixed.append(result)
             else:
-                print(f"[agent] Dropping {atype} with zero coord: {a}")
+                logger.warning(f"[agent] Dropping {atype} with zero coord: {a}")
         else:
             fixed.append(a)
     return fixed
@@ -199,3 +203,29 @@ def action_signature(actions):
         elif t == "scroll":           parts.append(f"scroll({a.get('amount',0)})")
         elif t == "wait":             parts.append(f"wait({a.get('seconds',2)})")
     return "|".join(parts)
+
+
+ACTION_DELAYS = {
+    "double_click": 2.0,
+    "right_click": 0.8,
+    "left_click": 0.8,
+    "drag": 1.0,
+    "type": 0.3,
+    "key_special": 2.5,  # navigation/F5/return/enter/backspace/etc.
+    "key_default": 0.3,
+    "default": 0.2
+}
+
+
+def get_action_delay(action_type, key_name=None):
+    """Determine pacing delay in seconds after executing a particular action."""
+    if action_type in ("left_click", "right_click", "double_click", "drag", "type"):
+        return ACTION_DELAYS.get(action_type, 0.2)
+
+    if action_type == "key" and key_name:
+        k = key_name.lower()
+        if any(nav in k for nav in ("return", "enter", "f5", "alt+left", "alt+right", "backspace")):
+            return ACTION_DELAYS["key_special"]
+        return ACTION_DELAYS["key_default"]
+
+    return ACTION_DELAYS.get(action_type, ACTION_DELAYS["default"])

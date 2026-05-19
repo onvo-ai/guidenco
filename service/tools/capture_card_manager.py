@@ -6,6 +6,7 @@ ffmpeg scales input by SCALE_RATIO (see config.py).
 _latest is always a fresh JPEG ready to serve immediately.
 """
 
+import logging
 import os
 import queue
 import subprocess
@@ -15,6 +16,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import SCALED_W, SCALED_H, NATIVE_W, NATIVE_H, VIDEO_DEV
+
+logger = logging.getLogger("guidenco")
 
 INPUT_RES  = f"{NATIVE_W}x{NATIVE_H}"
 OUTPUT_RES = f"{SCALED_W}x{SCALED_H}"
@@ -42,8 +45,7 @@ class CaptureCardManager:
             target=self._loop, daemon=True, name="capture-card"
         )
         self._thread.start()
-        print(f"[capture] started — {VIDEO_DEV} {INPUT_RES}→{OUTPUT_RES} @{FPS}fps",
-              flush=True)
+        logger.info(f"[capture] started — {VIDEO_DEV} {INPUT_RES}→{OUTPUT_RES} @{FPS}fps")
 
     def stop(self):
         self._running = False
@@ -106,7 +108,7 @@ class CaptureCardManager:
             try:
                 self._run_ffmpeg()
             except Exception as exc:
-                print(f"[capture] error: {exc}", flush=True)
+                logger.error(f"[capture] error: {exc}")
             if self._running:
                 time.sleep(2)
 

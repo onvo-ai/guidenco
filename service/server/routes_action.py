@@ -1,6 +1,6 @@
 from flask import Response, request, stream_with_context
 
-from .helpers import err, ok, stream_headers
+from .helpers import err, ok
 from .streaming import (
     run_agent_stream,
     request_agent_cancel,

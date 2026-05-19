@@ -32,10 +32,15 @@ def register_routes(app):
             "note": "persistent ffmpeg; frame always ready",
         }
         hid = {
-            "kb_mouse": {
+            "keyboard": {
                 "device": "/dev/hidg0",
                 "available": _os.path.exists("/dev/hidg0"),
-                "note": "single device, Report ID 1=keyboard ID 2=mouse",
+                "note": "boot keyboard interface",
+            },
+            "mouse": {
+                "device": "/dev/hidg1",
+                "available": _os.path.exists("/dev/hidg1"),
+                "note": "absolute mouse interface",
             }
         }
         return ok(hid=hid, capture=capture_status, temp_dir=TEMP_DIR)

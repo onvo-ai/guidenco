@@ -3,7 +3,8 @@ import os
 
 from flask import jsonify
 
-TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+from config import TEMP_DIR
+
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 def ok(data=None, **kw):
@@ -34,11 +35,4 @@ def multipart_chunk(frame, mimetype):
         f"Content-Type: {mimetype}\r\n"
         f"Content-Length: {len(frame)}\r\n\r\n"
     ).encode("ascii") + frame + b"\r\n"
-
-def parse_fps(value, default, minimum=1, maximum=30):
-    try:
-        fps = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(minimum, min(maximum, fps))
 

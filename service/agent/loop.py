@@ -1,26 +1,26 @@
 import json
-import os
+import logging
 import time
 
 from tools.get_screenshot_capture_card import get_screenshot_capture_card
 from tools.send_keyboard_events_usb import send_keyboard_events as send_usb
 
+from settings_store import load_settings
 from .actions import (
     tool_to_action, normalize_actions, describe_action, action_signature,
-    action_to_usb_actions,
+    action_to_usb_actions, get_action_delay,
 )
 from .prompts import build_system_prompt
 from .vlm import vlm_step, screenshot_to_b64, cleanup_temp, _emit_viz
 
-MAX_STEPS = 100
+logger = logging.getLogger("guidenco")
 
-_SETTINGS_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json")
+MAX_STEPS = 100
 
 
 def _get_timeout():
     try:
-        with open(_SETTINGS_PATH) as f:
-            return int(json.load(f).get("agent", {}).get("timeout_seconds", 180))
+        return int(load_settings().get("agent", {}).get("timeout_seconds", 180))
     except Exception:
         return 180
 
@@ -33,17 +33,17 @@ def _execute_action(action):
     """Execute a raw VLM action (coord-space 1-1000) via send_usb directly."""
     usb_actions = action_to_usb_actions(action)
     if usb_actions is None:
-        print(f"[agent-exec] No mapping for action type '{action.get('type')}': {action}")
+        logger.warning(f"[agent-exec] No mapping for action type '{action.get('type')}': {action}")
         return {"status": "error:unknown_type"}
 
-    print(f"[agent-exec] usb_actions={usb_actions}")
+    logger.info(f"[agent-exec] usb_actions={usb_actions}")
     results = send_usb(usb_actions)
-    print(f"[agent-exec] results={results}")
+    logger.info(f"[agent-exec] results={results}")
     return results
 
 
 def run(goal, cancel_event=None, instructions=""):
-    print(f"Goal: {goal}\n")
+    logger.info(f"Goal: {goal}\n")
     cleanup_temp()
 
     history = []
@@ -55,20 +55,20 @@ def run(goal, cancel_event=None, instructions=""):
 
     for step in range(1, MAX_STEPS + 1):
         if _cancelled(cancel_event):
-            print("\nCANCELLED: Stop requested.")
+            logger.warning("CANCELLED: Stop requested.")
             return
         elapsed = time.time() - start_time
         if elapsed > timeout_seconds:
-            print(f"\nTIMEOUT: Agent exceeded {timeout_seconds}s limit.")
+            logger.error(f"TIMEOUT: Agent exceeded {timeout_seconds}s limit.")
             _emit_viz("task_result", result=f"Timed out after {timeout_seconds}s", success=False)
             return
         screenshot_path = get_screenshot_capture_card()
         if not screenshot_path:
-            print("FAILED: Could not capture screenshot.")
+            logger.error("FAILED: Could not capture screenshot.")
             return
 
         system_prompt = build_system_prompt(instructions=instructions)
-        screenshot_b64, img_h = screenshot_to_b64(screenshot_path)
+        screenshot_b64 = screenshot_to_b64(screenshot_path)
 
         try:
             message, reasoning, todo_items = vlm_step(
@@ -77,7 +77,7 @@ def run(goal, cancel_event=None, instructions=""):
                 loop_warning=loop_warning,
             )
         except Exception as e:
-            print(f"VLM error: {e}")
+            logger.exception(f"VLM error: {e}")
             continue
 
         if reasoning:
@@ -85,7 +85,7 @@ def run(goal, cancel_event=None, instructions=""):
 
         tool_calls = message.tool_calls or []
         if not tool_calls:
-            print("[warning] No tool calls returned, skipping step")
+            logger.warning("No tool calls returned, skipping step")
             continue
 
         done = False
@@ -100,14 +100,14 @@ def run(goal, cancel_event=None, instructions=""):
             try:
                 args = json.loads(tc.function.arguments)
             except json.JSONDecodeError:
-                print(f"[warning] Bad JSON in {name}: {tc.function.arguments}")
+                logger.warning(f"Bad JSON in {name}: {tc.function.arguments}")
                 continue
 
             if name == "task_done":
                 incomplete = [item for item in todo_items if not item.get("done")]
                 if incomplete:
                     incomplete_names = "; ".join(item.get("text", "?") for item in incomplete)
-                    print(f"[agent] task_done rejected — {len(incomplete)} incomplete todo items: {incomplete_names}")
+                    logger.warning(f"task_done rejected — {len(incomplete)} incomplete todo items: {incomplete_names}")
                     _emit_viz("task_result", result=f"Incomplete: {incomplete_names}", success=False)
                     loop_warning = (
                         f"CANNOT FINISH: {len(incomplete)} todo item(s) are still open: {incomplete_names}. "
@@ -137,29 +137,29 @@ def run(goal, cancel_event=None, instructions=""):
             history.append(f"[todo] {summary[:600]}")
 
         if not todo_items and not todo_changed:
-            print("[warning] Initial planning step did not produce a todo list")
+            logger.warning("Initial planning step did not produce a todo list")
 
         if todo_changed and not raw_actions and not done:
-            print("[agent] Planning step completed; advancing to next step")
+            logger.info("Planning step completed; advancing to next step")
             continue
 
         # Cap at 5 actions per step to prevent runaway sequences
         if len(raw_actions) > 5:
-            print(f"[agent] Capping {len(raw_actions)} actions to 5")
+            logger.info(f"Capping {len(raw_actions)} actions to 5")
             raw_actions = raw_actions[:5]
 
         actions = normalize_actions(raw_actions)
 
-        print("[agent] === Raw VLM actions ===")
+        logger.info("=== Raw VLM actions ===")
         for raw_a in raw_actions:
-            print(f"[agent-raw]   {raw_a}")
-        print("[agent] === Normalized actions ===")
+            logger.info(f"  {raw_a}")
+        logger.info("=== Normalized actions ===")
         for norm_a in actions:
-            print(f"[agent-final]  {describe_action(norm_a)}")
+            logger.info(f"  {describe_action(norm_a)}")
 
         action_desc = ", ".join(describe_action(a) for a in actions)
         if action_desc:
-            print(action_desc)
+            logger.info(action_desc)
 
         sig = action_signature(actions)
         loop_warning = None
@@ -180,7 +180,7 @@ def run(goal, cancel_event=None, instructions=""):
                         break
 
         if stuck_single or stuck_seq:
-            print("[agent] Loop detected — auto-sending Escape to reset UI state")
+            logger.warning("Loop detected — auto-sending Escape to reset UI state")
             _execute_action({"type": "key", "key": "escape"})
             time.sleep(1.0)
             stuck_type = raw_actions[0].get("type") if raw_actions else ""
@@ -204,18 +204,18 @@ def run(goal, cancel_event=None, instructions=""):
 
         if done:
             _emit_viz("task_result", result=done_result, success=done_success)
-            print(f"\n{'SUCCESS' if done_success else 'FAILED'}: {done_result}")
+            logger.info(f"{'SUCCESS' if done_success else 'FAILED'}: {done_result}")
             return
 
         if raw_actions:
             if _cancelled(cancel_event):
-                print("\nCANCELLED: Stop requested before executing actions.")
+                logger.warning("CANCELLED: Stop requested before executing actions.")
                 return
             for i, raw_a in enumerate(raw_actions):
                 atype = raw_a.get("type")
                 if atype == "wait":
                     secs = raw_a.get("seconds", 1)
-                    print(f"[agent-exec] wait({secs}s)")
+                    logger.info(f"[agent-exec] wait({secs}s)")
                     time.sleep(secs)
                     history.append(f"wait({secs}s)")
                     continue
@@ -228,35 +228,15 @@ def run(goal, cancel_event=None, instructions=""):
                     history.append(desc)
                 # inter-action delay (skip after last — end-of-step delay handles that)
                 if i < len(raw_actions) - 1:
-                    if atype == "key":
-                        k = raw_a.get("key", "").lower()
-                        time.sleep(2.5 if any(nav in k for nav in ("return", "enter", "f5")) else 0.3)
-                    elif atype == "double_click":
-                        time.sleep(2.0)
-                    elif atype in ("right_click", "left_click"):
-                        time.sleep(0.8)
-                    else:
-                        time.sleep(0.2)
+                    delay = get_action_delay(atype, raw_a.get("key"))
+                    time.sleep(delay)
             last_action = raw_actions[-1] if raw_actions else None
             if last_action:
                 atype = last_action.get("type")
                 if atype == "wait":
                     pass  # wait() already slept
-                elif atype == "double_click":
-                    time.sleep(2.0)
-                elif atype in ("right_click", "left_click"):
-                    time.sleep(0.8)  # menus/dialogs need time to render through capture card
-                elif atype == "drag":
-                    time.sleep(1.0)  # drag animations need to settle before screenshot
-                elif atype == "key":
-                    k = last_action.get("key", "").lower()
-                    if any(nav in k for nav in ("return", "enter", "f5", "alt+left", "alt+right", "backspace")):
-                        time.sleep(2.5)  # page load / navigation
-                    else:
-                        time.sleep(0.3)
-                elif atype == "type":
-                    time.sleep(0.3)
                 else:
-                    time.sleep(0.2)
+                    delay = get_action_delay(atype, last_action.get("key"))
+                    time.sleep(delay)
 
-    print(f"\nFAILED: Reached max steps ({MAX_STEPS}).")
+    logger.error(f"FAILED: Reached max steps ({MAX_STEPS}).")

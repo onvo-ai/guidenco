@@ -1,40 +1,27 @@
 import base64
 import json
+import logging
 import os
-import subprocess as _subp
 import time
 import urllib.error
 import urllib.request
 
 from openai import OpenAI
 
-from config import SCALE_RATIO, COORD_SPACE
+from config import SCALE_RATIO, TEMP_DIR
+from settings_store import load_settings, PROVIDER_URLS
 from .prompts import build_tools
 from .actions import VIZ_PREFIX
 
-TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
-_SETTINGS_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json")
-
-_PROVIDER_DEFAULT_URLS = {
-    "ollama_cloud": "https://ollama.com/v1",
-    "ollama":       "http://localhost:11434/v1",
-    "openai":       "https://api.openai.com/v1",
-    "anthropic":    "https://api.anthropic.com/v1",
-    "openrouter":   "https://openrouter.ai/api/v1",
-}
+logger = logging.getLogger("guidenco")
 
 
 def _load_llm_config():
     """Return (client, model, api_key, web_search_url) from settings.json, falling back to env vars."""
-    llm = {}
-    try:
-        with open(_SETTINGS_PATH) as f:
-            llm = json.load(f).get("llm", {})
-    except Exception:
-        pass
+    llm = load_settings().get("llm", {})
 
     provider = llm.get("provider", "ollama_cloud")
-    url      = llm.get("url", "") or _PROVIDER_DEFAULT_URLS.get(provider, "https://ollama.com/v1")
+    url      = llm.get("url", "") or PROVIDER_URLS.get(provider, "https://ollama.com/v1")
     model    = llm.get("model", "") or os.environ.get("GUIDENCO_MODEL", "qwen3-vl:235b-instruct-cloud")
     api_key  = llm.get("api_key", "") or os.environ.get("OLLAMA_API_KEY", "") or "missing"
 
@@ -48,7 +35,7 @@ def _load_llm_config():
 def _emit_viz(kind, **data):
     payload = {"kind": kind}
     payload.update(data)
-    print(f"{VIZ_PREFIX}{json.dumps(payload, separators=(',', ':'))}")
+    logger.info(f"{VIZ_PREFIX}{json.dumps(payload, separators=(',', ':'))}")
 
 
 def _save_viz_b64_image(b64_data, filename):
@@ -157,6 +144,56 @@ def _run_web_search(args, api_key, web_search_url):
     return {"results": trimmed}
 
 
+def _handle_web_search(tc, args, api_key, web_search_url):
+    """Run a web_search tool call, emit its viz event, return the tool result message."""
+    try:
+        result = _run_web_search(args, api_key, web_search_url)
+    except urllib.error.HTTPError as e:
+        result = {"results": [], "error": f"HTTP {e.code}"}
+    except Exception as e:
+        result = {"results": [], "error": str(e)}
+    _emit_viz(
+        "web_search_results",
+        stage="main",
+        query=args.get("query", ""),
+        max_results=args.get("max_results", 5),
+        results=result.get("results", []),
+        error=result.get("error"),
+    )
+    return _tool_message(tc.id, tc.function.name, json.dumps(result))
+
+
+def _handle_add_todo(tc, args, todo_items):
+    """Append a todo item, return the tool result message."""
+    text = str(args.get("text", "")).strip()
+    if text:
+        todo_items.append({"text": text[:200], "done": False})
+    return _tool_message(tc.id, tc.function.name, json.dumps({"status": "ok", "added": text}))
+
+
+def _handle_complete_todo(tc, args, todo_items):
+    """Mark a todo item done by exact-then-substring text match, return the tool result message."""
+    text = str(args.get("text", "")).strip()
+    match = None
+    for item in todo_items:
+        if not item.get("done") and item.get("text", "").strip().lower() == text.lower():
+            match = item
+            break
+    if not match:
+        for item in todo_items:
+            if not item.get("done") and text.lower() in item.get("text", "").lower():
+                match = item
+                break
+    if match:
+        match["done"] = True
+        return _tool_message(tc.id, tc.function.name, json.dumps({"status": "ok", "completed": match["text"]}))
+    open_items = [i.get("text", "") for i in todo_items if not i.get("done")]
+    return _tool_message(
+        tc.id, tc.function.name,
+        json.dumps({"status": "error", "message": f"No open todo item matching '{text}'. Open items: {open_items}"}),
+    )
+
+
 def vlm_step(goal, screenshot_b64, history, system_prompt, todo_items=None, loop_warning=None):
     client, MODEL, api_key, web_search_url = _load_llm_config()
     if todo_items is None:
@@ -239,7 +276,6 @@ def vlm_step(goal, screenshot_b64, history, system_prompt, todo_items=None, loop
                 has_todo_call = False
                 has_non_todo_call = False
                 has_task_done = False
-                has_web_search = False
                 tool_results = []
                 todo_snapshot_before = [(i.get("text"), i.get("done")) for i in todo_items]
 
@@ -248,58 +284,26 @@ def vlm_step(goal, screenshot_b64, history, system_prompt, todo_items=None, loop
                         args = json.loads(tc.function.arguments)
                     except Exception:
                         args = tc.function.arguments
+                    args_dict = args if isinstance(args, dict) else {}
+                    name = tc.function.name
 
-                    tool_calls.append({"name": tc.function.name, "arguments": args})
+                    tool_calls.append({"name": name, "arguments": args})
 
-                    if tc.function.name in ("add_todo_item", "complete_todo_item"):
+                    if name in ("add_todo_item", "complete_todo_item"):
                         has_todo_call = True
                     else:
                         has_non_todo_call = True
 
-                    if tc.function.name == "web_search":
-                        has_web_search = True
-                        try:
-                            result = _run_web_search(args if isinstance(args, dict) else {}, api_key, web_search_url)
-                        except urllib.error.HTTPError as e:
-                            result = {"results": [], "error": f"HTTP {e.code}"}
-                        except Exception as e:
-                            result = {"results": [], "error": str(e)}
-                        _emit_viz(
-                            "web_search_results",
-                            stage="main",
-                            query=(args.get("query", "") if isinstance(args, dict) else ""),
-                            max_results=(args.get("max_results", 5) if isinstance(args, dict) else 5),
-                            results=result.get("results", []),
-                            error=result.get("error"),
-                        )
-                        tool_results.append(_tool_message(tc.id, tc.function.name, json.dumps(result)))
-                    elif tc.function.name == "add_todo_item":
-                        text = str(args.get("text", "")).strip() if isinstance(args, dict) else ""
-                        if text:
-                            todo_items.append({"text": text[:200], "done": False})
-                        tool_results.append(_tool_message(tc.id, tc.function.name, json.dumps({"status": "ok", "added": text})))
-                    elif tc.function.name == "complete_todo_item":
-                        text = str(args.get("text", "")).strip() if isinstance(args, dict) else ""
-                        match = None
-                        for item in todo_items:
-                            if not item.get("done") and item.get("text", "").strip().lower() == text.lower():
-                                match = item
-                                break
-                        if not match:
-                            for item in todo_items:
-                                if not item.get("done") and text.lower() in item.get("text", "").lower():
-                                    match = item
-                                    break
-                        if match:
-                            match["done"] = True
-                            tool_results.append(_tool_message(tc.id, tc.function.name, json.dumps({"status": "ok", "completed": match["text"]})))
-                        else:
-                            open_items = [i.get("text", "") for i in todo_items if not i.get("done")]
-                            tool_results.append(_tool_message(tc.id, tc.function.name, json.dumps({"status": "error", "message": f"No open todo item matching '{text}'. Open items: {open_items}"})))
-                    elif tc.function.name == "task_done":
+                    if name == "web_search":
+                        tool_results.append(_handle_web_search(tc, args_dict, api_key, web_search_url))
+                    elif name == "add_todo_item":
+                        tool_results.append(_handle_add_todo(tc, args_dict, todo_items))
+                    elif name == "complete_todo_item":
+                        tool_results.append(_handle_complete_todo(tc, args_dict, todo_items))
+                    elif name == "task_done":
                         has_task_done = True
                         task_done_seen = True
-                        tool_results.append(_tool_message(tc.id, tc.function.name, json.dumps({"status": "ok"})))
+                        tool_results.append(_tool_message(tc.id, name, json.dumps({"status": "ok"})))
 
                 if tool_calls:
                     _emit_viz("tool_calls", stage="main", tool_calls=tool_calls)
@@ -319,13 +323,13 @@ def vlm_step(goal, screenshot_b64, history, system_prompt, todo_items=None, loop
 
                 if not (todo_items or []):
                     if not has_todo_call:
-                        print(f"[vlm_step] invalid response (attempt {attempt + 1}): missing initial todo list")
+                        logger.warning(f"[vlm_step] invalid response (attempt {attempt + 1}): missing initial todo list")
                         if attempt == 2:
                             raise RuntimeError("Model failed to create the initial todo list")
                         time.sleep(1)
                         break
                     if has_non_todo_call:
-                        print(f"[vlm_step] invalid response (attempt {attempt + 1}): first step was not planning-only")
+                        logger.warning(f"[vlm_step] invalid response (attempt {attempt + 1}): first step was not planning-only")
                         if attempt == 2:
                             raise RuntimeError("Model used non-todo tools during the initial planning step")
                         time.sleep(1)
@@ -333,7 +337,7 @@ def vlm_step(goal, screenshot_b64, history, system_prompt, todo_items=None, loop
                     return message, latest_reasoning, todo_items
 
                 if not has_non_todo_call:
-                    print(f"[vlm_step] invalid response (attempt {attempt + 1}): no non-todo tool call")
+                    logger.warning(f"[vlm_step] invalid response (attempt {attempt + 1}): no non-todo tool call")
                     if attempt == 2:
                         raise RuntimeError("Model returned a step without a non-todo tool call")
                     time.sleep(1)
@@ -346,7 +350,7 @@ def vlm_step(goal, screenshot_b64, history, system_prompt, todo_items=None, loop
 
             continue
         except Exception as e:
-            print(f"[vlm_step] error (attempt {attempt + 1}): {e}")
+            logger.exception(f"[vlm_step] error (attempt {attempt + 1}): {e}")
             if attempt == 2:
                 raise
             time.sleep(3)
@@ -361,16 +365,9 @@ def screenshot_to_b64(path):
             w = max(1, round(img.width * SCALE_RATIO))
             h = max(1, round(img.height * SCALE_RATIO))
             img = img.resize((w, h), Image.LANCZOS)
-        final_w, final_h = img.size
         img.save(jpeg_path, "JPEG", quality=85)
     with open(jpeg_path, "rb") as f:
-        return base64.b64encode(f.read()).decode(), final_h
-
-
-def get_screenshot_size(path):
-    from PIL import Image
-    with Image.open(path) as img:
-        return img.size
+        return base64.b64encode(f.read()).decode()
 
 
 def cleanup_temp():

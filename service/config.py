@@ -1,3 +1,5 @@
+import os
+
 SCALE_RATIO = 1.0
 
 NATIVE_W = 1920
@@ -9,3 +11,8 @@ SCALED_H = int(NATIVE_H * SCALE_RATIO)
 COORD_SPACE = 1000
 
 VIDEO_DEV = "/dev/video0"
+
+# Project paths — single source of truth, shared across server, agent, and tools.
+ROOT = os.path.dirname(os.path.abspath(__file__))
+TEMP_DIR = os.path.join(ROOT, "temp")
+SETTINGS_PATH = os.path.join(ROOT, "settings.json")

@@ -13,6 +13,13 @@ from agent import run as _agent_run
 
 
 def main():
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+
     parser = argparse.ArgumentParser(description="Guidenco REST server")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=5000)

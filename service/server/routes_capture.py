@@ -1,8 +1,7 @@
-from flask import Response, request, stream_with_context
+from flask import Response, stream_with_context
 
-from .helpers import err, ok, parse_fps, stream_headers
+from .helpers import err, stream_headers, MULTIPART_BOUNDARY
 from .streaming import iter_capture_stream_safe
-from .helpers import MULTIPART_BOUNDARY
 from tools.capture_card_manager import get_manager
 
 
@@ -21,9 +20,8 @@ def register_routes(app):
 
     @app.route("/display/stream")
     def stream():
-        fps = parse_fps(request.args.get("fps"), 15)
         return Response(
-            stream_with_context(iter_capture_stream_safe(fps)),
+            stream_with_context(iter_capture_stream_safe()),
             mimetype=f"multipart/x-mixed-replace; boundary={MULTIPART_BOUNDARY}",
             headers=stream_headers(),
         )
