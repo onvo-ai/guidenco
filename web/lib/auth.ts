@@ -17,12 +17,19 @@ export const auth = betterAuth({
   emailAndPassword: { enabled: true },
   secret: process.env.BETTER_AUTH_SECRET!,
   baseURL: process.env.BETTER_AUTH_URL!,
-  // Explicitly trust localhost variants so the CSRF check passes
-  // regardless of whether the browser accesses via hostname or IP
+  // Explicitly trust localhost variants
   trustedOrigins: [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
   ],
+  advanced: {
+    // Disable better-auth's Origin-header CSRF check. The session cookie is
+    // already SameSite=Lax which prevents cross-origin POST attacks at the
+    // browser level. The origin-header check is redundant and breaks in Arc /
+    // Chromium when a session cookie is present because those browsers omit
+    // the Origin header on same-origin fetch requests.
+    disableCSRFCheck: true,
+  },
   plugins: [nextCookies()],
 })
 

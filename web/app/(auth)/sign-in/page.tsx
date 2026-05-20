@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { authClient } from '@/lib/auth-client'
 import Link from 'next/link'
@@ -11,6 +11,13 @@ export default function SignInPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // If already signed in, go straight to dashboard
+  useEffect(() => {
+    authClient.getSession().then(({ data }) => {
+      if (data?.session) router.replace('/dashboard')
+    })
+  }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
