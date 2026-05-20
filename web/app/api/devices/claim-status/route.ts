@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db/client'
 import { deviceClaims, devices } from '@/lib/db/schema'
-import { eq } from 'drizzle-orm'
+import { eq, desc } from 'drizzle-orm'
 
 export async function GET(req: NextRequest) {
   const deviceId = req.nextUrl.searchParams.get('device_id')
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
     .select()
     .from(deviceClaims)
     .where(eq(deviceClaims.deviceId, deviceId))
-    .orderBy(deviceClaims.expiresAt)
+    .orderBy(desc(deviceClaims.expiresAt))
     .limit(1)
 
   if (!claim) {
