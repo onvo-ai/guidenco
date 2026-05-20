@@ -4,14 +4,14 @@ After=network.target
 
 [Service]
 Type=simple
-User=ronnel
-WorkingDirectory=/home/ronnel/Desktop/guidenco
-ExecStartPre=/usr/bin/sudo /home/ronnel/Desktop/guidenco/setup_hid_gadget.sh
-ExecStart=/home/ronnel/Desktop/guidenco/venv/bin/python3 /home/ronnel/Desktop/guidenco/server.py
+User=root
+WorkingDirectory=/opt/guidenco
+ExecStartPre=/usr/local/bin/guidenco-hid-setup
+ExecStart=/opt/guidenco/venv/bin/python3 /opt/guidenco/server.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=/etc/guidenco.env
+EnvironmentFile=/etc/guidenco/device.env
 
 [Install]
 WantedBy=multi-user.target
