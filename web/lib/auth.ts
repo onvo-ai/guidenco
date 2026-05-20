@@ -17,6 +17,12 @@ export const auth = betterAuth({
   emailAndPassword: { enabled: true },
   secret: process.env.BETTER_AUTH_SECRET!,
   baseURL: process.env.BETTER_AUTH_URL!,
+  // Explicitly trust localhost variants so the CSRF check passes
+  // regardless of whether the browser accesses via hostname or IP
+  trustedOrigins: [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ],
   plugins: [nextCookies()],
 })
 
