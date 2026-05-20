@@ -16,3 +16,8 @@ VIDEO_DEV = "/dev/video0"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = os.path.join(ROOT, "temp")
 SETTINGS_PATH = os.path.join(ROOT, "settings.json")
+
+# Cloud relay — set via /etc/guidenco/device.env on the Pi
+DEVICE_ID    = os.environ.get("DEVICE_ID", "")
+DEVICE_TOKEN = os.environ.get("DEVICE_TOKEN", "")
+CLOUD_URL    = os.environ.get("CLOUD_URL", "https://openclaw.ai")
