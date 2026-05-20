@@ -8,7 +8,9 @@ import { ensureBucket } from './lib/minio'
 const dev = process.env.NODE_ENV !== 'production'
 const port = parseInt(process.env.PORT ?? '3000', 10)
 
-const app = next({ dev })
+// Disable Turbopack — it crashes on dynamic route segments with native Node packages.
+// Use webpack (the stable bundler) instead.
+const app = next({ dev, turbopack: false })
 const handle = app.getRequestHandler()
 
 app.prepare().then(async () => {
