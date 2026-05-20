@@ -1,23 +1,14 @@
 import os
 
-SCALE_RATIO = 1.0
+# Video capture device
+VIDEO_DEV = os.environ.get("VIDEO_DEV", "/dev/video0")
+NATIVE_W  = 1920
+NATIVE_H  = 1080
 
-NATIVE_W = 1920
-NATIVE_H = 1080
-
-SCALED_W = int(NATIVE_W * SCALE_RATIO)
-SCALED_H = int(NATIVE_H * SCALE_RATIO)
-
+# USB HID coordinate space (0–1000 maps to full screen)
 COORD_SPACE = 1000
+ABS_MAX     = 32767  # USB HID absolute mouse range
 
-VIDEO_DEV = "/dev/video0"
-
-# Project paths — single source of truth, shared across server, agent, and tools.
-ROOT = os.path.dirname(os.path.abspath(__file__))
-TEMP_DIR = os.path.join(ROOT, "temp")
-SETTINGS_PATH = os.path.join(ROOT, "settings.json")
-
-# Cloud relay — set via /etc/guidenco/device.env on the Pi
-DEVICE_ID    = os.environ.get("DEVICE_ID", "")
+# Cloud relay — written to /etc/guidenco/device.env by install.sh
 DEVICE_TOKEN = os.environ.get("DEVICE_TOKEN", "")
-CLOUD_URL    = os.environ.get("CLOUD_URL", "https://openclaw.ai")
+CLOUD_URL    = os.environ.get("CLOUD_URL", "https://guidenco.app")

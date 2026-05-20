@@ -7,6 +7,9 @@ import { eq } from 'drizzle-orm'
 // Active Pi connections: deviceId → WebSocket
 const connections = new Map<string, WebSocket>()
 
+// Latest frame per device: deviceId → base64 JPEG string
+const latestFrames = new Map<string, string>()
+
 // Browser SSE listeners: deviceId → Set of callbacks
 const listeners = new Map<string, Set<(data: string) => void>>()
 
@@ -40,12 +43,23 @@ export async function handleRelayUpgrade(ws: WebSocket, req: IncomingMessage) {
 
   ws.on('message', (data) => {
     const raw = data.toString()
+
+    // Buffer the latest frame so the agent loop can read it
+    try {
+      const msg = JSON.parse(raw)
+      if (msg.type === 'frame' && typeof msg.data === 'string') {
+        latestFrames.set(device.id, msg.data)
+      }
+    } catch { /* non-JSON message */ }
+
+    // Forward to any browser SSE listeners (video stream, events)
     const deviceListeners = listeners.get(device.id)
     deviceListeners?.forEach((cb) => cb(raw))
   })
 
   ws.on('close', () => {
     connections.delete(device.id)
+    latestFrames.delete(device.id)
     listeners.delete(device.id)
     db
       .update(devices)
@@ -75,6 +89,17 @@ export function addBrowserListener(
   if (!listeners.has(deviceId)) listeners.set(deviceId, new Set())
   listeners.get(deviceId)!.add(cb)
   return () => listeners.get(deviceId)?.delete(cb)
+}
+
+/** Emit a JSON-serialisable event to all browser SSE listeners for this device. */
+export function emitToListeners(deviceId: string, data: string) {
+  const deviceListeners = listeners.get(deviceId)
+  deviceListeners?.forEach((cb) => cb(data))
+}
+
+/** Latest JPEG frame (base64) received from the Pi, or null if none yet. */
+export function getLatestFrame(deviceId: string): string | null {
+  return latestFrames.get(deviceId) ?? null
 }
 
 export function isDeviceOnline(deviceId: string): boolean {

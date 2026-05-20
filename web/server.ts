@@ -2,7 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'http'
 import { parse } from 'url'
 import next from 'next'
 import { WebSocketServer } from 'ws'
-import { handleRelayUpgrade, sendToDevice, addBrowserListener } from './lib/relay'
+import { handleRelayUpgrade, addBrowserListener, isDeviceOnline, emitToListeners } from './lib/relay'
+import { startAgentLoop } from './lib/agent'
 import { ensureBucket } from './lib/minio'
 import { auth } from './lib/auth'
 import { db } from './lib/db/client'
@@ -13,7 +14,6 @@ const dev = process.env.NODE_ENV !== 'production'
 const port = parseInt(process.env.PORT ?? '3000', 10)
 
 // Disable Turbopack — it crashes on dynamic route segments with native Node packages.
-// Use webpack (the stable bundler) instead.
 const app = next({ dev, turbopack: false })
 const handle = app.getRequestHandler()
 
@@ -42,8 +42,9 @@ async function getSession(req: IncomingMessage) {
   return auth.api.getSession({ headers })
 }
 
-// POST /api/relay/:deviceId/command — handled in server.ts so it shares the
-// same relay.ts module instance as the WebSocket upgrade handler.
+// POST /api/relay/:deviceId/command
+// Starts the web-side agent loop (VLM + action dispatch).
+// Handled here — not in a Next.js route — so it shares the relay.ts module instance.
 async function handleCommand(req: IncomingMessage, res: ServerResponse, deviceId: string) {
   const session = await getSession(req)
   if (!session) {
@@ -64,6 +65,12 @@ async function handleCommand(req: IncomingMessage, res: ServerResponse, deviceId
     return
   }
 
+  if (!isDeviceOnline(deviceId)) {
+    res.writeHead(503, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Device offline' }))
+    return
+  }
+
   const body = await readBody(req) as Record<string, string> | null
   const { goal, instructions } = body ?? {}
 
@@ -73,23 +80,18 @@ async function handleCommand(req: IncomingMessage, res: ServerResponse, deviceId
     return
   }
 
-  const sent = sendToDevice(
-    deviceId,
-    JSON.stringify({ type: 'command', goal, instructions: instructions ?? '' })
-  )
-
-  if (!sent) {
-    res.writeHead(503, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Device offline' }))
-    return
-  }
+  // Start agent loop asynchronously — respond immediately
+  startAgentLoop(deviceId, goal, instructions ?? '').catch((err) => {
+    console.error(`[agent] loop crashed for ${deviceId}:`, err)
+    emitToListeners(deviceId, JSON.stringify({ type: 'agent:error', message: String(err) }))
+  })
 
   res.writeHead(200, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ ok: true }))
 }
 
-// GET /api/relay/:deviceId/stream — SSE endpoint, also handled in server.ts
-// so addBrowserListener works against the same Map as the WS handler.
+// GET /api/relay/:deviceId/stream — SSE, proxied from the Pi and agent events.
+// Handled here so addBrowserListener works against the same Map as the WS handler.
 async function handleStream(req: IncomingMessage, res: ServerResponse, deviceId: string) {
   const session = await getSession(req)
   if (!session) {
@@ -114,21 +116,17 @@ async function handleStream(req: IncomingMessage, res: ServerResponse, deviceId:
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
   })
   res.flushHeaders()
 
+  // Write each message as a proper SSE event
   const remove = addBrowserListener(deviceId, (raw) => {
     try {
-      res.write(raw)
-    } catch {
-      // client disconnected
-    }
+      res.write(`data: ${raw}\n\n`)
+    } catch { /* client disconnected */ }
   })
 
-  req.on('close', () => {
-    remove()
-  })
+  req.on('close', remove)
 }
 
 app.prepare().then(async () => {
@@ -138,14 +136,14 @@ app.prepare().then(async () => {
     const parsedUrl = parse(req.url!, true)
     const pathname = parsedUrl.pathname ?? ''
 
-    // Relay command — must run in this process to access in-memory WebSocket map
+    // Relay command — starts the agent loop on this process
     const cmdMatch = pathname.match(/^\/api\/relay\/([^/]+)\/command$/)
     if (cmdMatch && req.method === 'POST') {
       await handleCommand(req, res, cmdMatch[1])
       return
     }
 
-    // Relay SSE stream — same reason
+    // Relay SSE stream — forwards Pi frames + agent events to browser
     const streamMatch = pathname.match(/^\/api\/relay\/([^/]+)\/stream$/)
     if (streamMatch && req.method === 'GET') {
       await handleStream(req, res, streamMatch[1])

@@ -1,13 +1,14 @@
 [Unit]
 Description=Guidenco — vision-driven remote desktop automation
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/guidenco
 ExecStartPre=/usr/local/bin/guidenco-hid-setup
-ExecStart=/opt/guidenco/venv/bin/python3 /opt/guidenco/server.py
+ExecStart=/opt/guidenco/venv/bin/python3 /opt/guidenco/main.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

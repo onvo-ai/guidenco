@@ -1,28 +1,17 @@
-__pycache__/
-*.pyc
 .DS_Store
-temp/
-*.bak
-.env
-.env.deploy
-.api_key
-venv/
-node_modules/
 
-# Web
+# Web (Next.js)
 web/.next/
 web/node_modules/
+web/package-lock.json
 web/.env.local
 web/lib/db/migrations/
 
-# Service
+# Service (Python)
 service/__pycache__/
 service/**/__pycache__/
 service/*.pyc
+service/**/*.pyc
 service/venv/
 service/temp/
 service/.env
-
-# Root
-node_modules/
-.DS_Store

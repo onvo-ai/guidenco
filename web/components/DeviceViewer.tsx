@@ -8,43 +8,51 @@ interface Props {
 
 interface AgentEvent {
   type: string
+  step?: number
+  action?: string
+  reasoning?: string
   message?: string
-  payload?: Record<string, unknown>
   goal?: string
 }
 
+function eventLabel(ev: AgentEvent): string {
+  switch (ev.type) {
+    case 'agent:start':   return `▶ Starting: ${ev.goal}`
+    case 'agent:step':    return `Step ${ev.step}: ${ev.action} — ${ev.reasoning}`
+    case 'agent:done':    return `✓ Done: ${ev.message}`
+    case 'agent:error':   return `✗ Error: ${ev.message}`
+    default:              return JSON.stringify(ev)
+  }
+}
+
 export function DeviceViewer({ deviceId }: Props) {
-  const [imgSrc, setImgSrc] = useState<string | null>(null)
-  const [events, setEvents] = useState<AgentEvent[]>([])
-  const [goal, setGoal] = useState('')
-  const [sending, setSending] = useState(false)
-  const [offline, setOffline] = useState(false)
+  const [imgSrc, setImgSrc]     = useState<string | null>(null)
+  const [events, setEvents]     = useState<AgentEvent[]>([])
+  const [goal, setGoal]         = useState('')
+  const [sending, setSending]   = useState(false)
+  const [offline, setOffline]   = useState(false)
   const eventsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const es = new EventSource(`/api/relay/${deviceId}/stream`)
 
     es.onmessage = (e) => {
+      let parsed: AgentEvent
       try {
-        const parsed = JSON.parse(e.data)
+        parsed = JSON.parse(e.data)
+      } catch {
+        return
+      }
 
-        if (parsed.type === 'frame') {
-          setImgSrc(`data:image/jpeg;base64,${parsed.data}`)
-          setOffline(false)
-          return
-        }
+      if (parsed.type === 'frame') {
+        // Pi video frame — update screenshot
+        setImgSrc(`data:image/jpeg;base64,${(parsed as unknown as { data: string }).data}`)
+        setOffline(false)
+        return
+      }
 
-        if (parsed.type === 'event') {
-          // The Pi forwards raw SSE strings: "data: {...}\n\n"
-          const inner = parsed.data?.replace(/^data: /, '').trim()
-          if (inner) {
-            try {
-              const evt = JSON.parse(inner)
-              setEvents((prev) => [...prev.slice(-99), evt])
-            } catch { /* skip malformed */ }
-          }
-        }
-      } catch { /* skip */ }
+      // All other events (agent:start, agent:step, agent:done, agent:error) go to the log
+      setEvents((prev) => [...prev.slice(-99), parsed])
     }
 
     es.onerror = () => setOffline(true)
@@ -70,7 +78,7 @@ export function DeviceViewer({ deviceId }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-4 h-full">
+    <div className="flex flex-col gap-4">
       {/* Video frame */}
       <div className="relative bg-zinc-900 rounded-lg overflow-hidden aspect-video flex items-center justify-center">
         {imgSrc ? (
@@ -85,14 +93,24 @@ export function DeviceViewer({ deviceId }: Props) {
         )}
       </div>
 
-      {/* Event log */}
-      <div className="flex-1 bg-zinc-900 rounded-lg p-3 overflow-y-auto max-h-48 text-xs font-mono space-y-1">
-        {events.length === 0 && <p className="text-zinc-600">No events yet…</p>}
-        {events.map((ev, i) => (
-          <div key={i} className="text-zinc-400">
-            {ev.type === 'log' ? ev.message : JSON.stringify(ev)}
-          </div>
-        ))}
+      {/* Agent event log */}
+      <div className="bg-zinc-900 rounded-lg p-3 overflow-y-auto max-h-48 text-xs font-mono space-y-1">
+        {events.length === 0
+          ? <p className="text-zinc-600">No events yet…</p>
+          : events.map((ev, i) => (
+            <div
+              key={i}
+              className={
+                ev.type === 'agent:error'   ? 'text-red-400' :
+                ev.type === 'agent:done'    ? 'text-green-400' :
+                ev.type === 'agent:start'   ? 'text-zinc-300' :
+                'text-zinc-400'
+              }
+            >
+              {eventLabel(ev)}
+            </div>
+          ))
+        }
         <div ref={eventsEndRef} />
       </div>
 
