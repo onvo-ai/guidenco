@@ -8,3 +8,21 @@ temp/
 .api_key
 venv/
 node_modules/
+
+# Web
+web/.next/
+web/node_modules/
+web/.env.local
+web/lib/db/migrations/
+
+# Service
+service/__pycache__/
+service/**/__pycache__/
+service/*.pyc
+service/venv/
+service/temp/
+service/.env
+
+# Root
+node_modules/
+.DS_Store
