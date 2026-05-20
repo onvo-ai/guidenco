@@ -38,7 +38,10 @@ def main():
             # Start the job processor thread in the worker (threads don't survive fork)
             from server.streaming import start_processor_in_worker
             start_processor_in_worker(_agent_run)
-            print(f"[worker] Capture manager and job processor started in worker {worker.pid}", flush=True)
+            # Start WebSocket relay to cloud
+            from ws_client import start_in_thread as _start_ws
+            _start_ws()
+            print(f"[worker] Capture manager, job processor, and ws_client started in worker {worker.pid}", flush=True)
 
         class _App(gunicorn.app.base.BaseApplication):
             def __init__(self, application, options=None):
