@@ -44,12 +44,14 @@ export async function handleRelayUpgrade(ws: WebSocket, req: IncomingMessage) {
     deviceListeners?.forEach((cb) => cb(raw))
   })
 
-  ws.on('close', async () => {
+  ws.on('close', () => {
     connections.delete(device.id)
-    await db
+    listeners.delete(device.id)
+    db
       .update(devices)
       .set({ status: 'offline' })
       .where(eq(devices.id, device.id))
+      .catch((err) => console.error(`[relay] failed to mark device offline (${device.id}):`, err))
   })
 
   ws.on('error', (err) => {
@@ -60,7 +62,9 @@ export async function handleRelayUpgrade(ws: WebSocket, req: IncomingMessage) {
 export function sendToDevice(deviceId: string, message: string): boolean {
   const ws = connections.get(deviceId)
   if (!ws || ws.readyState !== 1 /* OPEN */) return false
-  ws.send(message)
+  ws.send(message, (err) => {
+    if (err) console.error(`[relay] send failed (${deviceId}):`, err.message)
+  })
   return true
 }
 
