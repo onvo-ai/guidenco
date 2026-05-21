@@ -45,7 +45,7 @@ const INSTR_KEY    = 'guidenco-instructions'
 // useStream — SSE, pipes frames directly to an <img> ref
 // ─────────────────────────────────────────────────────────────────────────────
 
-function useStream(deviceId: string) {
+function useStream(deviceId: string, webrtcActiveRef: React.MutableRefObject<boolean>) {
   const imgRef    = useRef<HTMLImageElement>(null)
   const [items, setItems]       = useState<AgentItem[]>([])
   const [currentGoal, setCurrentGoal] = useState('')
@@ -77,19 +77,21 @@ function useStream(deviceId: string) {
         let parsed: Record<string, unknown>
         try { parsed = JSON.parse(e.data as string) } catch { return }
 
-        // Video frame — update img directly, no React re-render
+        // Video frame — SSE fallback only (skip when WebRTC is active)
         if (parsed.type === 'frame') {
-          if (imgRef.current && parsed.data) {
-            imgRef.current.src = `data:image/jpeg;base64,${parsed.data as string}`
-            setHasFrame(true)
-          }
-          setOffline(false)
-          fpsCount.current++
-          const now = Date.now()
-          if (now - fpsTime.current >= 1000) {
-            setFps(fpsCount.current)
-            fpsCount.current = 0
-            fpsTime.current  = now
+          if (!webrtcActiveRef.current) {
+            if (imgRef.current && parsed.data) {
+              imgRef.current.src = `data:image/jpeg;base64,${parsed.data as string}`
+              setHasFrame(true)
+            }
+            setOffline(false)
+            fpsCount.current++
+            const now = Date.now()
+            if (now - fpsTime.current >= 1000) {
+              setFps(fpsCount.current)
+              fpsCount.current = 0
+              fpsTime.current  = now
+            }
           }
           return
         }
@@ -128,7 +130,7 @@ function useStream(deviceId: string) {
     return () => { clearTimeout(retryTimer); es?.close() }
   }, [deviceId, clearItems])
 
-  return { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, offline, fps, hasFrame }
+  return { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, offline, fps, hasFrame, fpsCount, fpsTime, setFps, setHasFrame }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -153,10 +155,133 @@ function useAgent(deviceId: string) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// useWebRTC — establishes a WebRTC peer connection for low-latency video
+// ─────────────────────────────────────────────────────────────────────────────
+
+function useWebRTC(
+  deviceId: string,
+  fpsCount: React.MutableRefObject<number>,
+  fpsTime: React.MutableRefObject<number>,
+  setFps: (n: number) => void,
+  setHasFrame: (v: boolean) => void,
+) {
+  const videoRef   = useRef<HTMLVideoElement>(null)
+  const pcRef      = useRef<RTCPeerConnection | null>(null)
+  const [webrtcActive, setWebrtcActive] = useState(false)
+
+  useEffect(() => {
+    let pc: RTCPeerConnection | null = null
+    let cancelled = false
+
+    async function start() {
+      try {
+        pc = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        })
+        pcRef.current = pc
+
+        pc.ontrack = (event) => {
+          const video = videoRef.current
+          if (!video || !event.streams[0]) return
+          video.srcObject = event.streams[0]
+          video.play().catch(() => {})
+          if (cancelled) return
+          setWebrtcActive(true)
+          setHasFrame(true)
+
+          // FPS counting via requestVideoFrameCallback (Chrome/Edge) or rAF fallback
+          const videoEl = video
+          function tick() {
+            if (cancelled || !videoEl.srcObject) return
+            fpsCount.current++
+            const now = Date.now()
+            if (now - fpsTime.current >= 1000) {
+              setFps(fpsCount.current)
+              fpsCount.current = 0
+              fpsTime.current  = now
+            }
+            if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+              ;(videoEl as HTMLVideoElement & { requestVideoFrameCallback: (cb: () => void) => void })
+                .requestVideoFrameCallback(tick)
+            } else {
+              requestAnimationFrame(tick)
+            }
+          }
+          if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+            ;(videoEl as HTMLVideoElement & { requestVideoFrameCallback: (cb: () => void) => void })
+              .requestVideoFrameCallback(tick)
+          } else {
+            requestAnimationFrame(tick)
+          }
+        }
+
+        pc.onconnectionstatechange = () => {
+          if (pc?.connectionState === 'failed' || pc?.connectionState === 'closed') {
+            if (!cancelled) setWebrtcActive(false)
+          }
+        }
+
+        // Receive-only: we never send video
+        pc.addTransceiver('video', { direction: 'recvonly' })
+
+        const offer = await pc.createOffer()
+        await pc.setLocalDescription(offer)
+
+        // Vanilla ICE: wait until all candidates gathered (max 5s)
+        await new Promise<void>((resolve) => {
+          if (pc!.iceGatheringState === 'complete') { resolve(); return }
+          const onchange = () => {
+            if (pc!.iceGatheringState === 'complete') {
+              pc!.removeEventListener('icegatheringstatechange', onchange)
+              resolve()
+            }
+          }
+          pc!.addEventListener('icegatheringstatechange', onchange)
+          setTimeout(resolve, 5000)
+        })
+
+        if (cancelled) { pc.close(); return }
+
+        const res = await fetch(`/api/relay/${deviceId}/webrtc-offer`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ sdp: pc.localDescription!.sdp, type: pc.localDescription!.type }),
+        })
+
+        if (!res.ok) throw new Error(`Offer rejected: ${res.status}`)
+
+        const answer = await res.json() as { type: RTCSdpType; sdp: string }
+        await pc.setRemoteDescription(new RTCSessionDescription(answer))
+      } catch (err) {
+        console.warn('[webrtc] failed, falling back to SSE:', err)
+        // SSE frame handling in useStream continues as fallback
+      }
+    }
+
+    start()
+
+    return () => {
+      cancelled = true
+      pc?.close()
+      pcRef.current = null
+      setWebrtcActive(false)
+    }
+  }, [deviceId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return { videoRef, webrtcActive }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // useManualInput — pointer + keyboard relay
 // ─────────────────────────────────────────────────────────────────────────────
 
-function useManualInput(deviceId: string, mode: 'auto' | 'manual', shellRef: React.RefObject<HTMLDivElement | null>, imgRef: React.RefObject<HTMLImageElement | null>) {
+function useManualInput(
+  deviceId: string,
+  mode: 'auto' | 'manual',
+  shellRef: React.RefObject<HTMLDivElement | null>,
+  imgRef: React.RefObject<HTMLImageElement | null>,
+  videoRef: React.RefObject<HTMLVideoElement | null>,
+) {
   const send = useCallback(async (action: Record<string, unknown>) => {
     await fetch(`/api/relay/${deviceId}/input`, {
       method:  'POST',
@@ -165,16 +290,27 @@ function useManualInput(deviceId: string, mode: 'auto' | 'manual', shellRef: Rea
     }).catch(() => {})
   }, [deviceId])
 
-  // Compute the letterboxed image rect inside the shell div
   function getViewRect(): { left: number; top: number; width: number; height: number } | null {
     const shell = shellRef.current
+    if (!shell) return null
+    const r = shell.getBoundingClientRect()
+
+    // Use video dimensions when WebRTC is active, otherwise use img natural dimensions
+    const video = videoRef.current
     const img   = imgRef.current
-    if (!shell || !img) return null
-    const nw = img.naturalWidth, nh = img.naturalHeight
-    if (!nw || !nh) return null
-    const r     = shell.getBoundingClientRect()
+    let nw: number, nh: number
+    if (video && video.videoWidth && video.videoHeight) {
+      nw = video.videoWidth
+      nh = video.videoHeight
+    } else if (img && img.naturalWidth && img.naturalHeight) {
+      nw = img.naturalWidth
+      nh = img.naturalHeight
+    } else {
+      return null
+    }
+
     const scale = Math.min(r.width / nw, r.height / nh)
-    const dw    = nw * scale, dh = nh * scale
+    const dw = nw * scale, dh = nh * scale
     return { left: r.left + (r.width - dw) / 2, top: r.top + (r.height - dh) / 2, width: dw, height: dh }
   }
 
@@ -669,6 +805,8 @@ function SettingsModal({ open, instructions, onSave, onClose }: { open: boolean;
 
 interface ViewerProps {
   imgRef: React.RefObject<HTMLImageElement | null>
+  videoRef: React.RefObject<HTMLVideoElement | null>
+  webrtcActive: boolean
   shellRef: React.RefObject<HTMLDivElement | null>
   mode: 'auto' | 'manual'
   fps: number
@@ -686,7 +824,7 @@ interface ViewerProps {
 
 const HEADER_H = 44
 
-function Viewer({ imgRef, shellRef, mode, fps, hasFrame, offline, deviceName, onModeChange, onSnapshot, onOpenSettings, onPointerMove, onPointerDown, onPointerUp, onContextMenu }: ViewerProps) {
+function Viewer({ imgRef, videoRef, webrtcActive, shellRef, mode, fps, hasFrame, offline, deviceName, onModeChange, onSnapshot, onOpenSettings, onPointerMove, onPointerDown, onPointerUp, onContextMenu }: ViewerProps) {
   const [showSnapshotTip, setShowSnapshotTip] = useState(false)
   const [showSettingsTip, setShowSettingsTip] = useState(false)
 
@@ -766,11 +904,20 @@ function Viewer({ imgRef, shellRef, mode, fps, hasFrame, offline, deviceName, on
         onPointerUp={onPointerUp}
         onContextMenu={onContextMenu}
       >
+        {/* WebRTC video — shown when WebRTC connection is active */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{ width: '100%', height: '100%', objectFit: 'contain', display: webrtcActive ? 'block' : 'none', userSelect: 'none', pointerEvents: 'none' }}
+        />
+        {/* SSE fallback — shown before WebRTC connects */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           ref={imgRef}
           alt="display stream"
-          style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', userSelect: 'none', pointerEvents: 'none' }}
+          style={{ width: '100%', height: '100%', objectFit: 'contain', display: webrtcActive ? 'none' : 'block', userSelect: 'none', pointerEvents: 'none' }}
           draggable={false}
         />
         {!hasFrame && (
@@ -847,8 +994,15 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
   // Load instructions from localStorage (client-only)
   useEffect(() => { setInstructions(getSaved<string>(INSTR_KEY, '')) }, [])
 
-  const { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, offline, fps, hasFrame } = useStream(deviceId)
+  // webrtcActiveRef is a ref (not state) so SSE handler can read it without re-renders
+  const webrtcActiveRef = useRef(false)
+
+  const { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, offline, fps, hasFrame, fpsCount, fpsTime, setFps, setHasFrame } = useStream(deviceId, webrtcActiveRef)
+  const { videoRef, webrtcActive } = useWebRTC(deviceId, fpsCount, fpsTime, setFps, setHasFrame)
   const { running, startAgent, stopAgent } = useAgent(deviceId)
+
+  // Keep webrtcActiveRef in sync with webrtcActive state
+  useEffect(() => { webrtcActiveRef.current = webrtcActive }, [webrtcActive])
 
   // Mark done when agent finishes
   useEffect(() => {
@@ -858,7 +1012,7 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
     }
   }, [items, stopAgent])
 
-  const { onPointerMove, onPointerDown, onPointerUp, onContextMenu } = useManualInput(deviceId, mode, shellRef, imgRef)
+  const { onPointerMove, onPointerDown, onPointerUp, onContextMenu } = useManualInput(deviceId, mode, shellRef, imgRef, videoRef)
 
   async function handleSend() {
     const goal = input.trim()
@@ -888,6 +1042,8 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
     <div style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
       <Viewer
         imgRef={imgRef}
+        videoRef={videoRef}
+        webrtcActive={webrtcActive}
         shellRef={shellRef}
         mode={mode}
         fps={fps}
