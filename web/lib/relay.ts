@@ -13,6 +13,9 @@ const latestFrames = new Map<string, string>()
 // Browser SSE listeners: deviceId → Set of callbacks
 const listeners = new Map<string, Set<(data: string) => void>>()
 
+// Pending WebRTC answer callbacks: deviceId → resolver
+const webrtcPending = new Map<string, (sdp: string) => void>()
+
 export async function handleRelayUpgrade(ws: WebSocket, req: IncomingMessage) {
   const rawUrl = req.url ?? '/'
   const url = new URL(rawUrl, 'http://localhost')
@@ -44,15 +47,23 @@ export async function handleRelayUpgrade(ws: WebSocket, req: IncomingMessage) {
   ws.on('message', (data) => {
     const raw = data.toString()
 
-    // Buffer the latest frame so the agent loop can read it
-    try {
-      const msg = JSON.parse(raw)
-      if (msg.type === 'frame' && typeof msg.data === 'string') {
-        latestFrames.set(device.id, msg.data)
-      }
-    } catch { /* non-JSON message */ }
+    let msg: Record<string, unknown> | null = null
+    try { msg = JSON.parse(raw) } catch { /* non-JSON */ }
 
-    // Forward to any browser SSE listeners (video stream, events)
+    if (msg) {
+      // Buffer latest frame for agent loop
+      if (msg.type === 'frame' && typeof msg.data === 'string') {
+        latestFrames.set(device.id, msg.data as string)
+      }
+
+      // WebRTC answer — resolve pending offer promise; do NOT forward to SSE
+      if (msg.type === 'webrtc:answer' && typeof msg.sdp === 'string') {
+        _resolveWebRTCAnswer(device.id, msg.sdp as string)
+        return
+      }
+    }
+
+    // Forward everything else to browser SSE listeners
     const deviceListeners = listeners.get(device.id)
     deviceListeners?.forEach((cb) => cb(raw))
   })
@@ -61,6 +72,7 @@ export async function handleRelayUpgrade(ws: WebSocket, req: IncomingMessage) {
     connections.delete(device.id)
     latestFrames.delete(device.id)
     listeners.delete(device.id)
+    webrtcPending.delete(device.id)
     db
       .update(devices)
       .set({ status: 'offline' })
@@ -105,4 +117,31 @@ export function getLatestFrame(deviceId: string): string | null {
 export function isDeviceOnline(deviceId: string): boolean {
   const ws = connections.get(deviceId)
   return ws !== undefined && ws.readyState === 1
+}
+
+/**
+ * Wait for the Pi to send a webrtc:answer for the given device.
+ * Resolves with the answer SDP, or rejects after 15 seconds.
+ */
+export function waitForWebRTCAnswer(deviceId: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      webrtcPending.delete(deviceId)
+      reject(new Error(`WebRTC answer timeout for device ${deviceId}`))
+    }, 15_000)
+
+    webrtcPending.set(deviceId, (sdp: string) => {
+      clearTimeout(timer)
+      resolve(sdp)
+    })
+  })
+}
+
+/** Called internally (and exported for tests) when a webrtc:answer arrives. */
+export function _resolveWebRTCAnswer(deviceId: string, sdp: string): void {
+  const resolver = webrtcPending.get(deviceId)
+  if (resolver) {
+    webrtcPending.delete(deviceId)
+    resolver(sdp)
+  }
 }
