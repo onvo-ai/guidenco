@@ -9,6 +9,7 @@ import { auth } from './lib/auth'
 import { db } from './lib/db/client'
 import { devices } from './lib/db/schema'
 import { and, eq } from 'drizzle-orm'
+import { generateTurnCredentials } from './lib/cloudflare-turn'
 
 const dev = process.env.NODE_ENV !== 'production'
 const port = parseInt(process.env.PORT ?? '3000', 10)
@@ -163,8 +164,36 @@ async function handleStream(req: IncomingMessage, res: ServerResponse, deviceId:
   req.on('close', remove)
 }
 
+// GET /api/relay/:deviceId/ice-servers
+// Returns ephemeral ICE server config (STUN + TURN) for the browser to use
+// when creating its RTCPeerConnection.
+async function handleIceServers(req: IncomingMessage, res: ServerResponse, deviceId: string) {
+  const session = await getSession(req)
+  if (!session) {
+    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Unauthorized' }))
+    return
+  }
+
+  const [device] = await db
+    .select({ id: devices.id })
+    .from(devices)
+    .where(and(eq(devices.id, deviceId), eq(devices.userId, session.user.id)))
+    .limit(1)
+
+  if (!device) {
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Not found' }))
+    return
+  }
+
+  const iceServers = await generateTurnCredentials()
+  res.writeHead(200, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify({ iceServers }))
+}
+
 // POST /api/relay/:deviceId/webrtc-offer
-// Receives browser SDP offer, forwards to Pi, returns Pi's SDP answer.
+// Receives browser SDP offer, forwards to Pi (with TURN credentials), returns Pi's SDP answer.
 async function handleWebRTCOffer(req: IncomingMessage, res: ServerResponse, deviceId: string) {
   const session = await getSession(req)
   if (!session) {
@@ -207,7 +236,10 @@ async function handleWebRTCOffer(req: IncomingMessage, res: ServerResponse, devi
   // Register answer listener BEFORE sending offer to avoid race condition
   const answerPromise = waitForWebRTCAnswer(deviceId)
 
-  const sent = sendToDevice(deviceId, JSON.stringify({ type: 'webrtc:offer', sdp: body.sdp }))
+  // Generate fresh TURN credentials for the Pi so it can traverse NAT too
+  const piIceServers = await generateTurnCredentials()
+
+  const sent = sendToDevice(deviceId, JSON.stringify({ type: 'webrtc:offer', sdp: body.sdp, iceServers: piIceServers }))
   if (!sent) {
     cancelWebRTCPending(deviceId, new Error('Device not reachable'))
     res.writeHead(503, { 'Content-Type': 'application/json' })
@@ -250,6 +282,13 @@ app.prepare().then(async () => {
     const inputMatch = pathname.match(/^\/api\/relay\/([^/]+)\/input$/)
     if (inputMatch && req.method === 'POST') {
       await handleInput(req, res, inputMatch[1])
+      return
+    }
+
+    // ICE servers — returns ephemeral TURN credentials for the browser
+    const iceServersMatch = pathname.match(/^\/api\/relay\/([^/]+)\/ice-servers$/)
+    if (iceServersMatch && req.method === 'GET') {
+      await handleIceServers(req, res, iceServersMatch[1])
       return
     }
 

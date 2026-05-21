@@ -175,9 +175,22 @@ function useWebRTC(
 
     async function start() {
       try {
-        pc = new RTCPeerConnection({
-          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-        })
+        // Fetch ephemeral ICE servers (STUN + TURN) before creating the PC.
+        // Falls back to STUN-only if the endpoint errors or TURN isn't configured.
+        let iceServers: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }]
+        try {
+          const iceRes = await fetch(`/api/relay/${deviceId}/ice-servers`)
+          if (iceRes.ok) {
+            const iceData = await iceRes.json() as { iceServers: RTCIceServer[] }
+            if (Array.isArray(iceData.iceServers) && iceData.iceServers.length > 0) {
+              iceServers = iceData.iceServers
+            }
+          }
+        } catch {
+          // Non-fatal — STUN-only fallback remains
+        }
+
+        pc = new RTCPeerConnection({ iceServers })
 
         pc.ontrack = (event) => {
           const video = videoRef.current

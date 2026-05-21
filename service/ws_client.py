@@ -21,7 +21,7 @@ import av
 import numpy as np
 import websockets
 from PIL import Image
-from aiortc import MediaStreamError, RTCPeerConnection, RTCSessionDescription
+from aiortc import MediaStreamError, RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import VideoStreamTrack
 
 from config import CLOUD_URL, DEVICE_TOKEN
@@ -80,11 +80,27 @@ class _CaptureTrack(VideoStreamTrack):
 async def _handle_webrtc_offer(
     sdp: str,
     ws: "websockets.WebSocketClientProtocol",
+    ice_servers: list | None = None,
 ) -> None:
     """Handle one WebRTC offer from the server: create a PC, send an answer, hold until closed."""
     mgr = _get_capture()
     sub = mgr.subscribe()
-    pc = RTCPeerConnection()
+
+    # Build RTCConfiguration with TURN servers forwarded from the signaling server
+    if ice_servers:
+        rtc_ice = [
+            RTCIceServer(
+                urls=s["urls"],
+                username=s.get("username") or "",
+                credential=s.get("credential") or "",
+            )
+            for s in ice_servers
+        ]
+        config = RTCConfiguration(iceServers=rtc_ice)
+        pc = RTCPeerConnection(configuration=config)
+    else:
+        pc = RTCPeerConnection()
+
     track = _CaptureTrack(sub)
     pc.addTrack(track)
 
@@ -243,8 +259,9 @@ async def _receiver(ws: websockets.WebSocketClientProtocol):
 
         elif msg_type == "webrtc:offer":
             sdp = msg.get("sdp", "")
+            ice_servers = msg.get("iceServers") or []
             if sdp:
-                task = asyncio.create_task(_handle_webrtc_offer(sdp, ws))
+                task = asyncio.create_task(_handle_webrtc_offer(sdp, ws, ice_servers))
                 _webrtc_tasks.add(task)
                 task.add_done_callback(_webrtc_tasks.discard)
             else:
