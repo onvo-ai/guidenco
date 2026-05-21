@@ -13,8 +13,10 @@ const latestFrames = new Map<string, string>()
 // Browser SSE listeners: deviceId → Set of callbacks
 const listeners = new Map<string, Set<(data: string) => void>>()
 
-// Pending WebRTC answer callbacks: deviceId → resolver
-const webrtcPending = new Map<string, (sdp: string) => void>()
+// Pending WebRTC answer callbacks: deviceId → { resolve, reject }
+const webrtcPending = new Map<string, { resolve: (sdp: string) => void; reject: (err: Error) => void }>()
+
+const WEBRTC_ANSWER_TIMEOUT_MS = 15_000
 
 export async function handleRelayUpgrade(ws: WebSocket, req: IncomingMessage) {
   const rawUrl = req.url ?? '/'
@@ -72,7 +74,11 @@ export async function handleRelayUpgrade(ws: WebSocket, req: IncomingMessage) {
     connections.delete(device.id)
     latestFrames.delete(device.id)
     listeners.delete(device.id)
-    webrtcPending.delete(device.id)
+    const pending = webrtcPending.get(device.id)
+    if (pending) {
+      webrtcPending.delete(device.id)
+      pending.reject(new Error(`Device ${device.id} disconnected while WebRTC offer was in-flight`))
+    }
     db
       .update(devices)
       .set({ status: 'offline' })
@@ -124,24 +130,27 @@ export function isDeviceOnline(deviceId: string): boolean {
  * Resolves with the answer SDP, or rejects after 15 seconds.
  */
 export function waitForWebRTCAnswer(deviceId: string): Promise<string> {
+  if (webrtcPending.has(deviceId)) {
+    return Promise.reject(new Error(`WebRTC offer already in-flight for ${deviceId}`))
+  }
   return new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => {
       webrtcPending.delete(deviceId)
       reject(new Error(`WebRTC answer timeout for device ${deviceId}`))
-    }, 15_000)
+    }, WEBRTC_ANSWER_TIMEOUT_MS)
 
-    webrtcPending.set(deviceId, (sdp: string) => {
-      clearTimeout(timer)
-      resolve(sdp)
+    webrtcPending.set(deviceId, {
+      resolve: (sdp: string) => { clearTimeout(timer); resolve(sdp) },
+      reject:  (err: Error) => { clearTimeout(timer); reject(err) },
     })
   })
 }
 
 /** Called internally (and exported for tests) when a webrtc:answer arrives. */
 export function _resolveWebRTCAnswer(deviceId: string, sdp: string): void {
-  const resolver = webrtcPending.get(deviceId)
-  if (resolver) {
+  const pending = webrtcPending.get(deviceId)
+  if (pending) {
     webrtcPending.delete(deviceId)
-    resolver(sdp)
+    pending.resolve(sdp)
   }
 }

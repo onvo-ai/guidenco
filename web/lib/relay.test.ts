@@ -15,11 +15,18 @@ describe('waitForWebRTCAnswer', () => {
   })
 
   it('rejects if no answer arrives within timeout', async () => {
-    vi.useFakeTimers()
+    vi.useFakeTimers()  // ← MUST be before import
     const { waitForWebRTCAnswer } = await import('./relay')
     const promise = waitForWebRTCAnswer('dev-timeout')
-    vi.advanceTimersByTime(16000)
-    await expect(promise).rejects.toThrow('timeout')
+    // Attach rejection handler before advancing timers to avoid unhandled rejection
+    const assertion = expect(promise).rejects.toThrow('timeout')
+    await vi.advanceTimersByTimeAsync(16000)
+    await assertion
     vi.useRealTimers()
+  })
+
+  it('_resolveWebRTCAnswer does not throw when no pending promise for deviceId', async () => {
+    const { _resolveWebRTCAnswer } = await import('./relay')
+    expect(() => _resolveWebRTCAnswer('unknown-device', 'v=0')).not.toThrow()
   })
 })
