@@ -10,62 +10,68 @@ All agent / LLM logic lives in the web server. The Pi is pure I/O.
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import queue
 import threading
 import time
 
+import av
+import numpy as np
 import websockets
+from PIL import Image
+from aiortc.mediastreams import VideoStreamTrack
 
 from config import CLOUD_URL, DEVICE_TOKEN
 from capture import get_manager as _get_capture
 from actions import execute as _execute, cleanup as _cleanup
 
-import io
-
-import av
-import numpy as np
-from PIL import Image
-from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc.mediastreams import VideoStreamTrack
-
 
 class _CaptureTrack(VideoStreamTrack):
     """Feeds JPEG frames from CaptureManager into a WebRTC video track."""
 
-    kind = "video"
-
     def __init__(self, sub: queue.Queue) -> None:
         super().__init__()
         self._sub = sub
-        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stopped = False
 
     async def recv(self) -> av.VideoFrame:
-        # Capture the loop reference once (must be called from async context)
-        if self._loop is None:
-            self._loop = asyncio.get_running_loop()
-
         pts, time_base = await self.next_timestamp()
 
-        # Decode JPEG in a thread executor so the event loop stays responsive
-        frame_bytes = await self._loop.run_in_executor(None, self._get_latest)
+        loop = asyncio.get_running_loop()
+        arr = await loop.run_in_executor(None, self._get_latest_as_array)
 
-        img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
-        arr = np.array(img)
         vf = av.VideoFrame.from_ndarray(arr, format="rgb24")
         vf.pts = pts
         vf.time_base = time_base
         return vf
 
-    def _get_latest(self) -> bytes:
-        """Block until a frame arrives, then drain queue to get the freshest."""
-        frame = self._sub.get()  # blocks
+    def _get_latest_as_array(self) -> np.ndarray:
+        """Block until a fresh frame arrives, decode JPEG to numpy array."""
         while True:
+            # Drain the queue to get the freshest frame; timeout allows stop() to work
             try:
-                frame = self._sub.get_nowait()
+                frame = self._sub.get(timeout=1.0)
             except queue.Empty:
-                return frame
+                if self._stopped:
+                    raise StopIteration("track stopped")
+                continue
+            while True:
+                try:
+                    frame = self._sub.get_nowait()
+                except queue.Empty:
+                    break
+            try:
+                img = Image.open(io.BytesIO(frame)).convert("RGB")
+                return np.array(img)
+            except Exception:
+                continue  # discard corrupt frame, get the next one
+
+    def stop(self) -> None:
+        self._stopped = True
+        _get_capture().unsubscribe(self._sub)
+        super().stop()
 
 
 logger = logging.getLogger("guidenco.ws_client")
