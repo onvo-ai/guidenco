@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Camera, Loader2, Send, Settings, Square } from 'lucide-react'
+import Link from 'next/link'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -673,6 +674,7 @@ interface ViewerProps {
   fps: number
   hasFrame: boolean
   offline: boolean
+  deviceName: string
   onModeChange: (m: 'auto' | 'manual') => void
   onSnapshot: () => void
   onOpenSettings: () => void
@@ -682,16 +684,83 @@ interface ViewerProps {
   onContextMenu: (e: React.MouseEvent) => void
 }
 
-function Viewer({ imgRef, shellRef, mode, fps, hasFrame, offline, onModeChange, onSnapshot, onOpenSettings, onPointerMove, onPointerDown, onPointerUp, onContextMenu }: ViewerProps) {
+const HEADER_H = 44
+
+function Viewer({ imgRef, shellRef, mode, fps, hasFrame, offline, deviceName, onModeChange, onSnapshot, onOpenSettings, onPointerMove, onPointerDown, onPointerUp, onContextMenu }: ViewerProps) {
   const [showSnapshotTip, setShowSnapshotTip] = useState(false)
   const [showSettingsTip, setShowSettingsTip] = useState(false)
 
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
-      {/* Stream */}
+      {/* ── Header bar ─────────────────────────────────────────────────────── */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0,
+        height: HEADER_H, zIndex: 50,
+        display: 'flex', alignItems: 'center',
+        padding: '0 12px', gap: 0,
+        background: 'rgba(0,0,0,0.6)',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        borderBottom: '1px solid rgba(255,255,255,0.07)',
+      }}>
+        {/* Left: back + device name */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+          <Link
+            href="/dashboard"
+            style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'rgba(255,255,255,0.4)', fontSize: 13, textDecoration: 'none', flexShrink: 0, padding: '4px 6px', borderRadius: 6 }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.75)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.4)')}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+              <path d="M10 3L5 8L10 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span>Devices</span>
+          </Link>
+          <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: 14 }}>/</span>
+          <span style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {deviceName}
+          </span>
+          {offline && (
+            <span style={{ fontSize: 11, color: '#f87171', background: 'rgba(248,113,113,0.12)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 20, padding: '1px 8px', flexShrink: 0 }}>
+              Offline
+            </span>
+          )}
+        </div>
+
+        {/* Right: fps + toggle + icons */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          {fps > 0 && (
+            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', minWidth: 36, textAlign: 'right' }}>{fps} fps</span>
+          )}
+
+          <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
+
+          {/* Auto / Manual toggle */}
+          <div style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 7, background: 'rgba(255,255,255,0.07)' }}>
+            <ToggleBtn active={mode === 'auto'}   onClick={() => onModeChange('auto')}>Auto</ToggleBtn>
+            <ToggleBtn active={mode === 'manual'} onClick={() => onModeChange('manual')}>Manual</ToggleBtn>
+          </div>
+
+          <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.1)', margin: '0 2px' }} />
+
+          {/* Snapshot */}
+          <div style={{ position: 'relative' }} onMouseEnter={() => setShowSnapshotTip(true)} onMouseLeave={() => setShowSnapshotTip(false)}>
+            <IconBtn onClick={onSnapshot}><Camera size={14} /></IconBtn>
+            {showSnapshotTip && <Tooltip>Snapshot</Tooltip>}
+          </div>
+
+          {/* Settings */}
+          <div style={{ position: 'relative' }} onMouseEnter={() => setShowSettingsTip(true)} onMouseLeave={() => setShowSettingsTip(false)}>
+            <IconBtn onClick={onOpenSettings}><Settings size={14} /></IconBtn>
+            {showSettingsTip && <Tooltip>Settings</Tooltip>}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Stream — sits below the header ─────────────────────────────────── */}
       <div
         ref={shellRef}
-        style={{ position: 'absolute', inset: 0, background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', touchAction: 'none' }}
+        style={{ position: 'absolute', top: HEADER_H, left: 0, right: 0, bottom: 0, background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', touchAction: 'none' }}
         onPointerMove={onPointerMove}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
@@ -710,52 +779,6 @@ function Viewer({ imgRef, shellRef, mode, fps, hasFrame, offline, onModeChange, 
               {offline ? 'Device offline' : 'Waiting for signal…'}
             </span>
           </div>
-        )}
-      </div>
-
-      {/* Centered top controls pill */}
-      <div style={{
-        position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
-        zIndex: 50, display: 'flex', alignItems: 'center', gap: 6,
-        padding: '5px 8px', borderRadius: 10,
-        background: 'rgba(0,0,0,0.52)',
-        backdropFilter: 'blur(12px)',
-        WebkitBackdropFilter: 'blur(12px)',
-        border: '1px solid rgba(255,255,255,0.1)',
-        whiteSpace: 'nowrap',
-      }}>
-        {/* Auto / Manual toggle */}
-        <div style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 7, background: 'rgba(255,255,255,0.07)' }}>
-          <ToggleBtn active={mode === 'auto'}   onClick={() => onModeChange('auto')}>Auto</ToggleBtn>
-          <ToggleBtn active={mode === 'manual'} onClick={() => onModeChange('manual')}>Manual</ToggleBtn>
-        </div>
-
-        <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
-
-        {fps > 0 && (
-          <>
-            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', minWidth: 40, textAlign: 'center' }}>{fps} fps</span>
-            <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
-          </>
-        )}
-
-        {/* Snapshot */}
-        <div style={{ position: 'relative' }} onMouseEnter={() => setShowSnapshotTip(true)} onMouseLeave={() => setShowSnapshotTip(false)}>
-          <IconBtn onClick={onSnapshot}><Camera size={14} /></IconBtn>
-          {showSnapshotTip && <Tooltip>Snapshot</Tooltip>}
-        </div>
-
-        {/* Settings */}
-        <div style={{ position: 'relative' }} onMouseEnter={() => setShowSettingsTip(true)} onMouseLeave={() => setShowSettingsTip(false)}>
-          <IconBtn onClick={onOpenSettings}><Settings size={14} /></IconBtn>
-          {showSettingsTip && <Tooltip>Settings</Tooltip>}
-        </div>
-
-        {offline && (
-          <>
-            <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
-            <span style={{ fontSize: 11, color: '#f87171' }}>Offline</span>
-          </>
         )}
       </div>
     </div>
@@ -859,6 +882,7 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
   }
 
   const isManual = mode === 'manual'
+  const displayName = deviceName ?? deviceId
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
@@ -869,6 +893,7 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
         fps={fps}
         hasFrame={hasFrame}
         offline={offline}
+        deviceName={displayName}
         onModeChange={setMode}
         onSnapshot={snapshot}
         onOpenSettings={() => setSettingsOpen(true)}
