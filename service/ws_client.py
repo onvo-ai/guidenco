@@ -22,6 +22,52 @@ from config import CLOUD_URL, DEVICE_TOKEN
 from capture import get_manager as _get_capture
 from actions import execute as _execute, cleanup as _cleanup
 
+import io
+
+import av
+import numpy as np
+from PIL import Image
+from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc.mediastreams import VideoStreamTrack
+
+
+class _CaptureTrack(VideoStreamTrack):
+    """Feeds JPEG frames from CaptureManager into a WebRTC video track."""
+
+    kind = "video"
+
+    def __init__(self, sub: queue.Queue) -> None:
+        super().__init__()
+        self._sub = sub
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    async def recv(self) -> av.VideoFrame:
+        # Capture the loop reference once (must be called from async context)
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+
+        pts, time_base = await self.next_timestamp()
+
+        # Decode JPEG in a thread executor so the event loop stays responsive
+        frame_bytes = await self._loop.run_in_executor(None, self._get_latest)
+
+        img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
+        arr = np.array(img)
+        vf = av.VideoFrame.from_ndarray(arr, format="rgb24")
+        vf.pts = pts
+        vf.time_base = time_base
+        return vf
+
+    def _get_latest(self) -> bytes:
+        """Block until a frame arrives, then drain queue to get the freshest."""
+        frame = self._sub.get()  # blocks
+        while True:
+            try:
+                frame = self._sub.get_nowait()
+            except queue.Empty:
+                return frame
+
+
 logger = logging.getLogger("guidenco.ws_client")
 
 _FRAME_INTERVAL = 0.2   # seconds between forwarded frames (~5 fps)
