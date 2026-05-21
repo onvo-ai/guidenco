@@ -28,6 +28,8 @@ from config import CLOUD_URL, DEVICE_TOKEN
 from capture import get_manager as _get_capture
 from actions import execute as _execute, cleanup as _cleanup
 
+logger = logging.getLogger("guidenco.ws_client")
+
 
 class _CaptureTrack(VideoStreamTrack):
     """Feeds JPEG frames from CaptureManager into a WebRTC video track."""
@@ -79,26 +81,38 @@ async def _handle_webrtc_offer(
     sdp: str,
     ws: "websockets.WebSocketClientProtocol",
 ) -> None:
-    """Handle one WebRTC offer from the server: create a PC, send an answer."""
+    """Handle one WebRTC offer from the server: create a PC, send an answer, hold until closed."""
     mgr = _get_capture()
     sub = mgr.subscribe()
-
     pc = RTCPeerConnection()
     track = _CaptureTrack(sub)
     pc.addTrack(track)
+
+    closed = asyncio.Event()
+
+    @pc.on("connectionstatechange")
+    async def _on_state() -> None:
+        state = pc.connectionState
+        logger.info(f"[ws_client] WebRTC connectionState: {state}")
+        if state in ("failed", "closed", "disconnected"):
+            closed.set()
 
     try:
         await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="offer"))
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
 
-        # Vanilla ICE: wait until all candidates are gathered
-        deadline = asyncio.get_event_loop().time() + 10.0
+        # Vanilla ICE: wait until all candidates are gathered (max 10 s)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 10.0
         while pc.iceGatheringState != "complete":
-            if asyncio.get_event_loop().time() > deadline:
+            if loop.time() > deadline:
                 logger.warning("[ws_client] ICE gathering timed out after 10s, sending partial answer")
                 break
             await asyncio.sleep(0.1)
+
+        if not pc.localDescription or not pc.localDescription.sdp:
+            raise RuntimeError("localDescription is empty after ICE gathering")
 
         await ws.send(json.dumps({
             "type": "webrtc:answer",
@@ -106,23 +120,17 @@ async def _handle_webrtc_offer(
         }))
         logger.info("[ws_client] WebRTC answer sent")
 
-        # Keep the connection alive until it closes
-        @pc.on("connectionstatechange")
-        async def _on_state() -> None:
-            state = pc.connectionState
-            logger.info(f"[ws_client] WebRTC connectionState: {state}")
-            if state in ("failed", "closed", "disconnected"):
-                await pc.close()
-                mgr.unsubscribe(sub)
-                logger.info("[ws_client] WebRTC peer closed, capture unsubscribed")
+        # Hold the coroutine alive until the peer closes — keeps pc/sub from being GC'd
+        await closed.wait()
+        logger.info("[ws_client] WebRTC peer closed")
 
     except Exception as exc:
         logger.error(f"[ws_client] WebRTC offer handling failed: {exc}")
+    finally:
         await pc.close()
         mgr.unsubscribe(sub)
+        logger.info("[ws_client] WebRTC peer closed, capture unsubscribed")
 
-
-logger = logging.getLogger("guidenco.ws_client")
 
 _FRAME_INTERVAL = 0.2   # seconds between forwarded frames (~5 fps)
 _RECONNECT_DELAY = 5    # seconds before reconnect attempt
@@ -213,6 +221,9 @@ async def _sender(ws: websockets.WebSocketClientProtocol, send_q: asyncio.Queue)
         await ws.send(msg)
 
 
+_webrtc_tasks: set[asyncio.Task] = set()
+
+
 async def _receiver(ws: websockets.WebSocketClientProtocol):
     """Receive messages from cloud and dispatch actions or WebRTC offers."""
     async for raw in ws:
@@ -233,7 +244,9 @@ async def _receiver(ws: websockets.WebSocketClientProtocol):
         elif msg_type == "webrtc:offer":
             sdp = msg.get("sdp", "")
             if sdp:
-                asyncio.ensure_future(_handle_webrtc_offer(sdp, ws))
+                task = asyncio.create_task(_handle_webrtc_offer(sdp, ws))
+                _webrtc_tasks.add(task)
+                task.add_done_callback(_webrtc_tasks.discard)
             else:
                 logger.warning("[ws_client] received webrtc:offer with missing sdp")
 
