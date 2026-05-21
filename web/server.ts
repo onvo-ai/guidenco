@@ -155,6 +155,8 @@ app.prepare().then(async () => {
 
   const wss = new WebSocketServer({ noServer: true })
 
+  const nextUpgrade = app.getUpgradeHandler()
+
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = parse(req.url ?? '/', true)
     if (pathname === '/relay/ws') {
@@ -162,7 +164,8 @@ app.prepare().then(async () => {
         handleRelayUpgrade(ws, req)
       })
     } else {
-      socket.destroy()
+      // Forward all other WebSocket connections (Next.js HMR, etc.) to Next.js
+      nextUpgrade(req, socket, head)
     }
   })
 

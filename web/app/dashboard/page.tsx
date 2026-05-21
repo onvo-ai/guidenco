@@ -18,16 +18,25 @@ export default function DashboardPage() {
   const [devices, setDevices] = useState<Device[]>([])
   const [showModal, setShowModal] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
 
   async function fetchDevices() {
-    const res = await fetch('/api/devices')
-    if (res.status === 401) {
-      router.push('/sign-in')
-      return
+    try {
+      const res = await fetch('/api/devices', { credentials: 'include' })
+      console.log('[dashboard] /api/devices status:', res.status)
+      if (res.status === 401) {
+        setFetchError('Session expired (401). Please sign in again.')
+        setLoading(false)
+        return
+      }
+      const data = await res.json()
+      setDevices(data)
+      setLoading(false)
+    } catch (err) {
+      console.error('[dashboard] fetchDevices error:', err)
+      setFetchError(String(err))
+      setLoading(false)
     }
-    const data = await res.json()
-    setDevices(data)
-    setLoading(false)
   }
 
   useEffect(() => { fetchDevices() }, [])
@@ -59,6 +68,8 @@ export default function DashboardPage() {
 
       {loading ? (
         <p className="text-zinc-500 text-sm">Loading…</p>
+      ) : fetchError ? (
+        <p className="text-red-400 text-sm">{fetchError}</p>
       ) : devices.length === 0 ? (
         <div className="text-center py-20 text-zinc-500">
           <p className="text-lg mb-2">No devices yet</p>
