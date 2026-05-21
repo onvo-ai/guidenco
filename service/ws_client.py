@@ -94,7 +94,7 @@ async def _handle_webrtc_offer(
     async def _on_state() -> None:
         state = pc.connectionState
         logger.info(f"[ws_client] WebRTC connectionState: {state}")
-        if state in ("failed", "closed", "disconnected"):
+        if state in ("failed", "closed"):
             closed.set()
 
     try:

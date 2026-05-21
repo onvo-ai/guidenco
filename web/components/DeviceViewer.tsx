@@ -217,7 +217,11 @@ function useWebRTC(
 
         pc.onconnectionstatechange = () => {
           if (pc?.connectionState === 'failed' || pc?.connectionState === 'closed') {
-            if (!cancelled) setWebrtcActive(false)
+            if (!cancelled) {
+              setWebrtcActive(false)
+              webrtcActiveRef.current = false
+              if (videoRef.current) videoRef.current.srcObject = null
+            }
           }
         }
 
