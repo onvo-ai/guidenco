@@ -21,7 +21,7 @@ import av
 import numpy as np
 import websockets
 from PIL import Image
-from aiortc import MediaStreamError
+from aiortc import MediaStreamError, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import VideoStreamTrack
 
 from config import CLOUD_URL, DEVICE_TOKEN
@@ -73,6 +73,53 @@ class _CaptureTrack(VideoStreamTrack):
         self._stopped = True
         _get_capture().unsubscribe(self._sub)
         super().stop()
+
+
+async def _handle_webrtc_offer(
+    sdp: str,
+    ws: "websockets.WebSocketClientProtocol",
+) -> None:
+    """Handle one WebRTC offer from the server: create a PC, send an answer."""
+    mgr = _get_capture()
+    sub = mgr.subscribe()
+
+    pc = RTCPeerConnection()
+    track = _CaptureTrack(sub)
+    pc.addTrack(track)
+
+    try:
+        await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="offer"))
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+
+        # Vanilla ICE: wait until all candidates are gathered
+        deadline = asyncio.get_event_loop().time() + 10.0
+        while pc.iceGatheringState != "complete":
+            if asyncio.get_event_loop().time() > deadline:
+                logger.warning("[ws_client] ICE gathering timed out after 10s, sending partial answer")
+                break
+            await asyncio.sleep(0.1)
+
+        await ws.send(json.dumps({
+            "type": "webrtc:answer",
+            "sdp": pc.localDescription.sdp,
+        }))
+        logger.info("[ws_client] WebRTC answer sent")
+
+        # Keep the connection alive until it closes
+        @pc.on("connectionstatechange")
+        async def _on_state() -> None:
+            state = pc.connectionState
+            logger.info(f"[ws_client] WebRTC connectionState: {state}")
+            if state in ("failed", "closed", "disconnected"):
+                await pc.close()
+                mgr.unsubscribe(sub)
+                logger.info("[ws_client] WebRTC peer closed, capture unsubscribed")
+
+    except Exception as exc:
+        logger.error(f"[ws_client] WebRTC offer handling failed: {exc}")
+        await pc.close()
+        mgr.unsubscribe(sub)
 
 
 logger = logging.getLogger("guidenco.ws_client")
@@ -167,20 +214,28 @@ async def _sender(ws: websockets.WebSocketClientProtocol, send_q: asyncio.Queue)
 
 
 async def _receiver(ws: websockets.WebSocketClientProtocol):
-    """Receive messages from cloud and dispatch actions in a thread."""
+    """Receive messages from cloud and dispatch actions or WebRTC offers."""
     async for raw in ws:
         try:
             msg = json.loads(raw)
         except Exception:
             continue
 
-        if msg.get("type") == "action":
+        msg_type = msg.get("type")
+
+        if msg_type == "action":
             action = msg.get("action", {})
-            # Execute in a thread so async loop stays unblocked
             threading.Thread(
                 target=_run_action, args=(action,),
                 daemon=True, name="action-exec"
             ).start()
+
+        elif msg_type == "webrtc:offer":
+            sdp = msg.get("sdp", "")
+            if sdp:
+                asyncio.ensure_future(_handle_webrtc_offer(sdp, ws))
+            else:
+                logger.warning("[ws_client] received webrtc:offer with missing sdp")
 
 
 def _run_action(action: dict):
