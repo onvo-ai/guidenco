@@ -21,6 +21,7 @@ import av
 import numpy as np
 import websockets
 from PIL import Image
+from aiortc import MediaStreamError
 from aiortc.mediastreams import VideoStreamTrack
 
 from config import CLOUD_URL, DEVICE_TOKEN
@@ -55,7 +56,7 @@ class _CaptureTrack(VideoStreamTrack):
                 frame = self._sub.get(timeout=1.0)
             except queue.Empty:
                 if self._stopped:
-                    raise StopIteration("track stopped")
+                    raise MediaStreamError("_CaptureTrack stopped")
                 continue
             while True:
                 try:

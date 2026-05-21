@@ -90,6 +90,41 @@ async function handleCommand(req: IncomingMessage, res: ServerResponse, deviceId
   res.end(JSON.stringify({ ok: true }))
 }
 
+// POST /api/relay/:deviceId/input
+// Forwards a manual mouse/keyboard action directly to the Pi.
+async function handleInput(req: IncomingMessage, res: ServerResponse, deviceId: string) {
+  const session = await getSession(req)
+  if (!session) {
+    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Unauthorized' }))
+    return
+  }
+
+  const [device] = await db
+    .select({ id: devices.id })
+    .from(devices)
+    .where(and(eq(devices.id, deviceId), eq(devices.userId, session.user.id)))
+    .limit(1)
+
+  if (!device) {
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Not found' }))
+    return
+  }
+
+  const body = await readBody(req) as Record<string, unknown> | null
+  if (!body) {
+    res.writeHead(400, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Invalid body' }))
+    return
+  }
+
+  const { sendToDevice } = await import('./lib/relay')
+  const sent = sendToDevice(deviceId, JSON.stringify({ type: 'action', action: body }))
+  res.writeHead(sent ? 200 : 503, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify({ ok: sent }))
+}
+
 // GET /api/relay/:deviceId/stream — SSE, proxied from the Pi and agent events.
 // Handled here so addBrowserListener works against the same Map as the WS handler.
 async function handleStream(req: IncomingMessage, res: ServerResponse, deviceId: string) {
@@ -147,6 +182,13 @@ app.prepare().then(async () => {
     const streamMatch = pathname.match(/^\/api\/relay\/([^/]+)\/stream$/)
     if (streamMatch && req.method === 'GET') {
       await handleStream(req, res, streamMatch[1])
+      return
+    }
+
+    // Manual input relay — forwards mouse/keyboard actions to the Pi
+    const inputMatch = pathname.match(/^\/api\/relay\/([^/]+)\/input$/)
+    if (inputMatch && req.method === 'POST') {
+      await handleInput(req, res, inputMatch[1])
       return
     }
 
