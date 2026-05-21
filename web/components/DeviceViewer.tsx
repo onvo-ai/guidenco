@@ -164,9 +164,9 @@ function useWebRTC(
   fpsTime: React.MutableRefObject<number>,
   setFps: (n: number) => void,
   setHasFrame: (v: boolean) => void,
+  webrtcActiveRef: React.MutableRefObject<boolean>,
 ) {
   const videoRef   = useRef<HTMLVideoElement>(null)
-  const pcRef      = useRef<RTCPeerConnection | null>(null)
   const [webrtcActive, setWebrtcActive] = useState(false)
 
   useEffect(() => {
@@ -178,7 +178,6 @@ function useWebRTC(
         pc = new RTCPeerConnection({
           iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
         })
-        pcRef.current = pc
 
         pc.ontrack = (event) => {
           const video = videoRef.current
@@ -186,6 +185,7 @@ function useWebRTC(
           video.srcObject = event.streams[0]
           video.play().catch(() => {})
           if (cancelled) return
+          webrtcActiveRef.current = true   // synchronous — stops SSE frame processing immediately
           setWebrtcActive(true)
           setHasFrame(true)
 
@@ -237,7 +237,10 @@ function useWebRTC(
             }
           }
           pc!.addEventListener('icegatheringstatechange', onchange)
-          setTimeout(resolve, 5000)
+          setTimeout(() => {
+            pc!.removeEventListener('icegatheringstatechange', onchange)
+            resolve()
+          }, 5000)
         })
 
         if (cancelled) { pc.close(); return }
@@ -263,8 +266,8 @@ function useWebRTC(
     return () => {
       cancelled = true
       pc?.close()
-      pcRef.current = null
       setWebrtcActive(false)
+      webrtcActiveRef.current = false
     }
   }, [deviceId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -998,11 +1001,8 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
   const webrtcActiveRef = useRef(false)
 
   const { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, offline, fps, hasFrame, fpsCount, fpsTime, setFps, setHasFrame } = useStream(deviceId, webrtcActiveRef)
-  const { videoRef, webrtcActive } = useWebRTC(deviceId, fpsCount, fpsTime, setFps, setHasFrame)
+  const { videoRef, webrtcActive } = useWebRTC(deviceId, fpsCount, fpsTime, setFps, setHasFrame, webrtcActiveRef)
   const { running, startAgent, stopAgent } = useAgent(deviceId)
-
-  // Keep webrtcActiveRef in sync with webrtcActive state
-  useEffect(() => { webrtcActiveRef.current = webrtcActive }, [webrtcActive])
 
   // Mark done when agent finishes
   useEffect(() => {
