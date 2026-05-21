@@ -38,7 +38,8 @@ fi
 # ── 2. System packages ────────────────────────────────────────────────────────
 info "Installing system packages..."
 sudo apt-get update -q -y
-sudo apt-get install -y -q python3 python3-venv ffmpeg v4l-utils curl
+sudo apt-get install -y -q python3 python3-venv ffmpeg v4l-utils curl \
+  libsrtp2-dev libopus-dev python3-dev
 
 # ── 3. Download service ───────────────────────────────────────────────────────
 info "Downloading Guidenco service..."
