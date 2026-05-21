@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'http'
 import { parse } from 'url'
 import next from 'next'
 import { WebSocketServer } from 'ws'
-import { handleRelayUpgrade, addBrowserListener, isDeviceOnline, emitToListeners } from './lib/relay'
+import { handleRelayUpgrade, addBrowserListener, isDeviceOnline, emitToListeners, waitForWebRTCAnswer } from './lib/relay'
 import { startAgentLoop } from './lib/agent'
 import { ensureBucket } from './lib/minio'
 import { auth } from './lib/auth'
@@ -164,6 +164,62 @@ async function handleStream(req: IncomingMessage, res: ServerResponse, deviceId:
   req.on('close', remove)
 }
 
+// POST /api/relay/:deviceId/webrtc-offer
+// Receives browser SDP offer, forwards to Pi, returns Pi's SDP answer.
+async function handleWebRTCOffer(req: IncomingMessage, res: ServerResponse, deviceId: string) {
+  const session = await getSession(req)
+  if (!session) {
+    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Unauthorized' }))
+    return
+  }
+
+  const [device] = await db
+    .select({ id: devices.id })
+    .from(devices)
+    .where(and(eq(devices.id, deviceId), eq(devices.userId, session.user.id)))
+    .limit(1)
+
+  if (!device) {
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Not found' }))
+    return
+  }
+
+  if (!isDeviceOnline(deviceId)) {
+    res.writeHead(503, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Device offline' }))
+    return
+  }
+
+  const body = await readBody(req) as { sdp?: string; type?: string } | null
+  if (!body?.sdp) {
+    res.writeHead(400, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'sdp required' }))
+    return
+  }
+
+  // Register answer listener BEFORE sending offer to avoid race condition
+  const answerPromise = waitForWebRTCAnswer(deviceId)
+
+  const { sendToDevice } = await import('./lib/relay')
+  const sent = sendToDevice(deviceId, JSON.stringify({ type: 'webrtc:offer', sdp: body.sdp }))
+  if (!sent) {
+    res.writeHead(503, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Failed to reach device' }))
+    return
+  }
+
+  try {
+    const answerSdp = await answerPromise
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ type: 'answer', sdp: answerSdp }))
+  } catch {
+    res.writeHead(504, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Timeout waiting for WebRTC answer from device' }))
+  }
+}
+
 app.prepare().then(async () => {
   await ensureBucket()
 
@@ -189,6 +245,13 @@ app.prepare().then(async () => {
     const inputMatch = pathname.match(/^\/api\/relay\/([^/]+)\/input$/)
     if (inputMatch && req.method === 'POST') {
       await handleInput(req, res, inputMatch[1])
+      return
+    }
+
+    // WebRTC offer — browser sends SDP offer, server relays to Pi, returns answer
+    const webrtcOfferMatch = pathname.match(/^\/api\/relay\/([^/]+)\/webrtc-offer$/)
+    if (webrtcOfferMatch && req.method === 'POST') {
+      await handleWebRTCOffer(req, res, webrtcOfferMatch[1])
       return
     }
 
