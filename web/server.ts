@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'http'
 import { parse } from 'url'
 import next from 'next'
 import { WebSocketServer } from 'ws'
-import { handleRelayUpgrade, addBrowserListener, isDeviceOnline, emitToListeners, waitForWebRTCAnswer } from './lib/relay'
+import { handleRelayUpgrade, addBrowserListener, isDeviceOnline, emitToListeners, waitForWebRTCAnswer, sendToDevice, isWebRTCPending, cancelWebRTCPending } from './lib/relay'
 import { startAgentLoop } from './lib/agent'
 import { ensureBucket } from './lib/minio'
 import { auth } from './lib/auth'
@@ -119,7 +119,6 @@ async function handleInput(req: IncomingMessage, res: ServerResponse, deviceId: 
     return
   }
 
-  const { sendToDevice } = await import('./lib/relay')
   const sent = sendToDevice(deviceId, JSON.stringify({ type: 'action', action: body }))
   res.writeHead(sent ? 200 : 503, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ ok: sent }))
@@ -192,6 +191,12 @@ async function handleWebRTCOffer(req: IncomingMessage, res: ServerResponse, devi
     return
   }
 
+  if (isWebRTCPending(deviceId)) {
+    res.writeHead(409, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'WebRTC offer already in-flight for this device' }))
+    return
+  }
+
   const body = await readBody(req) as { sdp?: string; type?: string } | null
   if (!body?.sdp) {
     res.writeHead(400, { 'Content-Type': 'application/json' })
@@ -202,9 +207,9 @@ async function handleWebRTCOffer(req: IncomingMessage, res: ServerResponse, devi
   // Register answer listener BEFORE sending offer to avoid race condition
   const answerPromise = waitForWebRTCAnswer(deviceId)
 
-  const { sendToDevice } = await import('./lib/relay')
   const sent = sendToDevice(deviceId, JSON.stringify({ type: 'webrtc:offer', sdp: body.sdp }))
   if (!sent) {
+    cancelWebRTCPending(deviceId, new Error('Device not reachable'))
     res.writeHead(503, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Failed to reach device' }))
     return

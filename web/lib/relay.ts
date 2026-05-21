@@ -146,6 +146,20 @@ export function waitForWebRTCAnswer(deviceId: string): Promise<string> {
   })
 }
 
+/** Returns true if there is already a pending WebRTC offer for this device. */
+export function isWebRTCPending(deviceId: string): boolean {
+  return webrtcPending.has(deviceId)
+}
+
+/** Cancel a pending WebRTC offer promise with an error. */
+export function cancelWebRTCPending(deviceId: string, err: Error): void {
+  const pending = webrtcPending.get(deviceId)
+  if (pending) {
+    webrtcPending.delete(deviceId)
+    pending.reject(err)
+  }
+}
+
 /** Called internally (and exported for tests) when a webrtc:answer arrives. */
 export function _resolveWebRTCAnswer(deviceId: string, sdp: string): void {
   const pending = webrtcPending.get(deviceId)
