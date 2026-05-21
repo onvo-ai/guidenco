@@ -1,721 +1,912 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import Link from 'next/link'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Camera, Loader2, Send, Settings, Square } from 'lucide-react'
 
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
 // Types
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
 
-interface StreamItem {
-  id?: number
-  type: string
+interface AgentItem {
+  id: number
+  type: string           // agent:start | agent:step | agent:done | agent:error
+  goal?: string
   step?: number
-  action?: string
+  action?: string        // action type from agent:step
   reasoning?: string
   message?: string
-  goal?: string
-  tool?: string
-  args?: Record<string, unknown>
-  result?: string
-  data?: string
-  text?: string
 }
 
-interface SidebarPos {
-  x: number
-  y: number
-  width: number
-  height: number
+interface TodoItem {
+  text: string
+  done: boolean
 }
 
-// ============================================================
-// useStream — SSE connection that pipes frames to an <img> ref
-// ============================================================
+type TaskStatus = 'done' | 'failed' | null
+
+// ─────────────────────────────────────────────────────────────────────────────
+// localStorage helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getSaved<T>(key: string, fallback: T): T {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) as T : fallback } catch { return fallback }
+}
+function save(key: string, value: unknown) {
+  try { localStorage.setItem(key, JSON.stringify(value)) } catch {}
+}
+
+const POS_KEY      = 'guidenco-sidebar-pos'
+const SIZE_KEY     = 'guidenco-sidebar-size'
+const SECTIONS_KEY = 'guidenco-sidebar-sections'
+const INSTR_KEY    = 'guidenco-instructions'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// useStream — SSE, pipes frames directly to an <img> ref
+// ─────────────────────────────────────────────────────────────────────────────
 
 function useStream(deviceId: string) {
-  const imgRef = useRef<HTMLImageElement>(null)
-  const [items, setItems] = useState<StreamItem[]>([])
-  const [offline, setOffline] = useState(false)
+  const imgRef    = useRef<HTMLImageElement>(null)
+  const [items, setItems]       = useState<AgentItem[]>([])
+  const [currentGoal, setCurrentGoal] = useState('')
+  const [todoItems, setTodoItems]     = useState<TodoItem[]>([])
+  const [taskStatus, setTaskStatus]   = useState<TaskStatus>(null)
+  const [taskResultText, setTaskResultText] = useState<string | null>(null)
+  const [offline, setOffline]   = useState(false)
+  const [fps, setFps]           = useState(0)
   const [hasFrame, setHasFrame] = useState(false)
-  const [fps, setFps] = useState(0)
-  const frameCount = useRef(0)
-  const lastFpsTime = useRef(Date.now())
-  const idCounter = useRef(0)
+  const idRef    = useRef(0)
+  const fpsCount = useRef(0)
+  const fpsTime  = useRef(Date.now())
+
+  const clearItems = useCallback(() => {
+    setItems([])
+    setTodoItems([])
+    setTaskStatus(null)
+    setTaskResultText(null)
+  }, [])
 
   useEffect(() => {
     let es: EventSource | null = null
-    let reconnectTimer: ReturnType<typeof setTimeout>
+    let retryTimer: ReturnType<typeof setTimeout>
 
     function connect() {
       es = new EventSource(`/api/relay/${deviceId}/stream`)
 
       es.onmessage = (e) => {
-        let parsed: StreamItem
-        try {
-          parsed = JSON.parse(e.data)
-        } catch {
-          return
-        }
+        let parsed: Record<string, unknown>
+        try { parsed = JSON.parse(e.data as string) } catch { return }
 
+        // Video frame — update img directly, no React re-render
         if (parsed.type === 'frame') {
           if (imgRef.current && parsed.data) {
-            imgRef.current.src = `data:image/jpeg;base64,${parsed.data}`
+            imgRef.current.src = `data:image/jpeg;base64,${parsed.data as string}`
             setHasFrame(true)
           }
           setOffline(false)
-          frameCount.current++
+          fpsCount.current++
           const now = Date.now()
-          if (now - lastFpsTime.current >= 1000) {
-            setFps(frameCount.current)
-            frameCount.current = 0
-            lastFpsTime.current = now
+          if (now - fpsTime.current >= 1000) {
+            setFps(fpsCount.current)
+            fpsCount.current = 0
+            fpsTime.current  = now
           }
           return
         }
 
-        setItems((prev) => [...prev, { ...parsed, id: idCounter.current++ }])
+        const type = parsed.type as string
+
+        if (type === 'agent:start') {
+          clearItems()
+          setCurrentGoal((parsed.goal as string) ?? '')
+          setTaskStatus(null)
+          setTaskResultText(null)
+          return
+        }
+
+        if (type === 'agent:done') {
+          setTaskStatus('done')
+          setTaskResultText((parsed.message as string) ?? null)
+        }
+
+        if (type === 'agent:error') {
+          setTaskStatus('failed')
+          setTaskResultText((parsed.message as string) ?? null)
+        }
+
+        setItems(prev => [...prev, { id: idRef.current++, type, ...parsed } as AgentItem])
       }
 
       es.onerror = () => {
         setOffline(true)
         es?.close()
-        reconnectTimer = setTimeout(connect, 2000)
+        retryTimer = setTimeout(connect, 2000)
       }
     }
 
     connect()
+    return () => { clearTimeout(retryTimer); es?.close() }
+  }, [deviceId, clearItems])
 
-    return () => {
-      clearTimeout(reconnectTimer)
-      es?.close()
-    }
-  }, [deviceId])
-
-  return { imgRef, items, offline, hasFrame, fps }
+  return { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, offline, fps, hasFrame }
 }
 
-// ============================================================
-// useAgent — send goals / track running state
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// useAgent — POST command to start agent loop
+// ─────────────────────────────────────────────────────────────────────────────
 
 function useAgent(deviceId: string) {
   const [running, setRunning] = useState(false)
 
-  const sendGoal = useCallback(async (goal: string, instructions: string) => {
+  const startAgent = useCallback(async (goal: string, instructions: string) => {
     setRunning(true)
     await fetch(`/api/relay/${deviceId}/command`, {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goal, instructions }),
+      body:    JSON.stringify({ goal, instructions }),
     }).catch(() => {})
   }, [deviceId])
 
-  const markDone = useCallback(() => setRunning(false), [])
+  const stopAgent = useCallback(() => setRunning(false), [])
 
-  return { running, sendGoal, markDone }
+  return { running, startAgent, stopAgent }
 }
 
-// ============================================================
-// useManualInput — mouse / keyboard relay
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// useManualInput — pointer + keyboard relay
+// ─────────────────────────────────────────────────────────────────────────────
 
-function useManualInput(deviceId: string, enabled: boolean) {
-  const containerRef = useRef<HTMLDivElement>(null)
-
+function useManualInput(deviceId: string, mode: 'auto' | 'manual', shellRef: React.RefObject<HTMLDivElement | null>, imgRef: React.RefObject<HTMLImageElement | null>) {
   const send = useCallback(async (action: Record<string, unknown>) => {
     await fetch(`/api/relay/${deviceId}/input`, {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(action),
+      body:    JSON.stringify(action),
     }).catch(() => {})
   }, [deviceId])
 
+  // Compute the letterboxed image rect inside the shell div
+  function getViewRect(): { left: number; top: number; width: number; height: number } | null {
+    const shell = shellRef.current
+    const img   = imgRef.current
+    if (!shell || !img) return null
+    const nw = img.naturalWidth, nh = img.naturalHeight
+    if (!nw || !nh) return null
+    const r     = shell.getBoundingClientRect()
+    const scale = Math.min(r.width / nw, r.height / nh)
+    const dw    = nw * scale, dh = nh * scale
+    return { left: r.left + (r.width - dw) / 2, top: r.top + (r.height - dh) / 2, width: dw, height: dh }
+  }
+
   useEffect(() => {
-    if (!enabled) return
-    const el = containerRef.current
-    if (!el) return
-
-    function onMouseMove(e: MouseEvent) {
-      const rect = el!.getBoundingClientRect()
-      send({ type: 'mouse_move', x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height })
-    }
-
-    function onClick(e: MouseEvent) {
-      const rect = el!.getBoundingClientRect()
-      send({
-        type: 'click',
-        x: (e.clientX - rect.left) / rect.width,
-        y: (e.clientY - rect.top) / rect.height,
-        button: e.button === 2 ? 'right' : 'left',
-      })
-    }
+    if (mode !== 'manual') return
 
     function onKeyDown(e: KeyboardEvent) {
+      // Don't intercept when typing in an input/textarea
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'TEXTAREA' || tag === 'INPUT') return
       e.preventDefault()
       send({ type: 'key', key: e.key, modifiers: { shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey } })
     }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [mode, send])
 
-    function onContextMenu(e: MouseEvent) { e.preventDefault() }
+  function onPointerMove(e: React.PointerEvent) {
+    if (mode !== 'manual') return
+    const rect = getViewRect()
+    if (!rect) return
+    send({ type: 'mouse_move', x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height })
+  }
 
-    el.addEventListener('mousemove', onMouseMove)
-    el.addEventListener('click', onClick)
-    el.addEventListener('contextmenu', onContextMenu)
-    window.addEventListener('keydown', onKeyDown)
+  function onPointerDown(e: React.PointerEvent) {
+    if (mode !== 'manual') return
+    const rect = getViewRect()
+    if (!rect) return
+    send({ type: 'click', x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height, button: e.button === 2 ? 'right' : 'left' })
+  }
 
-    return () => {
-      el.removeEventListener('mousemove', onMouseMove)
-      el.removeEventListener('click', onClick)
-      el.removeEventListener('contextmenu', onContextMenu)
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [enabled, send])
+  function onPointerUp(_e: React.PointerEvent) { /* for drag support later */ }
+  function onContextMenu(e: React.MouseEvent) { if (mode === 'manual') e.preventDefault() }
 
-  return { containerRef }
+  return { onPointerMove, onPointerDown, onPointerUp, onContextMenu }
 }
 
-// ============================================================
-// ToolBubble
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// ChatInput
+// ─────────────────────────────────────────────────────────────────────────────
 
-const TOOL_ICONS: Record<string, string> = {
-  click: '🖱️',
-  type: '⌨️',
-  screenshot: '📷',
-  scroll: '↕️',
-  key: '⌨️',
-  move: '↔️',
-  drag: '✋',
+interface ChatInputProps {
+  input: string
+  setInput: (v: string) => void
+  onSend: () => void
+  onStop: () => void
+  disabled: boolean
+  running: boolean
 }
 
-function ToolBubble({ item }: { item: StreamItem }) {
-  const icon = TOOL_ICONS[item.tool ?? ''] ?? '🔧'
-  const argsStr = item.args ? JSON.stringify(item.args) : ''
-  const short = argsStr.length > 80 ? argsStr.slice(0, 80) + '…' : argsStr
+function ChatInput({ input, setInput, onSend, onStop, disabled, running }: ChatInputProps) {
+  const taRef = useRef<HTMLTextAreaElement>(null)
+
+  useLayoutEffect(() => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = '0px'
+    el.style.height = `${Math.max(60, el.scrollHeight)}px`
+  }, [input])
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() }
+  }
+
+  const canSend = !disabled && input.trim().length > 0
 
   return (
-    <div className="flex items-start gap-2 py-1">
-      <span className="text-sm shrink-0">{icon}</span>
-      <div className="text-xs text-white/60 break-all">
-        <span className="text-white/80 font-medium">{item.tool}</span>
-        {short && <span className="ml-1 text-white/40">{short}</span>}
+    <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '0 10px 0 0', gap: 8 }}>
+        <textarea
+          ref={taRef}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Ask the agent to do something…"
+          disabled={disabled}
+          style={{
+            flex: 1,
+            minHeight: 60,
+            padding: '14px 14px',
+            border: 'none',
+            background: 'transparent',
+            color: 'rgba(255,255,255,0.88)',
+            font: 'inherit',
+            fontSize: 13,
+            resize: 'none',
+            overflow: 'hidden',
+            outline: 'none',
+            lineHeight: 1.45,
+            boxSizing: 'border-box',
+          }}
+        />
+        {running ? (
+          <button
+            onClick={onStop}
+            type="button"
+            title="Stop agent"
+            style={{ flexShrink: 0, width: 30, height: 30, borderRadius: '50%', border: '1px solid rgba(255,80,80,0.4)', background: 'rgba(255,60,60,0.18)', color: 'rgba(255,120,120,0.9)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+          >
+            <Square size={12} fill="currentColor" />
+          </button>
+        ) : (
+          <button
+            onClick={onSend}
+            disabled={!canSend}
+            type="button"
+            title="Send"
+            style={{ flexShrink: 0, width: 30, height: 30, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.1)', background: canSend ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)', color: canSend ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: canSend ? 'pointer' : 'not-allowed' }}
+          >
+            <Send size={13} />
+          </button>
+        )}
+      </div>
+      <style>{`textarea::placeholder{color:rgba(255,255,255,0.22)!important}`}</style>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// StepBubble — one agent step
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface Step {
+  id: number
+  stepNum: number
+  reasoning: string
+  action: string
+}
+
+const ACTION_ICONS: Record<string, string> = {
+  click: '🖱️', double_click: '🖱️', right_click: '🖱️',
+  type: '⌨️', key: '⌨️',
+  scroll: '↕️', mouse_move: '↔️', drag: '✋',
+  wait: '⏳', done: '✓',
+}
+
+function StepBubble({ step }: { step: Step }) {
+  const [thinkOpen, setThinkOpen] = useState(false)
+  const icon = ACTION_ICONS[step.action] ?? '🔧'
+
+  return (
+    <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+      <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {/* Reasoning — collapsible */}
+        {step.reasoning && (
+          <div>
+            <button
+              onClick={() => setThinkOpen(o => !o)}
+              style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', padding: '3px 0', cursor: 'pointer', width: '100%', textAlign: 'left' }}
+            >
+              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', lineHeight: 1 }}>{thinkOpen ? '▾' : '▸'}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Thinking</span>
+              {!thinkOpen && (
+                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.2)', marginLeft: 4, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', flex: 1 }}>
+                  {step.reasoning.slice(0, 80)}
+                </span>
+              )}
+            </button>
+            {thinkOpen && (
+              <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, color: 'rgba(255,255,255,0.4)', lineHeight: 1.5 }}>
+                {step.reasoning}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Action */}
+        {step.action && step.action !== 'done' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 14 }}>{icon}</span>
+            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', fontFamily: 'ui-monospace,monospace' }}>{step.action}</span>
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
-// ============================================================
-// ChatFeed — groups stream items into collapsible steps
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// ChatFeed
+// ─────────────────────────────────────────────────────────────────────────────
 
-interface Step {
-  n: number
-  items: StreamItem[]
-}
-
-function groupSteps(items: StreamItem[]): Step[] {
-  const steps: Step[] = []
-  let current: Step | null = null
-
-  for (const item of items) {
-    if (item.type === 'agent:start') {
-      current = { n: 0, items: [item] }
-      steps.push(current)
-    } else if (item.type === 'agent:step') {
-      if (!current) { current = { n: 0, items: [] }; steps.push(current) }
-      current.n = item.step ?? current.n + 1
-      current.items.push(item)
-    } else if (item.type === 'agent:done' || item.type === 'agent:error') {
-      if (!current) { current = { n: 0, items: [] }; steps.push(current) }
-      current.items.push(item)
-      current = null
-    } else {
-      if (!current) { current = { n: 0, items: [] }; steps.push(current) }
-      current.items.push(item)
-    }
-  }
-
-  return steps
-}
-
-function FeedItem({ item }: { item: StreamItem }) {
-  switch (item.type) {
-    case 'agent:start':
-      return <div className="text-xs text-white/70 py-1">▶ <span className="text-white/90 font-medium">{item.goal}</span></div>
-    case 'agent:step':
-      return item.reasoning
-        ? <div className="text-xs text-white/40 italic py-0.5">{item.reasoning}</div>
-        : null
-    case 'agent:tool_call':
-      return <ToolBubble item={item} />
-    case 'agent:done':
-      return <div className="text-xs text-green-400 py-1">✓ {item.message ?? 'Done'}</div>
-    case 'agent:error':
-      return <div className="text-xs text-red-400 py-1">✗ {item.message ?? 'Error'}</div>
-    default:
-      return <div className="text-xs text-white/30 py-0.5">{item.message ?? item.text ?? item.type}</div>
-  }
-}
-
-function StepGroup({ step }: { step: Step }) {
-  const [open, setOpen] = useState(true)
-  const hasContent = step.items.some(i => i.type !== 'agent:start')
-
-  return (
-    <div className="mb-2">
-      {step.n > 0 && (
-        <button
-          onClick={() => setOpen(!open)}
-          className="w-full text-left text-xs text-white/40 hover:text-white/70 flex items-center gap-1 py-0.5"
-        >
-          <span>{open ? '▾' : '▸'}</span>
-          <span>Step {step.n}</span>
-        </button>
-      )}
-      {(open || !hasContent) && (
-        <div className={step.n > 0 ? 'pl-3 border-l border-white/10' : ''}>
-          {step.items.map((item, i) => <FeedItem key={i} item={item} />)}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function ChatFeed({ items, onDone }: { items: StreamItem[]; onDone?: () => void }) {
-  const bottomRef = useRef<HTMLDivElement>(null)
+function ChatFeed({ items }: { items: AgentItem[] }) {
+  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = containerRef.current
+    if (el) el.scrollTop = el.scrollHeight
   }, [items])
 
-  useEffect(() => {
-    const last = items[items.length - 1]
-    if (last && (last.type === 'agent:done' || last.type === 'agent:error')) {
-      onDone?.()
-    }
-  }, [items, onDone])
+  const steps: Step[] = items
+    .filter(i => i.type === 'agent:step')
+    .map(i => ({ id: i.id, stepNum: i.step ?? 0, reasoning: i.reasoning ?? '', action: i.action ?? '' }))
 
-  const steps = groupSteps(items)
-
-  if (items.length === 0) {
+  if (steps.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-xs text-white/20">No activity yet</p>
+      <div ref={containerRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.18)', fontSize: 12, padding: '12px 16px' }}>
+          Start a chat to see agent reasoning here.
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-1 py-1 space-y-0.5">
-      {steps.map((step, i) => (
-        <StepGroup key={i} step={step} />
-      ))}
-      <div ref={bottomRef} />
+    <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', gap: 0, flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+      {steps.map(s => <StepBubble key={s.id} step={s} />)}
     </div>
   )
 }
 
-// ============================================================
-// ChatInput — auto-resize textarea
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// SidebarContent — Goal / Todo / Steps / Feed / Input
+// ─────────────────────────────────────────────────────────────────────────────
 
-function ChatInput({
-  onSend,
-  running,
-  disabled,
-}: {
-  onSend: (goal: string) => void
+interface SidebarContentProps {
+  currentGoal: string
+  todoItems: TodoItem[]
+  items: AgentItem[]
+  taskStatus: TaskStatus
+  taskResultText: string | null
   running: boolean
-  disabled: boolean
-}) {
-  const [text, setText] = useState('')
-  const taRef = useRef<HTMLTextAreaElement>(null)
-
-  function autoResize() {
-    const ta = taRef.current
-    if (!ta) return
-    ta.style.height = 'auto'
-    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      submit()
-    }
-  }
-
-  function submit() {
-    const t = text.trim()
-    if (!t || running || disabled) return
-    onSend(t)
-    setText('')
-    if (taRef.current) taRef.current.style.height = 'auto'
-  }
-
-  return (
-    <div className="flex gap-2 items-end">
-      <textarea
-        ref={taRef}
-        value={text}
-        onChange={(e) => { setText(e.target.value); autoResize() }}
-        onKeyDown={handleKeyDown}
-        placeholder={disabled ? 'Device offline' : 'Give the agent a goal…'}
-        disabled={disabled || running}
-        rows={1}
-        className="flex-1 resize-none rounded-xl bg-white/10 border border-white/20 text-sm text-white placeholder-white/25 px-3 py-2 focus:outline-none focus:border-white/50 disabled:opacity-40 transition"
-      />
-      <button
-        onClick={submit}
-        disabled={disabled || running || !text.trim()}
-        className="rounded-xl bg-white text-black text-sm font-medium px-3 py-2 shrink-0 hover:bg-white/90 disabled:opacity-30 transition"
-      >
-        {running ? '…' : 'Send'}
-      </button>
-    </div>
-  )
+  input: string
+  setInput: (v: string) => void
+  onSend: () => void
+  onStop: () => void
 }
 
-// ============================================================
-// SettingsModal
-// ============================================================
+function SidebarContent({ currentGoal, todoItems, items, taskStatus, taskResultText, running, input, setInput, onSend, onStop }: SidebarContentProps) {
+  const initSections = getSaved<{ todo: boolean; steps: boolean }>(SECTIONS_KEY, { todo: true, steps: true })
+  const [todoOpen,  setTodoOpen]  = useState(initSections.todo)
+  const [stepsOpen, setStepsOpen] = useState(initSections.steps)
 
-function SettingsModal({
-  instructions,
-  onSave,
-  onClose,
-}: {
-  instructions: string
-  onSave: (v: string) => void
-  onClose: () => void
-}) {
-  const [draft, setDraft] = useState(instructions)
+  function toggleTodo()  { const n = !todoOpen;  setTodoOpen(n);  save(SECTIONS_KEY, { todo: n, steps: stepsOpen }) }
+  function toggleSteps() { const n = !stepsOpen; setStepsOpen(n); save(SECTIONS_KEY, { todo: todoOpen, steps: n }) }
+
+  const completed = todoItems.filter(i => i?.done).length
+  const allDone   = todoItems.length > 0 && completed === todoItems.length
+  const stepCount = items.filter(i => i.type === 'agent:step').length
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-2xl bg-zinc-900 border border-white/10 p-6 flex flex-col gap-4 shadow-2xl">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-white">Settings</h2>
-          <button onClick={onClose} className="text-white/40 hover:text-white text-xl leading-none">✕</button>
+    <>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+
+        {/* ── Goal ─────────────────────────────────────────────────────────── */}
+        <div style={sectionStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={labelStyle}>Goal</div>
+              <div style={goalTextStyle}>{currentGoal || 'No active goal.'}</div>
+            </div>
+            {currentGoal && (
+              taskStatus === 'done' ? (
+                <div style={statusBadge('#4ade80', 'rgba(74,222,128,0.2)')}>✓</div>
+              ) : taskStatus === 'failed' ? (
+                <div style={statusBadge('#f87171', 'rgba(248,113,113,0.2)')}>✗</div>
+              ) : running ? (
+                <div style={statusBadge('rgba(255,255,255,0.35)', 'rgba(255,255,255,0.07)')}>
+                  <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} />
+                  <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+                </div>
+              ) : null
+            )}
+          </div>
+          {taskResultText && taskStatus && (
+            <div style={{
+              marginTop: 8, padding: '8px 10px', borderRadius: 8,
+              background: taskStatus === 'done' ? 'rgba(74,222,128,0.1)' : 'rgba(248,113,113,0.1)',
+              border: `1px solid ${taskStatus === 'done' ? 'rgba(74,222,128,0.25)' : 'rgba(248,113,113,0.25)'}`,
+              fontSize: 12, lineHeight: 1.5,
+              color: taskStatus === 'done' ? '#86efac' : '#fca5a5',
+            }}>
+              {taskResultText}
+            </div>
+          )}
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs text-white/50">Additional instructions (appended to every goal)</label>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            rows={5}
-            className="rounded-xl bg-white/10 border border-white/20 text-sm text-white placeholder-white/30 px-3 py-2 focus:outline-none resize-none focus:border-white/50"
-            placeholder="e.g. Always prefer dark mode. Use keyboard shortcuts when possible."
-          />
+        {/* ── Todo ─────────────────────────────────────────────────────────── */}
+        <div style={sectionStyle}>
+          <button onClick={toggleTodo} style={collapsibleHeaderStyle}>
+            <span style={labelStyle}>Todo</span>
+            <span style={{ ...countStyle, ...(allDone ? { color: '#4ade80' } : {}) }}>
+              {todoItems.length ? `${completed} / ${todoItems.length}` : '0 items'}
+            </span>
+            <span style={chevronStyle}>{todoOpen ? '▾' : '▸'}</span>
+          </button>
+          {todoOpen && (
+            <div style={{ marginTop: 6 }}>
+              {todoItems.length === 0 ? (
+                <div style={emptyStyle}>The agent has not created a plan yet.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {todoItems.map((item, i) => (
+                    <label key={i} style={todoRowStyle}>
+                      <input type="checkbox" checked={!!item.done} readOnly
+                        style={{ marginTop: 2, flexShrink: 0, accentColor: '#3b82f6', cursor: 'default', pointerEvents: 'none' }} />
+                      <span style={item.done ? todoDoneStyle : todoTextStyle}>{item.text}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        <div className="flex justify-end gap-2 pt-1">
-          <button onClick={onClose} className="text-sm text-white/40 hover:text-white px-3 py-1.5">Cancel</button>
-          <button
-            onClick={() => { onSave(draft); onClose() }}
-            className="text-sm bg-white text-black font-medium px-4 py-1.5 rounded-xl hover:bg-white/90"
-          >
-            Save
+        {/* ── Steps header ─────────────────────────────────────────────────── */}
+        <div style={{ ...sectionStyle, flexShrink: 0 }}>
+          <button onClick={toggleSteps} style={collapsibleHeaderStyle}>
+            <span style={labelStyle}>Steps</span>
+            <span style={{
+              ...countStyle,
+              ...(taskStatus === 'done' ? { color: '#4ade80' } : taskStatus === 'failed' ? { color: '#f87171' } : {}),
+            }}>
+              {stepCount > 0 ? `${stepCount} steps` : '0 steps'}
+            </span>
+            <span style={chevronStyle}>{stepsOpen ? '▾' : '▸'}</span>
           </button>
         </div>
+
+        {/* ── Steps feed ───────────────────────────────────────────────────── */}
+        {stepsOpen ? (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <ChatFeed items={items} />
+          </div>
+        ) : (
+          <div style={{ flex: 1, minHeight: 0 }} />
+        )}
       </div>
-    </div>
+
+      {/* ── Input — pinned to bottom ──────────────────────────────────────── */}
+      <ChatInput input={input} setInput={setInput} onSend={onSend} onStop={onStop} disabled={false} running={running} />
+    </>
   )
 }
 
-// ============================================================
-// FloatingSidebar — draggable + resizable glassmorphism panel
-// ============================================================
-
-const DEFAULT_POS: SidebarPos = { x: 20, y: 56, width: 320, height: 520 }
-const STORAGE_KEY = 'guidenco-sidebar-pos'
-
-function loadPos(): SidebarPos {
-  try {
-    const s = localStorage.getItem(STORAGE_KEY)
-    if (s) return JSON.parse(s)
-  } catch {}
-  return DEFAULT_POS
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// FloatingSidebar
+// ─────────────────────────────────────────────────────────────────────────────
 
 function FloatingSidebar({ children }: { children: React.ReactNode }) {
-  const [pos, setPos] = useState<SidebarPos>(DEFAULT_POS)
-  const posRef = useRef(pos)
-  const dragging = useRef(false)
-  const resizing = useRef(false)
-  const start = useRef({ mx: 0, my: 0, x: 0, y: 0, width: 0, height: 0 })
+  const initSize = getSaved<{ w: number; h: number | null }>(SIZE_KEY, { w: 320, h: null })
+  const [pos,  setPos]  = useState<{ x: number; y: number } | null>(null)
+  const [size, setSize] = useState(initSize)
+  const sidebarRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const p = loadPos()
-    setPos(p)
-    posRef.current = p
+    const saved = getSaved<{ x: number; y: number } | null>(POS_KEY, null)
+    const w = size.w || 320
+    const h = size.h || 400
+    if (!saved) {
+      const p = { x: window.innerWidth - w - 20, y: 20 }
+      setPos(p); save(POS_KEY, p)
+    } else {
+      const clamped = {
+        x: Math.max(10, Math.min(window.innerWidth  - w - 10, saved.x)),
+        y: Math.max(10, Math.min(window.innerHeight - h - 10, saved.y)),
+      }
+      setPos(clamped); save(POS_KEY, clamped)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    posRef.current = pos
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(pos)) } catch {}
-  }, [pos])
+  function savePos(p: { x: number; y: number }) { setPos(p); save(POS_KEY, p) }
+  function saveSize(s: { w: number; h: number | null }) { setSize(s); save(SIZE_KEY, s) }
 
-  function onDragDown(e: React.MouseEvent) {
+  function onDragMouseDown(e: React.MouseEvent) {
+    if (e.button !== 0) return
     e.preventDefault()
-    dragging.current = true
-    start.current = { mx: e.clientX, my: e.clientY, ...posRef.current }
-  }
-
-  function onResizeDown(e: React.MouseEvent) {
-    e.preventDefault()
-    e.stopPropagation()
-    resizing.current = true
-    start.current = { mx: e.clientX, my: e.clientY, ...posRef.current }
-  }
-
-  useEffect(() => {
+    const startX = e.clientX - (pos?.x ?? 0)
+    const startY = e.clientY - (pos?.y ?? 0)
+    const el = sidebarRef.current
     function onMove(e: MouseEvent) {
-      if (dragging.current) {
-        const dx = e.clientX - start.current.mx
-        const dy = e.clientY - start.current.my
-        setPos(p => ({
-          ...p,
-          x: Math.max(0, start.current.x + dx),
-          y: Math.max(0, start.current.y + dy),
-        }))
-      }
-      if (resizing.current) {
-        const dw = e.clientX - start.current.mx
-        const dh = e.clientY - start.current.my
-        setPos(p => ({
-          ...p,
-          width: Math.max(240, start.current.width + dw),
-          height: Math.max(200, start.current.height + dh),
-        }))
-      }
+      const w = el ? el.offsetWidth  : (size.w || 320)
+      const h = el ? el.offsetHeight : (size.h || 400)
+      savePos({
+        x: Math.max(10, Math.min(window.innerWidth  - w - 10, e.clientX - startX)),
+        y: Math.max(10, Math.min(window.innerHeight - h - 10, e.clientY - startY)),
+      })
     }
-    function onUp() { dragging.current = false; resizing.current = false }
-
+    function onUp() { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+  }
+
+  function onResizeMouseDown(e: React.MouseEvent) {
+    if (e.button !== 0) return
+    e.preventDefault(); e.stopPropagation()
+    const el = sidebarRef.current
+    const startX = e.clientX, startY = e.clientY
+    const startW = el ? el.offsetWidth  : (size.w || 320)
+    const startH = el ? el.offsetHeight : (size.h || 500)
+    function onMove(e: MouseEvent) {
+      saveSize({
+        w: Math.min(window.innerWidth  - 20, Math.max(260, startW + (e.clientX - startX))),
+        h: Math.min(window.innerHeight - 20, Math.max(240, startH + (e.clientY - startY))),
+      })
     }
-  }, [])
+    function onUp() { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  if (!pos) return null
 
   return (
     <div
-      style={{ position: 'fixed', left: pos.x, top: pos.y, width: pos.width, height: pos.height, zIndex: 40 }}
-      className="flex flex-col rounded-2xl overflow-hidden shadow-2xl"
+      ref={sidebarRef}
+      style={{
+        position: 'fixed',
+        left: pos.x,
+        top:  pos.y,
+        width: size.w || 320,
+        ...(size.h ? { height: size.h } : { maxHeight: 'calc(100vh - 40px)' }),
+        zIndex: 100,
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'rgba(10, 10, 16, 0.55)',
+        backdropFilter: 'blur(28px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(28px) saturate(180%)',
+        border: '1px solid rgba(255,255,255,0.12)',
+        borderRadius: 14,
+        overflow: 'hidden',
+        boxShadow: '0 24px 64px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06)',
+        userSelect: 'none',
+      }}
     >
-      {/* Glassmorphism bg */}
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-2xl border border-white/10 rounded-2xl pointer-events-none" />
-
       {/* Drag handle */}
       <div
-        onMouseDown={onDragDown}
-        className="relative z-10 flex items-center justify-center h-7 shrink-0 cursor-grab active:cursor-grabbing"
+        onMouseDown={onDragMouseDown}
+        style={{ height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', flexShrink: 0, borderBottom: '1px solid rgba(255,255,255,0.05)' }}
       >
-        <div className="w-10 h-1 rounded-full bg-white/20" />
+        <div style={{ width: 32, height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.18)' }} />
       </div>
 
       {/* Content */}
-      <div className="relative z-10 flex-1 overflow-hidden flex flex-col px-3 pb-3 min-h-0">
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, userSelect: 'text' }}>
         {children}
       </div>
 
-      {/* Resize handle */}
+      {/* Resize grip */}
       <div
-        onMouseDown={onResizeDown}
-        className="absolute bottom-0 right-0 w-6 h-6 cursor-se-resize z-20 flex items-end justify-end pr-1.5 pb-1.5"
+        onMouseDown={onResizeMouseDown}
+        style={{ position: 'absolute', bottom: 0, right: 0, width: 18, height: 18, cursor: 'nwse-resize', display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', padding: 4 }}
       >
-        <div className="w-3 h-3 border-r-2 border-b-2 border-white/25 rounded-br" />
+        <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+          <path d="M1 7L7 1M4 7L7 4M7 7L7 7" stroke="rgba(255,255,255,0.25)" strokeWidth="1.2" strokeLinecap="round"/>
+        </svg>
       </div>
     </div>
   )
 }
 
-// ============================================================
-// SidebarContent
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// SettingsModal
+// ─────────────────────────────────────────────────────────────────────────────
 
-function SidebarContent({
-  deviceName,
-  items,
-  running,
-  disabled,
-  onSend,
-  onDone,
-  instructions,
-  onInstructionsChange,
-}: {
-  deviceName: string
-  items: StreamItem[]
-  running: boolean
-  disabled: boolean
-  onSend: (goal: string) => void
-  onDone: () => void
-  instructions: string
-  onInstructionsChange: (v: string) => void
-}) {
-  const [showSettings, setShowSettings] = useState(false)
+function SettingsModal({ open, instructions, onSave, onClose }: { open: boolean; instructions: string; onSave: (v: string) => void; onClose: () => void }) {
+  const [draft, setDraft] = useState(instructions)
+  useEffect(() => { if (open) setDraft(instructions) }, [open, instructions])
+  if (!open) return null
 
   return (
-    <div className="flex flex-col h-full gap-2 min-h-0">
-      {/* Header */}
-      <div className="flex items-center justify-between shrink-0 pt-0.5">
-        <span className="text-sm font-semibold text-white truncate">{deviceName}</span>
-        <div className="flex items-center gap-2">
-          {running && (
-            <span className="text-xs text-yellow-400/80 animate-pulse">Running…</span>
-          )}
-          <button
-            onClick={() => setShowSettings(true)}
-            className="text-white/30 hover:text-white/80 transition text-lg leading-none"
-            title="Settings"
-          >
-            ⚙
-          </button>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}>
+      <div style={{ width: '90%', maxWidth: 420, borderRadius: 14, background: 'rgb(18,18,26)', border: '1px solid rgba(255,255,255,0.1)', padding: 24, display: 'flex', flexDirection: 'column', gap: 16, boxShadow: '0 24px 64px rgba(0,0,0,0.7)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}>Settings</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Additional instructions</label>
+          <textarea
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            rows={5}
+            placeholder="e.g. Always prefer dark mode. Use keyboard shortcuts."
+            style={{ borderRadius: 8, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.85)', fontSize: 13, padding: '10px 12px', resize: 'none', outline: 'none', fontFamily: 'inherit', lineHeight: 1.45 }}
+          />
+          <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', margin: 0 }}>Appended to every goal you send.</p>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={{ fontSize: 13, color: 'rgba(255,255,255,0.45)', background: 'none', border: 'none', cursor: 'pointer', padding: '6px 12px' }}>Cancel</button>
+          <button onClick={() => { onSave(draft); onClose() }} style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, cursor: 'pointer', padding: '6px 16px' }}>Save</button>
         </div>
       </div>
-
-      {/* Feed */}
-      <ChatFeed items={items} onDone={onDone} />
-
-      {/* Input */}
-      <div className="shrink-0">
-        <ChatInput onSend={onSend} running={running} disabled={disabled} />
-      </div>
-
-      {showSettings && (
-        <SettingsModal
-          instructions={instructions}
-          onSave={onInstructionsChange}
-          onClose={() => setShowSettings(false)}
-        />
-      )}
     </div>
   )
 }
 
-// ============================================================
-// Main DeviceViewer export
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// Viewer — top controls + full-screen stream
+// ─────────────────────────────────────────────────────────────────────────────
 
-export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; deviceName?: string }) {
-  const [mode, setMode] = useState<'auto' | 'manual'>('auto')
-  const [instructions, setInstructions] = useState<string>('')
+interface ViewerProps {
+  imgRef: React.RefObject<HTMLImageElement | null>
+  shellRef: React.RefObject<HTMLDivElement | null>
+  mode: 'auto' | 'manual'
+  fps: number
+  hasFrame: boolean
+  offline: boolean
+  onModeChange: (m: 'auto' | 'manual') => void
+  onSnapshot: () => void
+  onOpenSettings: () => void
+  onPointerMove: (e: React.PointerEvent) => void
+  onPointerDown: (e: React.PointerEvent) => void
+  onPointerUp: (e: React.PointerEvent) => void
+  onContextMenu: (e: React.MouseEvent) => void
+}
 
-  // Load instructions from localStorage on mount (client only)
-  useEffect(() => {
-    try {
-      setInstructions(localStorage.getItem('guidenco-instructions') ?? '')
-    } catch {}
-  }, [])
-
-  const { imgRef, items, offline, hasFrame, fps } = useStream(deviceId)
-  const { running, sendGoal, markDone } = useAgent(deviceId)
-  const { containerRef } = useManualInput(deviceId, mode === 'manual')
-
-  function handleSend(goal: string) {
-    sendGoal(goal, instructions)
-  }
-
-  function handleInstructionsChange(v: string) {
-    setInstructions(v)
-    try { localStorage.setItem('guidenco-instructions', v) } catch {}
-  }
-
-  const name = deviceName ?? deviceId
+function Viewer({ imgRef, shellRef, mode, fps, hasFrame, offline, onModeChange, onSnapshot, onOpenSettings, onPointerMove, onPointerDown, onPointerUp, onContextMenu }: ViewerProps) {
+  const [showSnapshotTip, setShowSnapshotTip] = useState(false)
+  const [showSettingsTip, setShowSettingsTip] = useState(false)
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: '#0a0a0a', zIndex: 10 }}>
-
-      {/* ── Top bar ── */}
-      <div className="absolute top-0 left-0 right-0 z-30 flex items-center gap-3 px-4 h-14 bg-gradient-to-b from-black/70 to-transparent backdrop-blur-sm">
-        <Link
-          href="/dashboard"
-          className="text-white/40 hover:text-white/80 text-sm transition shrink-0"
-        >
-          ← Devices
-        </Link>
-        <span className="text-white/20">/</span>
-        <span className="text-white/80 text-sm font-medium truncate">{name}</span>
-
-        <div className="ml-auto flex items-center gap-3">
-          {fps > 0 && (
-            <span className="text-white/25 text-xs tabular-nums">{fps} fps</span>
-          )}
-          {offline && (
-            <span className="text-red-400 text-xs bg-red-500/10 border border-red-500/20 px-2 py-0.5 rounded-full">
-              Offline
-            </span>
-          )}
-
-          {/* Auto / Manual toggle */}
-          <div className="flex rounded-lg overflow-hidden border border-white/10 text-xs">
-            <button
-              onClick={() => setMode('auto')}
-              className={`px-3 py-1.5 transition ${
-                mode === 'auto'
-                  ? 'bg-white/20 text-white'
-                  : 'text-white/35 hover:text-white/65 hover:bg-white/5'
-              }`}
-            >
-              Auto
-            </button>
-            <button
-              onClick={() => setMode('manual')}
-              className={`px-3 py-1.5 transition ${
-                mode === 'manual'
-                  ? 'bg-white/20 text-white'
-                  : 'text-white/35 hover:text-white/65 hover:bg-white/5'
-              }`}
-            >
-              Manual
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Video display ── */}
+    <div style={{ position: 'absolute', inset: 0 }}>
+      {/* Stream */}
       <div
-        ref={containerRef}
-        className="absolute inset-0 flex items-center justify-center"
-        style={{ cursor: mode === 'manual' ? 'crosshair' : 'default' }}
+        ref={shellRef}
+        style={{ position: 'absolute', inset: 0, background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', touchAction: 'none' }}
+        onPointerMove={onPointerMove}
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onContextMenu={onContextMenu}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           ref={imgRef}
-          alt="Device screen"
-          className="max-w-full max-h-full object-contain"
-          style={{ display: hasFrame ? 'block' : 'none' }}
+          alt="display stream"
+          style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', userSelect: 'none', pointerEvents: 'none' }}
+          draggable={false}
         />
         {!hasFrame && (
-          <p className="text-white/20 text-sm select-none">
-            {offline ? 'Device offline' : 'Waiting for signal…'}
-          </p>
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: 13 }}>
+              {offline ? 'Device offline' : 'Waiting for signal…'}
+            </span>
+          </div>
         )}
       </div>
 
-      {/* ── Floating sidebar ── */}
-      <FloatingSidebar>
-        <SidebarContent
-          deviceName={name}
-          items={items}
-          running={running}
-          disabled={offline}
-          onSend={handleSend}
-          onDone={markDone}
-          instructions={instructions}
-          onInstructionsChange={handleInstructionsChange}
-        />
-      </FloatingSidebar>
+      {/* Centered top controls pill */}
+      <div style={{
+        position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+        zIndex: 50, display: 'flex', alignItems: 'center', gap: 6,
+        padding: '5px 8px', borderRadius: 10,
+        background: 'rgba(0,0,0,0.52)',
+        backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
+        border: '1px solid rgba(255,255,255,0.1)',
+        whiteSpace: 'nowrap',
+      }}>
+        {/* Auto / Manual toggle */}
+        <div style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 7, background: 'rgba(255,255,255,0.07)' }}>
+          <ToggleBtn active={mode === 'auto'}   onClick={() => onModeChange('auto')}>Auto</ToggleBtn>
+          <ToggleBtn active={mode === 'manual'} onClick={() => onModeChange('manual')}>Manual</ToggleBtn>
+        </div>
 
-      {/* ── Manual mode indicator ── */}
-      {mode === 'manual' && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 bg-black/60 text-white/50 text-xs px-4 py-1.5 rounded-full backdrop-blur-sm border border-white/10 pointer-events-none select-none">
+        <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
+
+        {fps > 0 && (
+          <>
+            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', minWidth: 40, textAlign: 'center' }}>{fps} fps</span>
+            <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
+          </>
+        )}
+
+        {/* Snapshot */}
+        <div style={{ position: 'relative' }} onMouseEnter={() => setShowSnapshotTip(true)} onMouseLeave={() => setShowSnapshotTip(false)}>
+          <IconBtn onClick={onSnapshot}><Camera size={14} /></IconBtn>
+          {showSnapshotTip && <Tooltip>Snapshot</Tooltip>}
+        </div>
+
+        {/* Settings */}
+        <div style={{ position: 'relative' }} onMouseEnter={() => setShowSettingsTip(true)} onMouseLeave={() => setShowSettingsTip(false)}>
+          <IconBtn onClick={onOpenSettings}><Settings size={14} /></IconBtn>
+          {showSettingsTip && <Tooltip>Settings</Tooltip>}
+        </div>
+
+        {offline && (
+          <>
+            <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
+            <span style={{ fontSize: 11, color: '#f87171' }}>Offline</span>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ToggleBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} type="button" style={{
+      padding: '4px 10px', borderRadius: 5, border: 'none',
+      background: active ? 'rgba(59,130,246,0.75)' : 'transparent',
+      color: active ? '#fff' : 'rgba(255,255,255,0.5)',
+      fontSize: 12, fontWeight: 600, cursor: 'pointer',
+    }}>
+      {children}
+    </button>
+  )
+}
+
+function IconBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} type="button" style={{ padding: '4px 6px', borderRadius: 6, border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.55)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+      {children}
+    </button>
+  )
+}
+
+function Tooltip({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.82)', color: 'rgba(255,255,255,0.88)', fontSize: 11, fontWeight: 500, padding: '3px 8px', borderRadius: 5, whiteSpace: 'nowrap', pointerEvents: 'none', border: '1px solid rgba(255,255,255,0.1)' }}>
+      {children}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────────────────────────────────────
+
+function statusBadge(color: string, bg: string): React.CSSProperties {
+  return { width: 20, height: 20, borderRadius: '50%', background: bg, border: `1px solid ${color}`, color, fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }
+}
+
+const sectionStyle: React.CSSProperties = { padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }
+const labelStyle: React.CSSProperties   = { fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em' }
+const goalTextStyle: React.CSSProperties = { marginTop: 4, color: 'rgba(255,255,255,0.85)', fontSize: 13, lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+const collapsibleHeaderStyle: React.CSSProperties = { width: '100%', display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }
+const countStyle: React.CSSProperties  = { marginLeft: 'auto', fontSize: 11, color: 'rgba(255,255,255,0.3)' }
+const chevronStyle: React.CSSProperties = { fontSize: 10, color: 'rgba(255,255,255,0.3)' }
+const emptyStyle: React.CSSProperties  = { fontSize: 12, color: 'rgba(255,255,255,0.25)', lineHeight: 1.4 }
+const todoRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'default' }
+const todoTextStyle: React.CSSProperties = { fontSize: 13, color: 'rgba(255,255,255,0.8)', lineHeight: 1.4 }
+const todoDoneStyle: React.CSSProperties = { ...todoTextStyle, color: 'rgba(255,255,255,0.28)', textDecoration: 'line-through' }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main export
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; deviceName?: string }) {
+  const [mode,        setMode]        = useState<'auto' | 'manual'>('auto')
+  const [input,       setInput]       = useState('')
+  const [instructions, setInstructions] = useState('')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const shellRef = useRef<HTMLDivElement>(null)
+
+  // Load instructions from localStorage (client-only)
+  useEffect(() => { setInstructions(getSaved<string>(INSTR_KEY, '')) }, [])
+
+  const { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, offline, fps, hasFrame } = useStream(deviceId)
+  const { running, startAgent, stopAgent } = useAgent(deviceId)
+
+  // Mark done when agent finishes
+  useEffect(() => {
+    const last = items[items.length - 1]
+    if (last && (last.type === 'agent:done' || last.type === 'agent:error')) {
+      stopAgent()
+    }
+  }, [items, stopAgent])
+
+  const { onPointerMove, onPointerDown, onPointerUp, onContextMenu } = useManualInput(deviceId, mode, shellRef, imgRef)
+
+  async function handleSend() {
+    const goal = input.trim()
+    if (!goal) return
+    setInput('')
+    await startAgent(goal, instructions)
+  }
+
+  async function snapshot() {
+    const img = imgRef.current
+    if (!img?.src) return
+    const a = document.createElement('a')
+    a.href = img.src
+    a.download = `snapshot_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jpg`
+    a.click()
+  }
+
+  function handleInstructionsSave(v: string) {
+    setInstructions(v)
+    save(INSTR_KEY, v)
+  }
+
+  const isManual = mode === 'manual'
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
+      <Viewer
+        imgRef={imgRef}
+        shellRef={shellRef}
+        mode={mode}
+        fps={fps}
+        hasFrame={hasFrame}
+        offline={offline}
+        onModeChange={setMode}
+        onSnapshot={snapshot}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onPointerMove={onPointerMove}
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onContextMenu={onContextMenu}
+      />
+
+      {!isManual && (
+        <FloatingSidebar>
+          <SidebarContent
+            currentGoal={currentGoal}
+            todoItems={todoItems}
+            taskStatus={taskStatus}
+            taskResultText={taskResultText}
+            items={items}
+            input={input}
+            setInput={setInput}
+            onSend={handleSend}
+            onStop={stopAgent}
+            running={running}
+          />
+        </FloatingSidebar>
+      )}
+
+      {isManual && (
+        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 50, background: 'rgba(0,0,0,0.6)', color: 'rgba(255,255,255,0.5)', fontSize: 12, padding: '6px 14px', borderRadius: 20, backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,0.1)', pointerEvents: 'none', userSelect: 'none' }}>
           Manual mode — clicks &amp; keystrokes forwarded to device
         </div>
       )}
+
+      <SettingsModal
+        open={settingsOpen}
+        instructions={instructions}
+        onSave={handleInstructionsSave}
+        onClose={() => setSettingsOpen(false)}
+      />
     </div>
   )
 }
