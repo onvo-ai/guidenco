@@ -2,11 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "guidenco-web",
+      "name": "guidenco",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "web", "run", "dev"],
-      "port": 3000,
-      "autoPort": false
+      "runtimeArgs": ["run", "dev"],
+      "env": { "PORT": "3001" },
+      "cwd": "/Users/ronnel/Desktop/guidenco/web",
+      "port": 3001
     }
   ]
 }
