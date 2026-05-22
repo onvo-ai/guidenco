@@ -14,6 +14,7 @@ interface AgentItem {
   goal?: string
   step?: number
   action?: string        // action type from agent:step
+  detail?: string        // e.g. "(500, 700)" for clicks, '"spacex"' for typing
   reasoning?: string
   message?: string
 }
@@ -52,6 +53,7 @@ function useStream(deviceId: string, webrtcActiveRef: React.MutableRefObject<boo
   const [todoItems, setTodoItems]     = useState<TodoItem[]>([])
   const [taskStatus, setTaskStatus]   = useState<TaskStatus>(null)
   const [taskResultText, setTaskResultText] = useState<string | null>(null)
+  const [running, setRunning]   = useState(false)
   const [offline, setOffline]   = useState(false)
   const [fps, setFps]           = useState(0)
   const [hasFrame, setHasFrame] = useState(false)
@@ -103,17 +105,25 @@ function useStream(deviceId: string, webrtcActiveRef: React.MutableRefObject<boo
           setCurrentGoal((parsed.goal as string) ?? '')
           setTaskStatus(null)
           setTaskResultText(null)
+          setRunning(true)
           return
         }
 
         if (type === 'agent:done') {
           setTaskStatus('done')
           setTaskResultText((parsed.message as string) ?? null)
+          setRunning(false)
         }
 
         if (type === 'agent:error') {
           setTaskStatus('failed')
           setTaskResultText((parsed.message as string) ?? null)
+          setRunning(false)
+        }
+
+        if (type === 'agent:todo') {
+          setTodoItems((parsed.items as TodoItem[]) ?? [])
+          return // don't add to items list
         }
 
         setItems(prev => [...prev, { id: idRef.current++, type, ...parsed } as AgentItem])
@@ -130,7 +140,7 @@ function useStream(deviceId: string, webrtcActiveRef: React.MutableRefObject<boo
     return () => { clearTimeout(retryTimer); es?.close() }
   }, [deviceId, clearItems])
 
-  return { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, offline, fps, hasFrame, fpsCount, fpsTime, setFps, setHasFrame }
+  return { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, running, setRunning, offline, fps, hasFrame, fpsCount, fpsTime, setFps, setHasFrame }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,10 +148,7 @@ function useStream(deviceId: string, webrtcActiveRef: React.MutableRefObject<boo
 // ─────────────────────────────────────────────────────────────────────────────
 
 function useAgent(deviceId: string) {
-  const [running, setRunning] = useState(false)
-
   const startAgent = useCallback(async (goal: string, instructions: string) => {
-    setRunning(true)
     await fetch(`/api/relay/${deviceId}/command`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -149,9 +156,11 @@ function useAgent(deviceId: string) {
     }).catch(() => {})
   }, [deviceId])
 
-  const stopAgent = useCallback(() => setRunning(false), [])
+  const stopAgent = useCallback(async () => {
+    await fetch(`/api/relay/${deviceId}/stop`, { method: 'POST' }).catch(() => {})
+  }, [deviceId])
 
-  return { running, startAgent, stopAgent }
+  return { startAgent, stopAgent }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -193,11 +202,20 @@ function useWebRTC(
         pc = new RTCPeerConnection({ iceServers })
 
         pc.ontrack = (event) => {
+          console.log('[webrtc] ontrack fired', event.track.kind, 'streams:', event.streams.length, 'track state:', event.track.readyState)
           const video = videoRef.current
-          if (!video || !event.streams[0]) return
-          video.srcObject = event.streams[0]
-          video.play().catch(() => {})
+          if (!video) { console.warn('[webrtc] videoRef is null'); return }
+          const stream = event.streams[0] ?? new MediaStream([event.track])
+          console.log('[webrtc] attaching stream, tracks:', stream.getTracks().length)
           if (cancelled) return
+          // Force visible BEFORE srcObject — some browsers won't decode frames on display:none elements
+          video.style.display = 'block'
+          // Only assign srcObject if it's a different stream — avoids interrupting an in-progress play()
+          if (video.srcObject !== stream) {
+            video.srcObject = stream
+          }
+          // Don't call play() here — autoPlay attribute handles it.
+          // Explicit play() while srcObject is still loading causes AbortError in strict mode.
           webrtcActiveRef.current = true   // synchronous — stops SSE frame processing immediately
           setWebrtcActive(true)
           setHasFrame(true)
@@ -229,6 +247,21 @@ function useWebRTC(
         }
 
         pc.onconnectionstatechange = () => {
+          console.log('[webrtc] connectionState ->', pc?.connectionState)
+          if (pc?.connectionState === 'connected') {
+            // Check RTP stats 3s after connect to confirm video bytes are flowing
+            setTimeout(async () => {
+              if (!pc) return
+              const stats = await pc.getStats()
+              stats.forEach((report) => {
+                if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                  console.log('[webrtc] inbound-rtp video: bytesReceived=', report.bytesReceived, 'framesDecoded=', report.framesDecoded, 'framesDropped=', report.framesDropped)
+                }
+              })
+              const v = videoRef.current
+              if (v) console.log('[webrtc] video element: srcObject=', !!v.srcObject, 'videoWidth=', v.videoWidth, 'readyState=', v.readyState, 'paused=', v.paused, 'visibility=', getComputedStyle(v).visibility)
+            }, 3000)
+          }
           if (pc?.connectionState === 'failed' || pc?.connectionState === 'closed') {
             if (!cancelled) {
               setWebrtcActive(false)
@@ -262,6 +295,7 @@ function useWebRTC(
 
         if (cancelled) { pc.close(); return }
 
+        console.log('[webrtc] sending offer, ICE gathering state:', pc.iceGatheringState)
         const res = await fetch(`/api/relay/${deviceId}/webrtc-offer`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -271,7 +305,9 @@ function useWebRTC(
         if (!res.ok) throw new Error(`Offer rejected: ${res.status}`)
 
         const answer = await res.json() as { type: RTCSdpType; sdp: string }
+        console.log('[webrtc] got answer type:', answer.type)
         await pc.setRemoteDescription(new RTCSessionDescription(answer))
+        console.log('[webrtc] remote description set, signalingState:', pc.signalingState)
       } catch (err) {
         console.warn('[webrtc] failed, falling back to SSE:', err)
         // SSE frame handling in useStream continues as fallback
@@ -458,24 +494,63 @@ interface Step {
   stepNum: number
   reasoning: string
   action: string
+  detail?: string
 }
 
 const ACTION_ICONS: Record<string, string> = {
-  click: '🖱️', double_click: '🖱️', right_click: '🖱️',
-  type: '⌨️', key: '⌨️',
-  scroll: '↕️', mouse_move: '↔️', drag: '✋',
-  wait: '⏳', done: '✓',
+  // Click family — each visually distinct
+  left_click:   '🖱️',
+  double_click:  '👆',
+  right_click:   '📋',
+  hover:         '🔍',
+  drag:          '✋',
+  // Keyboard
+  type_text:     '⌨️',
+  key:           '🎹',
+  // Navigation
+  scroll:        '↕️',
+  mouse_move:    '↔️',
+  // Meta
+  wait:          '⏳',
+  add_todo_item: '📝',
+  complete_todo_item: '✅',
+  task_done:     '🏁',
+  // Legacy aliases
+  click:         '🖱️',
+  type:          '⌨️',
+  done:          '🏁',
+}
+
+const ACTION_NAMES: Record<string, string> = {
+  left_click:         'Left Click',
+  double_click:       'Double Click',
+  right_click:        'Right Click',
+  hover:              'Hover',
+  drag:               'Drag',
+  type_text:          'Type',
+  key:                'Key Press',
+  scroll:             'Scroll',
+  mouse_move:         'Move Mouse',
+  wait:               'Wait',
+  add_todo_item:      'Plan',
+  complete_todo_item: 'Complete',
+  task_done:          'Done',
+  // Legacy aliases
+  click:              'Click',
+  type:               'Type',
+  done:               'Done',
 }
 
 function StepBubble({ step }: { step: Step }) {
   const [thinkOpen, setThinkOpen] = useState(false)
   const icon = ACTION_ICONS[step.action] ?? '🔧'
+  const name = ACTION_NAMES[step.action] ?? step.action.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
   return (
     <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
       <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {/* Reasoning — collapsible */}
-        {step.reasoning && (
+        {/* Reasoning — collapsible (only show if non-empty after trim) */}
+        {typeof step.reasoning === 'string' && step.reasoning.trim() && (
           <div>
             <button
               onClick={() => setThinkOpen(o => !o)}
@@ -498,10 +573,15 @@ function StepBubble({ step }: { step: Step }) {
         )}
 
         {/* Action */}
-        {step.action && step.action !== 'done' && (
+        {step.action && step.action !== 'task_done' && step.action !== 'done' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 14 }}>{icon}</span>
-            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', fontFamily: 'ui-monospace,monospace' }}>{step.action}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.72)' }}>{name}</span>
+            {step.detail && (
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', fontFamily: 'ui-monospace,monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                {step.detail}
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -523,7 +603,7 @@ function ChatFeed({ items }: { items: AgentItem[] }) {
 
   const steps: Step[] = items
     .filter(i => i.type === 'agent:step')
-    .map(i => ({ id: i.id, stepNum: i.step ?? 0, reasoning: i.reasoning ?? '', action: i.action ?? '' }))
+    .map(i => ({ id: i.id, stepNum: i.step ?? 0, reasoning: typeof i.reasoning === 'string' ? i.reasoning : '', action: i.action ?? '', detail: i.detail }))
 
   if (steps.length === 0) {
     return (
@@ -924,13 +1004,18 @@ function Viewer({ imgRef, videoRef, webrtcActive, shellRef, mode, fps, hasFrame,
         onPointerUp={onPointerUp}
         onContextMenu={onContextMenu}
       >
-        {/* WebRTC video — shown when WebRTC connection is active */}
+        {/* WebRTC video — always in DOM so play() works before React re-renders */}
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          style={{ width: '100%', height: '100%', objectFit: 'contain', display: webrtcActive ? 'block' : 'none', userSelect: 'none', pointerEvents: 'none' }}
+          onLoadedMetadata={() => console.log('[webrtc] video metadata loaded, size:', videoRef.current?.videoWidth, 'x', videoRef.current?.videoHeight)}
+          onPlaying={() => console.log('[webrtc] video playing')}
+          onStalled={() => console.log('[webrtc] video stalled')}
+          onWaiting={() => console.log('[webrtc] video waiting for data')}
+          onError={(e) => console.error('[webrtc] video error', e)}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', visibility: webrtcActive ? 'visible' : 'hidden', userSelect: 'none', pointerEvents: 'none' }}
         />
         {/* SSE fallback — shown before WebRTC connects */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1017,17 +1102,9 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
   // webrtcActiveRef is a ref (not state) so SSE handler can read it without re-renders
   const webrtcActiveRef = useRef(false)
 
-  const { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, offline, fps, hasFrame, fpsCount, fpsTime, setFps, setHasFrame } = useStream(deviceId, webrtcActiveRef)
+  const { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, running, offline, fps, hasFrame, fpsCount, fpsTime, setFps, setHasFrame } = useStream(deviceId, webrtcActiveRef)
   const { videoRef, webrtcActive } = useWebRTC(deviceId, fpsCount, fpsTime, setFps, setHasFrame, webrtcActiveRef)
-  const { running, startAgent, stopAgent } = useAgent(deviceId)
-
-  // Mark done when agent finishes
-  useEffect(() => {
-    const last = items[items.length - 1]
-    if (last && (last.type === 'agent:done' || last.type === 'agent:error')) {
-      stopAgent()
-    }
-  }, [items, stopAgent])
+  const { startAgent, stopAgent } = useAgent(deviceId)
 
   const { onPointerMove, onPointerDown, onPointerUp, onContextMenu } = useManualInput(deviceId, mode, shellRef, imgRef, videoRef)
 
