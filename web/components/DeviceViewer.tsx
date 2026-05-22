@@ -175,8 +175,10 @@ function useWebRTC(
   setHasFrame: (v: boolean) => void,
   webrtcActiveRef: React.MutableRefObject<boolean>,
 ) {
-  const videoRef   = useRef<HTMLVideoElement>(null)
+  const videoRef         = useRef<HTMLVideoElement>(null)
   const [webrtcActive, setWebrtcActive] = useState(false)
+  const inputDcRef       = useRef<RTCDataChannel | null>(null)
+  const inputMoveDcRef   = useRef<RTCDataChannel | null>(null)
 
   useEffect(() => {
     let pc: RTCPeerConnection | null = null
@@ -200,6 +202,13 @@ function useWebRTC(
         }
 
         pc = new RTCPeerConnection({ iceServers })
+
+        const dcReliable = pc.createDataChannel('input',      { ordered: true })
+        const dcFast     = pc.createDataChannel('input-move', { ordered: false, maxRetransmits: 0 })
+        inputDcRef.current     = dcReliable
+        inputMoveDcRef.current = dcFast
+        dcReliable.onopen = () => console.log('[webrtc] input data channel open (reliable)')
+        dcFast.onopen     = () => console.log('[webrtc] input-move data channel open (unreliable)')
 
         pc.ontrack = (event) => {
           console.log('[webrtc] ontrack fired', event.track.kind, 'streams:', event.streams.length, 'track state:', event.track.readyState)
@@ -318,13 +327,15 @@ function useWebRTC(
 
     return () => {
       cancelled = true
+      inputDcRef.current     = null
+      inputMoveDcRef.current = null
       pc?.close()
       setWebrtcActive(false)
       webrtcActiveRef.current = false
     }
   }, [deviceId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { videoRef, webrtcActive }
+  return { videoRef, webrtcActive, inputDcRef, inputMoveDcRef }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -337,14 +348,21 @@ function useManualInput(
   shellRef: React.RefObject<HTMLDivElement | null>,
   imgRef: React.RefObject<HTMLImageElement | null>,
   videoRef: React.RefObject<HTMLVideoElement | null>,
+  inputDcRef: React.RefObject<RTCDataChannel | null>,
+  inputMoveDcRef: React.RefObject<RTCDataChannel | null>,
 ) {
-  const send = useCallback(async (action: Record<string, unknown>) => {
-    await fetch(`/api/relay/${deviceId}/input`, {
+  const send = useCallback((action: Record<string, unknown>) => {
+    const dc = action.type === 'mouse_move' ? inputMoveDcRef.current : inputDcRef.current
+    if (dc?.readyState === 'open') {
+      try { dc.send(JSON.stringify(action)); return } catch { /* channel closed mid-send, fall through */ }
+    }
+    // HTTP fallback — used when WebRTC is not yet established or channel is closing
+    fetch(`/api/relay/${deviceId}/input`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(action),
     }).catch(() => {})
-  }, [deviceId])
+  }, [deviceId, inputDcRef, inputMoveDcRef])
 
   function getViewRect(): { left: number; top: number; width: number; height: number } | null {
     const shell = shellRef.current
@@ -1103,10 +1121,10 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
   const webrtcActiveRef = useRef(false)
 
   const { imgRef, items, currentGoal, todoItems, taskStatus, taskResultText, running, offline, fps, hasFrame, fpsCount, fpsTime, setFps, setHasFrame } = useStream(deviceId, webrtcActiveRef)
-  const { videoRef, webrtcActive } = useWebRTC(deviceId, fpsCount, fpsTime, setFps, setHasFrame, webrtcActiveRef)
+  const { videoRef, webrtcActive, inputDcRef, inputMoveDcRef } = useWebRTC(deviceId, fpsCount, fpsTime, setFps, setHasFrame, webrtcActiveRef)
   const { startAgent, stopAgent } = useAgent(deviceId)
 
-  const { onPointerMove, onPointerDown, onPointerUp, onContextMenu } = useManualInput(deviceId, mode, shellRef, imgRef, videoRef)
+  const { onPointerMove, onPointerDown, onPointerUp, onContextMenu } = useManualInput(deviceId, mode, shellRef, imgRef, videoRef, inputDcRef, inputMoveDcRef)
 
   async function handleSend() {
     const goal = input.trim()
