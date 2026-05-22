@@ -1,4 +1,4 @@
-import { boolean, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
+import { boolean, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 
 // ── Better Auth tables ────────────────────────────────────────────────────────
 
@@ -65,6 +65,13 @@ export const devices = pgTable('devices', {
     .notNull()
     .default('offline'),
   lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+
+  // Device type taxonomy (Phase 1)
+  deviceType: text('device_type', { enum: ['bridged', 'self', 'remote'] })
+    .notNull()
+    .default('bridged'),
+  os: text('os', { enum: ['linux', 'macos', 'windows'] }),
+  metadata: jsonb('metadata'),
 })
 
 export const deviceClaims = pgTable('device_claims', {
