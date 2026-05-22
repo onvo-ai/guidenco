@@ -67,6 +67,9 @@ class _CaptureTrack(VideoStreamTrack):
                     break
             try:
                 img = Image.open(io.BytesIO(frame)).convert("RGB")
+                # Downscale to 1280×720 — 1920×1080 VP8 SW-encode is too slow on Pi
+                if img.width > 1280:
+                    img = img.resize((1280, 720), Image.BILINEAR)
                 return np.array(img)
             except Exception:
                 continue  # discard corrupt frame, get the next one

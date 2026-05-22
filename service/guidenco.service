@@ -8,6 +8,8 @@ Type=simple
 User=root
 WorkingDirectory=/opt/guidenco
 ExecStartPre=/usr/local/bin/guidenco-hid-setup
+# Kill any stale ffmpeg holding the capture device from a previous (unclean) run
+ExecStartPre=-/bin/bash -c 'fuser -k /dev/video0 2>/dev/null; true'
 ExecStart=/opt/guidenco/venv/bin/python3 /opt/guidenco/main.py
 Restart=always
 RestartSec=5

@@ -125,6 +125,7 @@ class CaptureManager:
             finally:
                 try:
                     proc.kill()
+                    proc.wait()   # reap the zombie immediately
                 except Exception:
                     pass
             if self._running:
