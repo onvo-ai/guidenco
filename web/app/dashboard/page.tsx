@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Settings } from 'lucide-react'
 import { DeviceCard } from '@/components/DeviceCard'
 import { AddDeviceModal } from '@/components/AddDeviceModal'
-import { authClient } from '@/lib/auth-client'
+import { SettingsModal } from '@/components/SettingsModal'
 
 interface Device {
   id: string
@@ -14,16 +14,15 @@ interface Device {
 }
 
 export default function DashboardPage() {
-  const router = useRouter()
   const [devices, setDevices] = useState<Device[]>([])
-  const [showModal, setShowModal] = useState(false)
+  const [showAdd, setShowAdd] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
 
   async function fetchDevices() {
     try {
       const res = await fetch('/api/devices', { credentials: 'include' })
-      console.log('[dashboard] /api/devices status:', res.status)
       if (res.status === 401) {
         setFetchError('Session expired (401). Please sign in again.')
         setLoading(false)
@@ -41,27 +40,23 @@ export default function DashboardPage() {
 
   useEffect(() => { fetchDevices() }, [])
 
-  async function handleSignOut() {
-    await authClient.signOut()
-    router.push('/sign-in')
-  }
-
   return (
     <div className="max-w-3xl mx-auto px-4 py-10">
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-2xl font-bold">Devices</h1>
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
           <button
-            onClick={() => setShowModal(true)}
+            onClick={() => setShowAdd(true)}
             className="rounded bg-zinc-100 text-zinc-900 px-4 py-2 text-sm font-medium hover:bg-white"
           >
             + Add Device
           </button>
           <button
-            onClick={handleSignOut}
-            className="rounded border border-zinc-700 px-4 py-2 text-sm hover:border-zinc-500"
+            onClick={() => setShowSettings(true)}
+            aria-label="Settings"
+            className="rounded border border-zinc-700 p-2 hover:border-zinc-500 text-zinc-300 hover:text-zinc-100 transition-colors"
           >
-            Sign out
+            <Settings size={18} />
           </button>
         </div>
       </div>
@@ -81,12 +76,14 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {showModal && (
+      {showAdd && (
         <AddDeviceModal
-          onClose={() => setShowModal(false)}
+          onClose={() => setShowAdd(false)}
           onAdded={fetchDevices}
         />
       )}
+
+      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
     </div>
   )
 }

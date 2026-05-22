@@ -1,4 +1,4 @@
-import { boolean, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import { boolean, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 
 // ── Better Auth tables ────────────────────────────────────────────────────────
 
@@ -97,3 +97,20 @@ export const screenshots = pgTable('screenshots', {
   minioKey: text('minio_key').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 })
+
+// User-defined secrets — referenced by name from agent prompts as {{KEY}}.
+// The LLM only sees the name + description; the actual value is substituted
+// server-side when forwarding type_text actions to the Pi.
+export const secrets = pgTable('secrets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id')
+    .notNull()
+    .references(() => user.id, { onDelete: 'cascade' }),
+  key: text('key').notNull(),               // uppercase + underscore only
+  value: text('value').notNull(),
+  description: text('description').notNull().default(''),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  userKeyUnique: uniqueIndex('secrets_user_key_unique').on(t.userId, t.key),
+}))
