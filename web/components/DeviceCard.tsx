@@ -2,12 +2,20 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { Cpu, Monitor, Cloud } from 'lucide-react'
 
 interface Device {
   id: string
   name: string
   status: 'online' | 'offline'
   lastSeenAt: string | null
+  deviceType: 'bridged' | 'self' | 'remote'
+}
+
+const TYPE_ICON: Record<Device['deviceType'], React.ReactNode> = {
+  bridged: <Cpu size={12} />,
+  self:    <Monitor size={12} />,
+  remote:  <Cloud size={12} />,
 }
 
 export function DeviceCard({ device }: { device: Device }) {
@@ -55,7 +63,10 @@ export function DeviceCard({ device }: { device: Device }) {
         </span>
       </div>
       <div className="p-3">
-        <div className="font-medium text-sm">{device.name}</div>
+        <div className="font-medium text-sm flex items-center gap-1.5">
+          <span className="text-zinc-500">{TYPE_ICON[device.deviceType]}</span>
+          {device.name}
+        </div>
         {device.lastSeenAt && (
           <p className="text-xs text-zinc-600 mt-0.5">
             Last seen {new Date(device.lastSeenAt).toLocaleString()}

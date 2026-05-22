@@ -11,6 +11,7 @@ interface Device {
   name: string
   status: 'online' | 'offline'
   lastSeenAt: string | null
+  deviceType: 'bridged' | 'self' | 'remote'
 }
 
 export default function DashboardPage() {
