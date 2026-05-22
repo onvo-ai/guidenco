@@ -22,6 +22,7 @@ interface TypeOption {
 interface OSOption {
   id: OS
   label: string
+  description: string
   icon: React.ReactNode
 }
 
@@ -50,9 +51,9 @@ const TYPE_OPTIONS: TypeOption[] = [
 ]
 
 const OS_OPTIONS: OSOption[] = [
-  { id: 'macos',   label: 'macOS',   icon: <Apple size={20} /> },
-  { id: 'linux',   label: 'Linux',   icon: <Box size={20} /> },
-  { id: 'windows', label: 'Windows', icon: <Computer size={20} /> },
+  { id: 'macos',   label: 'macOS',   description: 'Apple silicon or Intel Mac running macOS.',         icon: <Apple size={20} /> },
+  { id: 'linux',   label: 'Linux',   description: 'Any modern Linux distro with X11.',                 icon: <Box size={20} /> },
+  { id: 'windows', label: 'Windows', description: 'Windows 10 or 11 with OpenSSH (built in by default).', icon: <Computer size={20} /> },
 ]
 
 export function AddDeviceModal({ onClose, onAdded }: Props) {
@@ -180,23 +181,21 @@ export function AddDeviceModal({ onClose, onAdded }: Props) {
         )}
 
         {step === 'os' && (
-          <div className="space-y-3">
-            <p className="text-sm text-zinc-400">
-              Which OS are you setting this up from?
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              {OS_OPTIONS.map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setOs(opt.id)}
-                  className="rounded border border-zinc-700 hover:border-zinc-500 py-4 flex flex-col items-center gap-2 transition-colors"
-                >
-                  <span className="text-zinc-300">{opt.icon}</span>
-                  <span className="text-xs font-medium">{opt.label}</span>
-                </button>
-              ))}
-            </div>
+          <div className="space-y-2">
+            {OS_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setOs(opt.id)}
+                className="w-full text-left rounded border border-zinc-700 hover:border-zinc-500 p-3 flex items-start gap-3 transition-colors cursor-pointer"
+              >
+                <span className="text-zinc-300 mt-0.5">{opt.icon}</span>
+                <span className="flex-1 min-w-0">
+                  <span className="text-sm font-medium">{opt.label}</span>
+                  <span className="block text-xs text-zinc-400 mt-1">{opt.description}</span>
+                </span>
+              </button>
+            ))}
           </div>
         )}
 

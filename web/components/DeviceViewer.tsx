@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Camera, Loader2, Send, Settings, Square } from 'lucide-react'
+import { Camera, Loader2, Send, Square } from 'lucide-react'
 import Link from 'next/link'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -882,42 +882,6 @@ function FloatingSidebar({ children }: { children: React.ReactNode }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SettingsModal
-// ─────────────────────────────────────────────────────────────────────────────
-
-function SettingsModal({ open, instructions, onSave, onClose }: { open: boolean; instructions: string; onSave: (v: string) => void; onClose: () => void }) {
-  const [draft, setDraft] = useState(instructions)
-  useEffect(() => { if (open) setDraft(instructions) }, [open, instructions])
-  if (!open) return null
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}>
-      <div style={{ width: '90%', maxWidth: 420, borderRadius: 14, background: 'rgb(18,18,26)', border: '1px solid rgba(255,255,255,0.1)', padding: 24, display: 'flex', flexDirection: 'column', gap: 16, boxShadow: '0 24px 64px rgba(0,0,0,0.7)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 15, fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}>Settings</span>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>✕</button>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Additional instructions</label>
-          <textarea
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            rows={5}
-            placeholder="e.g. Always prefer dark mode. Use keyboard shortcuts."
-            style={{ borderRadius: 8, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.85)', fontSize: 13, padding: '10px 12px', resize: 'none', outline: 'none', fontFamily: 'inherit', lineHeight: 1.45 }}
-          />
-          <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', margin: 0 }}>Appended to every goal you send.</p>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button onClick={onClose} style={{ fontSize: 13, color: 'rgba(255,255,255,0.45)', background: 'none', border: 'none', cursor: 'pointer', padding: '6px 12px' }}>Cancel</button>
-          <button onClick={() => { onSave(draft); onClose() }} style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, cursor: 'pointer', padding: '6px 16px' }}>Save</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Viewer — top controls + full-screen stream
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -933,7 +897,6 @@ interface ViewerProps {
   deviceName: string
   onModeChange: (m: 'auto' | 'manual') => void
   onSnapshot: () => void
-  onOpenSettings: () => void
   onPointerMove: (e: React.PointerEvent) => void
   onPointerDown: (e: React.PointerEvent) => void
   onPointerUp: (e: React.PointerEvent) => void
@@ -942,9 +905,8 @@ interface ViewerProps {
 
 const HEADER_H = 44
 
-function Viewer({ imgRef, videoRef, webrtcActive, shellRef, mode, fps, hasFrame, offline, deviceName, onModeChange, onSnapshot, onOpenSettings, onPointerMove, onPointerDown, onPointerUp, onContextMenu }: ViewerProps) {
+function Viewer({ imgRef, videoRef, webrtcActive, shellRef, mode, fps, hasFrame, offline, deviceName, onModeChange, onSnapshot, onPointerMove, onPointerDown, onPointerUp, onContextMenu }: ViewerProps) {
   const [showSnapshotTip, setShowSnapshotTip] = useState(false)
-  const [showSettingsTip, setShowSettingsTip] = useState(false)
 
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
@@ -1005,11 +967,6 @@ function Viewer({ imgRef, videoRef, webrtcActive, shellRef, mode, fps, hasFrame,
             {showSnapshotTip && <Tooltip>Snapshot</Tooltip>}
           </div>
 
-          {/* Settings */}
-          <div style={{ position: 'relative' }} onMouseEnter={() => setShowSettingsTip(true)} onMouseLeave={() => setShowSettingsTip(false)}>
-            <IconBtn onClick={onOpenSettings}><Settings size={14} /></IconBtn>
-            {showSettingsTip && <Tooltip>Settings</Tooltip>}
-          </div>
         </div>
       </div>
 
@@ -1108,13 +1065,15 @@ const todoDoneStyle: React.CSSProperties = { ...todoTextStyle, color: 'rgba(255,
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; deviceName?: string }) {
-  const [mode,        setMode]        = useState<'auto' | 'manual'>('auto')
-  const [input,       setInput]       = useState('')
+  const [mode,         setMode]         = useState<'auto' | 'manual'>('auto')
+  const [input,        setInput]        = useState('')
   const [instructions, setInstructions] = useState('')
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const shellRef = useRef<HTMLDivElement>(null)
 
-  // Load instructions from localStorage (client-only)
+  // Instructions are managed in the main app Settings modal; we just read them
+  // out of localStorage so they're available when we POST a goal. Re-read each
+  // time the chat input is sent (in handleSend) so changes from Settings take
+  // effect without a page refresh.
   useEffect(() => { setInstructions(getSaved<string>(INSTR_KEY, '')) }, [])
 
   // webrtcActiveRef is a ref (not state) so SSE handler can read it without re-renders
@@ -1130,7 +1089,10 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
     const goal = input.trim()
     if (!goal) return
     setInput('')
-    await startAgent(goal, instructions)
+    // Re-read instructions every send so Settings edits take effect immediately
+    const latestInstructions = getSaved<string>(INSTR_KEY, '')
+    if (latestInstructions !== instructions) setInstructions(latestInstructions)
+    await startAgent(goal, latestInstructions)
   }
 
   async function snapshot() {
@@ -1140,11 +1102,6 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
     a.href = img.src
     a.download = `snapshot_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jpg`
     a.click()
-  }
-
-  function handleInstructionsSave(v: string) {
-    setInstructions(v)
-    save(INSTR_KEY, v)
   }
 
   const isManual = mode === 'manual'
@@ -1164,7 +1121,6 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
         deviceName={displayName}
         onModeChange={setMode}
         onSnapshot={snapshot}
-        onOpenSettings={() => setSettingsOpen(true)}
         onPointerMove={onPointerMove}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
@@ -1194,12 +1150,6 @@ export function DeviceViewer({ deviceId, deviceName }: { deviceId: string; devic
         </div>
       )}
 
-      <SettingsModal
-        open={settingsOpen}
-        instructions={instructions}
-        onSave={handleInstructionsSave}
-        onClose={() => setSettingsOpen(false)}
-      />
     </div>
   )
 }

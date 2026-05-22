@@ -12,13 +12,14 @@ interface Secret {
   updatedAt: string
 }
 
-type Tab = 'secrets' | 'mcp' | 'account'
+type Tab = 'instructions' | 'secrets' | 'mcp' | 'account'
 
 const KEY_RE = /^[A-Z][A-Z0-9_]*$/
+const INSTR_KEY = 'guidenco-instructions'
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const router = useRouter()
-  const [tab, setTab] = useState<Tab>('secrets')
+  const [tab, setTab] = useState<Tab>('instructions')
 
   if (!open) return null
 
@@ -50,16 +51,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 4, padding: '8px 12px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-          <TabBtn active={tab === 'secrets'} onClick={() => setTab('secrets')}>Secrets</TabBtn>
-          <TabBtn active={tab === 'mcp'}     onClick={() => setTab('mcp')}>MCP</TabBtn>
-          <TabBtn active={tab === 'account'} onClick={() => setTab('account')}>Account</TabBtn>
+          <TabBtn active={tab === 'instructions'} onClick={() => setTab('instructions')}>Instructions</TabBtn>
+          <TabBtn active={tab === 'secrets'}      onClick={() => setTab('secrets')}>Secrets</TabBtn>
+          <TabBtn active={tab === 'mcp'}          onClick={() => setTab('mcp')}>MCP</TabBtn>
+          <TabBtn active={tab === 'account'}      onClick={() => setTab('account')}>Account</TabBtn>
         </div>
 
         {/* Body */}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 20 }}>
-          {tab === 'secrets' && <SecretsPanel />}
-          {tab === 'mcp'     && <MCPPanel />}
-          {tab === 'account' && <AccountPanel onSignedOut={() => router.push('/sign-in')} />}
+          {tab === 'instructions' && <InstructionsPanel />}
+          {tab === 'secrets'      && <SecretsPanel />}
+          {tab === 'mcp'          && <MCPPanel />}
+          {tab === 'account'      && <AccountPanel onSignedOut={() => router.push('/sign-in')} />}
         </div>
       </div>
     </div>
@@ -84,6 +87,81 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
     >
       {children}
     </button>
+  )
+}
+
+// ─── Instructions ───────────────────────────────────────────────────────────
+
+function InstructionsPanel() {
+  const [draft, setDraft] = useState('')
+  const [saved, setSaved] = useState<string | null>(null)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem(INSTR_KEY) ?? ''
+      setDraft(v)
+      setSaved(v)
+    } catch { /* localStorage blocked */ }
+  }, [])
+
+  const dirty = saved !== null && draft !== saved
+
+  function handleSave() {
+    try {
+      window.localStorage.setItem(INSTR_KEY, draft)
+      setSaved(draft)
+      setSavedAt(Date.now())
+    } catch { /* localStorage blocked */ }
+  }
+
+  function handleRevert() {
+    if (saved !== null) setDraft(saved)
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', lineHeight: 1.5, margin: 0 }}>
+        Appended to every goal you send to any agent — set tone, preferences, or
+        recurring constraints. Reference secrets here with <code style={inlineCode}>{'{{KEY_NAME}}'}</code>.
+      </p>
+
+      <textarea
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        rows={10}
+        placeholder="e.g. Always prefer dark mode. Use keyboard shortcuts where possible. Never close the editor without saving."
+        style={{
+          borderRadius: 8,
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          color: 'rgba(255,255,255,0.88)',
+          fontSize: 13,
+          padding: '10px 12px',
+          resize: 'vertical',
+          outline: 'none',
+          fontFamily: 'inherit',
+          lineHeight: 1.5,
+          minHeight: 160,
+        }}
+      />
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>
+          {dirty
+            ? 'Unsaved changes'
+            : savedAt
+              ? `Saved ${new Date(savedAt).toLocaleTimeString()}`
+              : saved
+                ? 'Saved'
+                : 'Not yet saved'}
+        </span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={handleRevert} disabled={!dirty} style={{ ...cancelBtnStyle, opacity: dirty ? 1 : 0.4, cursor: dirty ? 'pointer' : 'not-allowed' }}>Revert</button>
+          <button onClick={handleSave} disabled={!dirty} style={{ ...saveBtnStyle, opacity: dirty ? 1 : 0.4, cursor: dirty ? 'pointer' : 'not-allowed' }}>Save</button>
+        </div>
+      </div>
+    </div>
   )
 }
 
