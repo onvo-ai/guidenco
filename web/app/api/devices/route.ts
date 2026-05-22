@@ -15,6 +15,7 @@ export async function GET(req: NextRequest) {
       name: devices.name,
       status: devices.status,
       lastSeenAt: devices.lastSeenAt,
+      deviceType: devices.deviceType,
     })
     .from(devices)
     .where(eq(devices.userId, session.user.id))

@@ -9,11 +9,32 @@ export async function POST(req: NextRequest) {
   const session = await getSession(req.headers)
   if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const body = await req.json().catch(() => null)
-  const { code, name } = body ?? {}
+  const body = await req.json().catch(() => null) as
+    | { code?: string; name?: string; deviceType?: string; os?: string }
+    | null
+  const code = body?.code
+  const name = body?.name
+  const deviceType = (body?.deviceType ?? 'bridged') as 'bridged' | 'self' | 'remote'
+  const os = (body?.os ?? null) as 'linux' | 'macos' | 'windows' | null
 
   if (!code || !name) {
     return Response.json({ error: 'code and name required' }, { status: 400 })
+  }
+
+  if (!['bridged', 'self', 'remote'].includes(deviceType)) {
+    return Response.json({ error: 'Invalid deviceType' }, { status: 400 })
+  }
+
+  if (os !== null && !['linux', 'macos', 'windows'].includes(os)) {
+    return Response.json({ error: 'Invalid os' }, { status: 400 })
+  }
+
+  if (deviceType === 'self' && os === null) {
+    return Response.json({ error: 'os required when deviceType is self' }, { status: 400 })
+  }
+
+  if (deviceType === 'remote') {
+    return Response.json({ error: 'Remote devices are not yet supported' }, { status: 400 })
   }
 
   // Find a valid, unclaimed claim with this code
@@ -43,6 +64,8 @@ export async function POST(req: NextRequest) {
     name,
     deviceToken,
     status: 'offline',
+    deviceType,
+    os,
   })
 
   // Mark claim as redeemed
