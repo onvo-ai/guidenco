@@ -2,9 +2,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'http'
 import { parse } from 'url'
 import next from 'next'
 import { WebSocketServer } from 'ws'
-import { handleRelayUpgrade, addBrowserListener, isDeviceOnline, emitToListeners, waitForWebRTCAnswer, sendToDevice, isWebRTCPending, cancelWebRTCPending } from './lib/relay'
+import { handleRelayUpgrade, addBrowserListener, isDeviceOnline, emitToListeners, waitForWebRTCAnswer, sendToDevice, isWebRTCPending, cancelWebRTCPending, requestAgentStop, getLatestFrame } from './lib/relay'
 import { startAgentLoop } from './lib/agent'
-import { ensureBucket } from './lib/minio'
+import { ensureBucket, fetchThumbnail } from './lib/minio'
 import { auth } from './lib/auth'
 import { db } from './lib/db/client'
 import { devices } from './lib/db/schema'
@@ -194,6 +194,82 @@ async function handleIceServers(req: IncomingMessage, res: ServerResponse, devic
 
 // POST /api/relay/:deviceId/webrtc-offer
 // Receives browser SDP offer, forwards to Pi (with TURN credentials), returns Pi's SDP answer.
+// GET /api/relay/:deviceId/thumbnail — latest device screen as JPEG
+// Memory-first (live frame), then MinIO (persisted ~every 30s).
+async function handleThumbnail(req: IncomingMessage, res: ServerResponse, deviceId: string) {
+  const session = await getSession(req)
+  if (!session) {
+    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Unauthorized' }))
+    return
+  }
+
+  const [device] = await db
+    .select({ id: devices.id })
+    .from(devices)
+    .where(and(eq(devices.id, deviceId), eq(devices.userId, session.user.id)))
+    .limit(1)
+
+  if (!device) {
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Not found' }))
+    return
+  }
+
+  // Prefer the in-memory live frame if available
+  const live = getLatestFrame(deviceId)
+  if (live) {
+    const buf = Buffer.from(live, 'base64')
+    res.writeHead(200, {
+      'Content-Type':  'image/jpeg',
+      'Content-Length': buf.length,
+      'Cache-Control': 'no-store',
+    })
+    res.end(buf)
+    return
+  }
+
+  // Fall back to the persisted MinIO thumbnail
+  const stored = await fetchThumbnail(deviceId)
+  if (stored) {
+    res.writeHead(200, {
+      'Content-Type':  'image/jpeg',
+      'Content-Length': stored.length,
+      'Cache-Control': 'no-store',
+    })
+    res.end(stored)
+    return
+  }
+
+  res.writeHead(404, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify({ error: 'No thumbnail available' }))
+}
+
+async function handleStop(req: IncomingMessage, res: ServerResponse, deviceId: string) {
+  const session = await getSession(req)
+  if (!session) {
+    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Unauthorized' }))
+    return
+  }
+
+  const [device] = await db
+    .select({ id: devices.id })
+    .from(devices)
+    .where(and(eq(devices.id, deviceId), eq(devices.userId, session.user.id)))
+    .limit(1)
+
+  if (!device) {
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Not found' }))
+    return
+  }
+
+  requestAgentStop(deviceId)
+  res.writeHead(200, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify({ ok: true }))
+}
+
 async function handleWebRTCOffer(req: IncomingMessage, res: ServerResponse, deviceId: string) {
   const session = await getSession(req)
   if (!session) {
@@ -299,6 +375,20 @@ app.prepare().then(async () => {
       return
     }
 
+    // Stop agent — sets a flag the running loop checks on each iteration
+    const stopMatch = pathname.match(/^\/api\/relay\/([^/]+)\/stop$/)
+    if (stopMatch && req.method === 'POST') {
+      await handleStop(req, res, stopMatch[1])
+      return
+    }
+
+    // Thumbnail — latest device screen JPEG
+    const thumbMatch = pathname.match(/^\/api\/relay\/([^/]+)\/thumbnail$/)
+    if (thumbMatch && req.method === 'GET') {
+      await handleThumbnail(req, res, thumbMatch[1])
+      return
+    }
+
     handle(req, res, parsedUrl)
   })
 
@@ -318,7 +408,7 @@ app.prepare().then(async () => {
     }
   })
 
-  server.listen(port, () => {
+  server.listen(port, '0.0.0.0', () => {
     console.log(`> Ready on http://localhost:${port}`)
   })
 })

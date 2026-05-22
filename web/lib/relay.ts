@@ -3,6 +3,7 @@ import type { WebSocket } from 'ws'
 import { db } from './db/client'
 import { devices } from './db/schema'
 import { eq } from 'drizzle-orm'
+import { saveThumbnail } from './minio'
 
 // Active Pi connections: deviceId → WebSocket
 const connections = new Map<string, WebSocket>()
@@ -10,11 +11,23 @@ const connections = new Map<string, WebSocket>()
 // Latest frame per device: deviceId → base64 JPEG string
 const latestFrames = new Map<string, string>()
 
+// Throttle thumbnail persistence: deviceId → last save timestamp (ms)
+const lastThumbnailSave = new Map<string, number>()
+const THUMBNAIL_SAVE_INTERVAL_MS = 30_000
+
 // Browser SSE listeners: deviceId → Set of callbacks
 const listeners = new Map<string, Set<(data: string) => void>>()
 
 // Pending WebRTC answer callbacks: deviceId → { resolve, reject }
 const webrtcPending = new Map<string, { resolve: (sdp: string) => void; reject: (err: Error) => void }>()
+
+// ── Agent stop flags ──────────────────────────────────────────────────────────
+// Set by the stop endpoint; cleared when a new agent loop starts.
+const stopFlags = new Map<string, boolean>()
+
+export function requestAgentStop(deviceId: string) { stopFlags.set(deviceId, true) }
+export function clearAgentStop(deviceId: string)   { stopFlags.delete(deviceId) }
+export function isAgentStopRequested(deviceId: string) { return stopFlags.get(deviceId) === true }
 
 const WEBRTC_ANSWER_TIMEOUT_MS = 15_000
 
@@ -56,6 +69,17 @@ export async function handleRelayUpgrade(ws: WebSocket, req: IncomingMessage) {
       // Buffer latest frame for agent loop
       if (msg.type === 'frame' && typeof msg.data === 'string') {
         latestFrames.set(device.id, msg.data as string)
+
+        // Throttle thumbnail persistence to MinIO (~once per 30s per device)
+        const now = Date.now()
+        const last = lastThumbnailSave.get(device.id) ?? 0
+        if (now - last >= THUMBNAIL_SAVE_INTERVAL_MS) {
+          lastThumbnailSave.set(device.id, now)
+          const jpeg = Buffer.from(msg.data as string, 'base64')
+          saveThumbnail(device.id, jpeg).catch((err) =>
+            console.error(`[relay] saveThumbnail failed (${device.id}):`, err.message)
+          )
+        }
       }
 
       // WebRTC answer — resolve pending offer promise; do NOT forward to SSE
@@ -71,6 +95,10 @@ export async function handleRelayUpgrade(ws: WebSocket, req: IncomingMessage) {
   })
 
   ws.on('close', () => {
+    // Only clean up if THIS ws is still the active one for the device. If the
+    // Pi reconnected and a newer ws replaced it, leave the new connection alone.
+    if (connections.get(device.id) !== ws) return
+
     connections.delete(device.id)
     latestFrames.delete(device.id)
     listeners.delete(device.id)
