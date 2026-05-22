@@ -1,0 +1,27 @@
+[project]
+name = "guidenco-client"
+version = "0.1.0"
+description = "Guidenco client — control your computer from the Guidenco dashboard."
+requires-python = ">=3.10"
+dependencies = [
+  "aiortc>=1.9.0",
+  "av>=11.0.0",
+  "mss>=9.0.1",
+  "Pillow>=10.0.0",
+  "pynput>=1.7.6",
+  "websockets>=12.0",
+  "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+guidenco-client = "guidenco_client.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["guidenco_client*"]
