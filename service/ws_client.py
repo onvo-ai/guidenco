@@ -107,6 +107,23 @@ async def _handle_webrtc_offer(
     track = _CaptureTrack(sub)
     pc.addTrack(track)
 
+    @pc.on("datachannel")
+    def _on_datachannel(channel) -> None:
+        logger.info(f"[ws_client] data channel opened: {channel.label!r}")
+
+        @channel.on("message")
+        def _on_message(msg: str) -> None:
+            try:
+                action = json.loads(msg)
+            except Exception:
+                logger.warning("[ws_client] data channel: invalid JSON, ignoring")
+                return
+            threading.Thread(
+                target=_run_action, args=(action,),
+                daemon=True,
+                name="dc-action",
+            ).start()
+
     closed = asyncio.Event()
 
     @pc.on("connectionstatechange")
