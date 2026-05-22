@@ -109,7 +109,7 @@ async def _handle_webrtc_offer(
 
     @pc.on("datachannel")
     def _on_datachannel(channel) -> None:
-        logger.info(f"[ws_client] data channel opened: {channel.label!r}")
+        logger.info(f"[ws_client] data channel received: {channel.label!r}")
 
         @channel.on("message")
         def _on_message(msg: str) -> None:
@@ -121,7 +121,7 @@ async def _handle_webrtc_offer(
             threading.Thread(
                 target=_run_action, args=(action,),
                 daemon=True,
-                name="dc-action",
+                name=f"dc-action-{channel.label}",
             ).start()
 
     closed = asyncio.Event()
