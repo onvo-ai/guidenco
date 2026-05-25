@@ -5,6 +5,7 @@ import { WebSocketServer } from 'ws'
 import { handleRelayUpgrade, addBrowserListener, isDeviceOnline, emitToListeners, waitForWebRTCAnswer, sendToDevice, isWebRTCPending, cancelWebRTCPending, requestAgentStop, getLatestFrame } from './lib/relay'
 import { startAgentLoop } from './lib/agent'
 import { ensureBucket, fetchThumbnail } from './lib/minio'
+import { startSandboxJanitor } from './lib/sandbox-janitor'
 import { auth } from './lib/auth'
 import { db } from './lib/db/client'
 import { devices } from './lib/db/schema'
@@ -335,6 +336,7 @@ async function handleWebRTCOffer(req: IncomingMessage, res: ServerResponse, devi
 
 app.prepare().then(async () => {
   await ensureBucket()
+  startSandboxJanitor()
 
   const server = createServer(async (req, res) => {
     const parsedUrl = parse(req.url!, true)
