@@ -39,7 +39,7 @@ const TYPE_OPTIONS: TypeOption[] = [
     label: 'Self',
     description: 'Control this computer directly with a small background client.',
     icon: <Monitor size={20} />,
-    available: false,
+    available: true,
   },
   {
     id: 'remote',
@@ -65,10 +65,20 @@ export function AddDeviceModal({ onClose, onAdded }: Props) {
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
 
-  const installCommand =
-    typeof window !== 'undefined'
-      ? `curl -fsSL ${window.location.origin}/api/install/bridged | GUIDENCO_CLOUD_URL=${window.location.origin} sudo bash`
-      : ''
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  const bridgedInstall = origin
+    ? `curl -fsSL ${origin}/api/install/bridged | GUIDENCO_CLOUD_URL=${origin} sudo bash`
+    : ''
+  const selfInstall =
+    !origin
+      ? ''
+      : os === 'windows'
+        ? `iwr ${origin}/api/install/self/windows -UseBasicParsing | iex`
+        : os
+          ? `curl -fsSL ${origin}/api/install/self/${os} | bash`
+          : ''
+
+  const installCommand = type === 'self' ? selfInstall : bridgedInstall
 
   async function copyInstall() {
     try {
@@ -228,6 +238,74 @@ export function AddDeviceModal({ onClose, onAdded }: Props) {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="My Pi"
+                  required
+                  className="w-full rounded bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">Pairing code</label>
+                <input
+                  type="text"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.toUpperCase())}
+                  placeholder="ABC-123"
+                  required
+                  maxLength={7}
+                  className="w-full rounded bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm font-mono tracking-widest focus:outline-none focus:border-zinc-500"
+                />
+              </div>
+              {error && <p className="text-red-400 text-sm">{error}</p>}
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex-1 rounded border border-zinc-700 py-2 text-sm hover:border-zinc-500"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="flex-1 rounded bg-zinc-100 text-zinc-900 py-2 text-sm font-medium hover:bg-white disabled:opacity-50"
+                >
+                  {loading ? 'Linking…' : 'Link Device'}
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+
+        {step === 'details' && type === 'self' && (
+          <>
+            <p className="text-sm text-zinc-400">
+              {os === 'windows'
+                ? 'Open PowerShell on this computer and run:'
+                : 'Open Terminal on this computer and run:'}
+            </p>
+            <div className="relative">
+              <pre className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2.5 pr-12 text-[11px] font-mono text-zinc-300 whitespace-pre-wrap break-all leading-relaxed">
+                {installCommand}
+              </pre>
+              <button
+                type="button"
+                onClick={copyInstall}
+                aria-label={copied ? 'Copied' : 'Copy install command'}
+                className="absolute top-1.5 right-1.5 p-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+              >
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+              </button>
+            </div>
+            <p className="text-xs text-zinc-500">
+              The script will install the client, then print a 6-character pairing code. Enter it below.
+            </p>
+            <form onSubmit={handleSubmit} className="space-y-3">
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">Device name</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="My laptop"
                   required
                   className="w-full rounded bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500"
                 />
