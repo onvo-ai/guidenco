@@ -18,6 +18,7 @@
     "dotenv": "^17.4.2",
     "dotenv-expand": "^13.0.0",
     "drizzle-orm": "^0.45.2",
+    "e2b": "^2.24.0",
     "lucide-react": "^1.16.0",
     "minio": "^8.0.7",
     "next": "16.2.6",
