@@ -33,6 +33,28 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
   const { id } = await params
 
+  // Look up the device first so we can kill the e2b sandbox (if any) before
+  // the row disappears.
+  const [device] = await db
+    .select({
+      id:         devices.id,
+      deviceType: devices.deviceType,
+      metadata:   devices.metadata,
+    })
+    .from(devices)
+    .where(and(eq(devices.id, id), eq(devices.userId, session.user.id)))
+    .limit(1)
+
+  if (!device) return Response.json({ error: 'Not found' }, { status: 404 })
+
+  if (device.deviceType === 'remote') {
+    const sandboxId = (device.metadata as { sandboxId?: string } | null)?.sandboxId
+    if (sandboxId) {
+      const { terminateSandbox } = await import('@/lib/sandbox')
+      await terminateSandbox(sandboxId)  // idempotent; swallows errors
+    }
+  }
+
   const [deleted] = await db
     .delete(devices)
     .where(and(eq(devices.id, id), eq(devices.userId, session.user.id)))
