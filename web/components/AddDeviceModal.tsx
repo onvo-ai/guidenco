@@ -46,7 +46,7 @@ const TYPE_OPTIONS: TypeOption[] = [
     label: 'Remote',
     description: 'Spin up a cloud Linux desktop sandbox managed by Guidenco.',
     icon: <Cloud size={20} />,
-    available: false,
+    available: true,
   },
 ]
 
@@ -121,14 +121,40 @@ export function AddDeviceModal({ onClose, onAdded }: Props) {
     onClose()
   }
 
+  async function handleProvisionRemote(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+
+    const res = await fetch('/api/devices/remote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() }),
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      setError(data.error ?? 'Failed to provision Remote device')
+      setLoading(false)
+      return
+    }
+
+    onAdded()
+    onClose()
+  }
+
   function goBack() {
     setError('')
+    if (type === 'remote') { setType(null); return }
     if (os) setOs(null)
     else setType(null)
   }
 
   const step: 'type' | 'os' | 'details' =
-    type === null ? 'type' : os === null ? 'os' : 'details'
+    type === null ? 'type'
+      : type === 'remote' ? 'details'         // Remote skips OS — always Linux sandbox
+      : os === null ? 'os'
+      : 'details'
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -337,6 +363,46 @@ export function AddDeviceModal({ onClose, onAdded }: Props) {
                   className="flex-1 rounded bg-zinc-100 text-zinc-900 py-2 text-sm font-medium hover:bg-white disabled:opacity-50"
                 >
                   {loading ? 'Linking…' : 'Link Device'}
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+
+        {step === 'details' && type === 'remote' && (
+          <>
+            <p className="text-sm text-zinc-400">
+              A Linux desktop sandbox will be provisioned for you. It boots in
+              about 30 seconds and connects automatically — no install, no
+              pairing code.
+            </p>
+            <form onSubmit={handleProvisionRemote} className="space-y-3">
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">Device name</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="My sandbox"
+                  required
+                  className="w-full rounded bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500"
+                />
+              </div>
+              {error && <p className="text-red-400 text-sm">{error}</p>}
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex-1 rounded border border-zinc-700 py-2 text-sm hover:border-zinc-500"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading || !name.trim()}
+                  className="flex-1 rounded bg-zinc-100 text-zinc-900 py-2 text-sm font-medium hover:bg-white disabled:opacity-50"
+                >
+                  {loading ? 'Provisioning…' : 'Provision Sandbox'}
                 </button>
               </div>
             </form>
