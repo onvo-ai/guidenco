@@ -47,7 +47,14 @@ info "Installing system packages..."
 sudo apt-get update -q -y
 # --no-install-recommends keeps ffmpeg from dragging in its GUI/TTS recommends
 # tree (gtk, rsvg, flite, …) — none of which the headless capture path needs.
-sudo apt-get install -y -q --no-install-recommends python3 python3-venv ffmpeg v4l-utils curl
+sudo apt-get install -y -q --no-install-recommends \
+  python3 python3-venv ffmpeg v4l-utils curl \
+  hostapd dnsmasq wireless-tools iw
+
+# Prevent hostapd and dnsmasq from auto-starting — guidenco-portal.service
+# starts them only when there is no internet on boot.
+info "Masking hostapd and dnsmasq system services (managed by Guidenco)..."
+sudo systemctl mask hostapd dnsmasq
 
 # ── 3. Hardware detection ─────────────────────────────────────────────────────
 pi_model() {
@@ -179,8 +186,9 @@ sudo mkdir -p /etc/guidenco
 # ── 9. systemd service ────────────────────────────────────────────────────────
 info "Installing systemd service..."
 sudo cp "$INSTALL_DIR/guidenco.service" "$SERVICE_FILE"
+sudo cp "$INSTALL_DIR/guidenco-portal.service" /etc/systemd/system/guidenco-portal.service
 sudo systemctl daemon-reload
-sudo systemctl enable guidenco.service
+sudo systemctl enable guidenco.service guidenco-portal.service
 
 # ── Update mode: restart and exit ─────────────────────────────────────────────
 if [[ $UPDATE_MODE -eq 1 ]]; then
