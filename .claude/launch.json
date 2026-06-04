@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "guidenco",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "env": { "PORT": "3001" },
+      "cwd": "/Users/ronnel/Desktop/guidenco/web",
+      "port": 3001
+    }
+  ]
+}

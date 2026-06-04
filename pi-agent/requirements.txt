@@ -1,0 +1,3 @@
+# The Pi agent is pure I/O: capture runs via ffmpeg/v4l2-utils subprocesses and
+# HID writes use the stdlib. The only Python dependency is the WebSocket client.
+websockets>=12.0
