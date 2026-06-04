@@ -12,6 +12,19 @@ DNSMASQ_CONF="/tmp/guidenco-dnsmasq.conf"
 DNSMASQ_PID="/tmp/guidenco-dnsmasq.pid"
 
 start() {
+  # Idempotent: tear down any existing AP interface before re-creating (Fix #5)
+  if ip link show "$IFACE_AP" &>/dev/null; then
+    stop
+  fi
+
+  # Keep DHCP clients from managing the AP interface (Fix #1)
+  if [[ -f /etc/dhcpcd.conf ]] && ! grep -q "denyinterfaces uap0" /etc/dhcpcd.conf; then
+    echo "denyinterfaces uap0" >> /etc/dhcpcd.conf
+  fi
+  if command -v nmcli &>/dev/null; then
+    nmcli device set "$IFACE_AP" managed no 2>/dev/null || true
+  fi
+
   # Virtual AP interface (Broadcom on Pi 4 supports concurrent AP+station)
   iw dev "$IFACE_CLIENT" interface add "$IFACE_AP" type __ap
   ip link set dev "$IFACE_AP" up
@@ -24,20 +37,25 @@ ssid=$SSID
 hw_mode=g
 channel=6
 ieee80211n=1
+country_code=US
 wmm_enabled=0
 auth_algs=1
 ignore_broadcast_ssid=0
 EOF
+  chmod 600 "$HOSTAPD_CONF"
 
   cat > "$DNSMASQ_CONF" <<EOF
 interface=$IFACE_AP
 bind-interfaces
-dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,1h
+dhcp-range=192.168.4.2,192.168.4.50,255.255.255.0,15m
 # Redirect ALL DNS queries to the portal — triggers captive portal detection
 address=/#/$AP_IP
 EOF
+  chmod 600 "$DNSMASQ_CONF"
 
   hostapd -B "$HOSTAPD_CONF"
+  sleep 1
+  pgrep -f "hostapd.*guidenco-hostapd" >/dev/null || { echo "[guidenco] hostapd failed to start" >&2; exit 1; }
   dnsmasq --conf-file="$DNSMASQ_CONF" --pid-file="$DNSMASQ_PID"
 }
 
