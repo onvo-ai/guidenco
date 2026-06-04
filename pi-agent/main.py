@@ -27,7 +27,7 @@ def _start_snapshot_server(mgr):
     Tiny HTTP server on port 8001.
       GET  /snapshot        — latest JPEG frame
       POST /action          — execute a HID action inside the live service process
-                              body: JSON action dict (same schema as ws_client uses)
+                              body: JSON action dict (same schema as the relay uses)
     """
     class _H(BaseHTTPRequestHandler):
         def log_message(self, *a): pass  # silence access log
@@ -53,7 +53,7 @@ def _start_snapshot_server(mgr):
                 action = json.loads(body)
             except Exception:
                 self.send_error(400, 'Bad JSON'); return
-            from actions import execute as _exec
+            from hid import execute as _exec
             result = _exec(action)
             resp = json.dumps({'result': result}).encode()
             self.send_response(200)
@@ -69,8 +69,8 @@ def _start_snapshot_server(mgr):
 
 def main():
     from capture import get_manager
-    from ws_client import start_in_thread
-    from actions import cleanup
+    from relay import start_in_thread
+    from hid import cleanup
 
     # Start capture card reader
     mgr = get_manager()

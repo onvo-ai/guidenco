@@ -1,7 +1,7 @@
-# tools/hid_maps.py
 """
-HID Keyboard and Mouse codes, key mappings, and modifier definitions.
-Separating these configs makes tools and action scripts more modular and easier to read.
+keymaps — HID keyboard/mouse scan codes, key mappings, and modifier bytes.
+
+Kept separate from the action dispatch logic so the lookup tables stay readable.
 """
 
 MOD_NONE = 0x00

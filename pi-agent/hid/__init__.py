@@ -1,5 +1,5 @@
 """
-actions.py — Execute computer-use actions via USB HID.
+hid — execute computer-use actions via the USB HID gadget.
 
 Receives action dicts from the cloud relay (sent by the web server's agent loop).
 Coordinates are fractional (0.0–1.0); converted to coord-space (0–1000) then
@@ -23,14 +23,14 @@ import threading
 import time
 
 from config import COORD_SPACE, ABS_MAX
-from hid_maps import (
+from .keymaps import (
     MOD_NONE, MOD_LSHIFT, MOD_LCTRL, MOD_LALT, MOD_LGUI,
     KEYMAP, NAMED_KEYS, MOD_NAMES, KB_RELEASE,
     JS_NAMED, JS_MODIFIER_KEYS,
     BTN_LEFT, BTN_RIGHT, BTN_MAP,
 )
 
-logger = logging.getLogger("guidenco.actions")
+logger = logging.getLogger("guidenco.hid")
 
 KB_DEVICE = "/dev/hidg0"
 MS_DEVICE = "/dev/hidg1"
