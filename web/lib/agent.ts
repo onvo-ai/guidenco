@@ -96,33 +96,33 @@ const XY = {
 }
 
 const TOOLS = {
-  left_click:   tool({ description: 'Single left-click at (x,y).', parameters: z.object(XY) }),
-  double_click: tool({ description: 'Double left-click at (x,y). Use to open apps/files.', parameters: z.object(XY) }),
-  right_click:  tool({ description: 'Right-click at (x,y) for context menus.', parameters: z.object(XY) }),
-  hover:        tool({ description: 'Move mouse to (x,y) without clicking.', parameters: z.object(XY) }),
+  left_click:   tool({ description: 'Single left-click at (x,y).', inputSchema: z.object(XY) }),
+  double_click: tool({ description: 'Double left-click at (x,y). Use to open apps/files.', inputSchema: z.object(XY) }),
+  right_click:  tool({ description: 'Right-click at (x,y) for context menus.', inputSchema: z.object(XY) }),
+  hover:        tool({ description: 'Move mouse to (x,y) without clicking.', inputSchema: z.object(XY) }),
   drag: tool({
     description: 'Click-drag from (x1,y1) to (x2,y2).',
-    parameters: z.object({
+    inputSchema: z.object({
       x1: z.number().int().min(1).max(1000), y1: z.number().int().min(1).max(1000),
       x2: z.number().int().min(1).max(1000), y2: z.number().int().min(1).max(1000),
     }),
   }),
   scroll: tool({
     description: 'Scroll at (x,y). direction: up/down/left/right. amount: 1–10 steps.',
-    parameters: z.object({
+    inputSchema: z.object({
       x: z.number().int().min(1).max(1000), y: z.number().int().min(1).max(1000),
       direction: z.enum(['up', 'down', 'left', 'right']),
       amount: z.number().int().min(1).max(10),
     }),
   }),
-  type_text: tool({ description: 'Type literal text. Focus the field first with left_click.', parameters: z.object({ text: z.string() }) }),
-  key: tool({ description: 'Press a key or combo, e.g. "return", "ctrl+c", "win+e", "escape".', parameters: z.object({ key: z.string() }) }),
-  wait: tool({ description: 'Wait N seconds for UI to load or animate.', parameters: z.object({ seconds: z.number().min(1).max(5) }) }),
-  add_todo_item: tool({ description: 'Add a step to the todo list. Use on the first step to plan.', parameters: z.object({ text: z.string() }) }),
-  complete_todo_item: tool({ description: 'Mark a todo item done by matching its text.', parameters: z.object({ text: z.string() }) }),
+  type_text: tool({ description: 'Type literal text. Focus the field first with left_click.', inputSchema: z.object({ text: z.string() }) }),
+  key: tool({ description: 'Press a key or combo, e.g. "return", "ctrl+c", "win+e", "escape".', inputSchema: z.object({ key: z.string() }) }),
+  wait: tool({ description: 'Wait N seconds for UI to load or animate.', inputSchema: z.object({ seconds: z.number().min(1).max(5) }) }),
+  add_todo_item: tool({ description: 'Add a step to the todo list. Use on the first step to plan.', inputSchema: z.object({ text: z.string() }) }),
+  complete_todo_item: tool({ description: 'Mark a todo item done by matching its text.', inputSchema: z.object({ text: z.string() }) }),
   task_done: tool({
     description: 'Signal the task is complete. All todo items must be marked done first.',
-    parameters: z.object({ result: z.string().describe('What was accomplished'), success: z.boolean() }),
+    inputSchema: z.object({ result: z.string().describe('What was accomplished'), success: z.boolean() }),
   }),
 }
 
@@ -351,7 +351,7 @@ export async function startAgentLoop(
     ].filter(Boolean).join('\n')
 
     // ── 3. Call VLM (with retry on transient errors) ──────────────────────
-    let result: Awaited<ReturnType<typeof generateText>>
+    let result!: Awaited<ReturnType<typeof generateText>>
     {
       const VLM_RETRIES = 3
       const VLM_RETRY_DELAY_MS = 2000
@@ -360,7 +360,7 @@ export async function startAgentLoop(
       for (let attempt = 1; attempt <= VLM_RETRIES; attempt++) {
         try {
           result = await generateText({
-            model: ollamaProvider(MODEL, { parallelToolCalls: true } as any),
+            model: ollamaProvider(MODEL),
             system: SYSTEM_PROMPT,
             messages: [{
               role: 'user',
@@ -373,7 +373,7 @@ export async function startAgentLoop(
             toolChoice: 'required',
             maxSteps: 1,
             temperature: 0.1,
-            providerOptions: { openai: { think: true } },
+            providerOptions: { openai: { think: true, parallelToolCalls: true } },
           } as any)
           succeeded = true
           break
