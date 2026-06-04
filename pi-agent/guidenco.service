@@ -1,6 +1,6 @@
 [Unit]
 Description=Guidenco — vision-driven remote desktop automation
-After=network-online.target
+After=network-online.target guidenco-portal.service
 Wants=network-online.target
 
 [Service]
