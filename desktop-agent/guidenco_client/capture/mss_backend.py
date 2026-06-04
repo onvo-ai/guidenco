@@ -7,8 +7,8 @@ from PIL import Image
 
 class MssCapture:
     """Captures the primary monitor. Frames are downscaled to <= 1280 px wide
-    for streaming (matches the Pi's WebRTC encoder budget). The full-resolution
-    screen size is preserved separately for input-coordinate scaling."""
+    for streaming. The full-resolution screen size is preserved separately for
+    input-coordinate scaling."""
 
     def __init__(self, max_width: int = 1280, jpeg_quality: int = 70) -> None:
         self._sct = mss.mss()
@@ -36,10 +36,6 @@ class MssCapture:
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=self._jpeg_quality)
         return buf.getvalue()
-
-    def get_frame_rgb(self) -> tuple[int, int, bytes]:
-        img = self._grab()
-        return img.width, img.height, img.tobytes()
 
     def close(self) -> None:
         self._sct.close()

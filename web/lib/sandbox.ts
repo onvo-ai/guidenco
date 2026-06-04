@@ -52,7 +52,7 @@ curl -fsSL "${cloudUrl}/api/install/self/package.tar.gz" | tar -xz -C /opt/guide
 
 python3 -m venv /opt/guidenco/venv
 /opt/guidenco/venv/bin/pip install --quiet --upgrade pip
-/opt/guidenco/venv/bin/pip install --quiet /opt/guidenco/guidenco_client
+/opt/guidenco/venv/bin/pip install --quiet /opt/guidenco/desktop-agent
 
 nohup /opt/guidenco/venv/bin/guidenco-client run > /tmp/guidenco-client.log 2>&1 &
 `

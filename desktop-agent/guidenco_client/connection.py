@@ -1,5 +1,9 @@
-"""WebSocket relay client — sends frames, dispatches incoming actions,
-spawns WebRTC peers for offers."""
+"""WebSocket relay client — forwards screen frames and dispatches inbound actions.
+
+Mirrors the Pi agent's relay: capture frames go up over the WebSocket, action
+messages come down and are executed on the host. (No WebRTC — the cloud streams
+frames over WS and events over SSE.)
+"""
 import asyncio
 import base64
 import json
@@ -11,16 +15,15 @@ import websockets
 
 from .capture import CaptureSource
 from .input import InputSink
-from .webrtc import handle_webrtc_offer
 
 logger = logging.getLogger("guidenco_client.connection")
 
-FRAME_INTERVAL = 0.2     # ~5 fps for the WebSocket frame fallback
+FRAME_INTERVAL = 0.2     # ~5 fps frame uplink
 RECONNECT_DELAY = 5      # seconds before retry after a disconnect
 
 
 class ConnectionClient:
-    """Holds the relay WebSocket and dispatches messages to capture / input / webrtc."""
+    """Holds the relay WebSocket and dispatches messages to capture / input."""
 
     def __init__(
         self,
@@ -33,7 +36,6 @@ class ConnectionClient:
         self._device_token = device_token
         self._capture = capture
         self._input = input_sink
-        self._webrtc_tasks: set[asyncio.Task] = set()
 
     async def run_forever(self) -> None:
         ws_url = (
@@ -74,25 +76,12 @@ class ConnectionClient:
             except Exception:
                 continue
 
-            t = msg.get("type")
-            if t == "action":
+            if msg.get("type") == "action":
                 action = msg.get("action", {})
                 threading.Thread(
                     target=self._run_action, args=(action,),
                     daemon=True, name="action-exec",
                 ).start()
-
-            elif t == "webrtc:offer":
-                sdp = msg.get("sdp", "")
-                ice_servers = msg.get("iceServers") or []
-                if sdp:
-                    task = asyncio.create_task(
-                        handle_webrtc_offer(sdp, ws, self._capture, self._input, ice_servers)
-                    )
-                    self._webrtc_tasks.add(task)
-                    task.add_done_callback(self._webrtc_tasks.discard)
-                else:
-                    logger.warning("received webrtc:offer with empty sdp")
 
     def _run_action(self, action: dict) -> None:
         result = self._input.execute(action)

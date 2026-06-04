@@ -41,7 +41,7 @@ curl -fsSL "$CLOUD_URL/api/install/self/package.tar.gz" | tar -xz -C "$INSTALL_D
 echo "[guidenco-client] Creating virtual env..."
 python3 -m venv "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$INSTALL_DIR/venv/bin/pip" install --quiet "$INSTALL_DIR/guidenco_client"
+"$INSTALL_DIR/venv/bin/pip" install --quiet "$INSTALL_DIR/desktop-agent"
 
 ln -sf "$INSTALL_DIR/venv/bin/guidenco-client" "$BIN_DIR/guidenco-client"
 
@@ -79,7 +79,7 @@ tar -xzf $tarPath -C $installDir
 Write-Host "[guidenco-client] Creating virtual env..."
 python -m venv "$installDir\\venv"
 & "$installDir\\venv\\Scripts\\pip.exe" install --quiet --upgrade pip
-& "$installDir\\venv\\Scripts\\pip.exe" install --quiet "$installDir\\guidenco_client"
+& "$installDir\\venv\\Scripts\\pip.exe" install --quiet "$installDir\\desktop-agent"
 
 Write-Host ""
 Write-Host "[guidenco-client] Installed. Starting pairing..."
