@@ -45,7 +45,9 @@ fi
 # compiled Python deps, so no toolchain or -dev headers required.
 info "Installing system packages..."
 sudo apt-get update -q -y
-sudo apt-get install -y -q python3 python3-venv ffmpeg v4l-utils curl
+# --no-install-recommends keeps ffmpeg from dragging in its GUI/TTS recommends
+# tree (gtk, rsvg, flite, …) — none of which the headless capture path needs.
+sudo apt-get install -y -q --no-install-recommends python3 python3-venv ffmpeg v4l-utils curl
 
 # ── 3. Hardware detection ─────────────────────────────────────────────────────
 pi_model() {
@@ -57,9 +59,9 @@ pi_model() {
 # Returns: usb | csi
 detect_capture_type() {
   # Known USB HDMI capture card vendor IDs:
-  #   534d Macrosilicon (MS2109/MS2130)   1de1 Actions   0bda Realtek
-  #   eb1a eMPIA (em28xx)                  2040 Hauppauge
-  if lsusb 2>/dev/null | grep -qiE "534d:|1de1:|0bda:5846|eb1a:|2040:"; then
+  #   534d / 345f Macrosilicon (MS2109/MS2130)   1de1 Actions   0bda Realtek
+  #   eb1a eMPIA (em28xx)                         2040 Hauppauge
+  if lsusb 2>/dev/null | grep -qiE "534d:|345f:|1de1:|0bda:5846|eb1a:|2040:"; then
     echo "usb"; return
   fi
   if v4l2-ctl --list-devices 2>/dev/null | grep -qi "usb"; then
@@ -84,16 +86,19 @@ CAPTURE_TYPE=$(detect_capture_type)
 info "Pi model: $MODEL"
 info "Capture hardware: $CAPTURE_TYPE"
 
-# ── 4. CSI / TC358743 boot configuration ─────────────────────────────────────
+# ── 4. Boot configuration (capture + USB gadget) ─────────────────────────────
 NEEDS_REBOOT=0
-if [[ "$CAPTURE_TYPE" == "csi" ]]; then
-  info "Configuring HDMI-to-CSI adapter (TC358743)..."
-  CONFIG_TXT=""
-  for candidate in /boot/firmware/config.txt /boot/config.txt; do
-    [[ -f "$candidate" ]] && { CONFIG_TXT="$candidate"; break; }
-  done
-  [[ -n "$CONFIG_TXT" ]] || error "Cannot find Pi config.txt"
 
+# Locate the Pi boot config (shared by the CSI and HID-gadget setup below).
+CONFIG_TXT=""
+for candidate in /boot/firmware/config.txt /boot/config.txt; do
+  [[ -f "$candidate" ]] && { CONFIG_TXT="$candidate"; break; }
+done
+
+# CSI capture needs the TC358743 overlay + kernel module.
+if [[ "$CAPTURE_TYPE" == "csi" ]]; then
+  [[ -n "$CONFIG_TXT" ]] || error "Cannot find Pi config.txt"
+  info "Configuring HDMI-to-CSI adapter (TC358743)..."
   if ! grep -q "dtoverlay=tc358743" "$CONFIG_TXT"; then
     info "Adding tc358743 overlay to $CONFIG_TXT..."
     {
@@ -107,6 +112,24 @@ if [[ "$CAPTURE_TYPE" == "csi" ]]; then
   fi
   grep -q "tc358743" /etc/modules 2>/dev/null || echo "tc358743" | sudo tee -a /etc/modules > /dev/null
   sudo modprobe tc358743 2>/dev/null || true
+fi
+
+# USB HID gadget: the Pi must present as a USB keyboard/mouse to the target
+# machine, which requires the dwc2 controller in peripheral mode. If no USB
+# device controller exists yet, add the overlay under an [all] section — Pi 4/5
+# stock configs often place it under a CM-only filter ([cm4]/[cm5]) that never
+# applies to a Model B, leaving the gadget controller disabled.
+if [[ -z "$(ls /sys/class/udc/ 2>/dev/null)" ]]; then
+  if [[ -n "$CONFIG_TXT" ]] && ! grep -q "Guidenco: USB gadget" "$CONFIG_TXT"; then
+    info "Enabling USB gadget mode for HID (dwc2 peripheral)..."
+    {
+      echo ""
+      echo "[all]"
+      echo "# Guidenco: USB gadget (HID keyboard/mouse) — USB-C in peripheral mode"
+      echo "dtoverlay=dwc2,dr_mode=peripheral"
+    } | sudo tee -a "$CONFIG_TXT" > /dev/null
+    NEEDS_REBOOT=1
+  fi
 fi
 
 VIDEO_DEV=$(detect_video_dev)
@@ -150,7 +173,7 @@ sudo mkdir -p /etc/guidenco
   echo "CLOUD_URL=$CLOUD_URL"
   echo "CAPTURE_TYPE=$CAPTURE_TYPE"
   echo "VIDEO_DEV=$VIDEO_DEV"
-  [[ -n "$DEVICE_TOKEN" ]] && echo "DEVICE_TOKEN=$DEVICE_TOKEN"
+  if [[ -n "$DEVICE_TOKEN" ]]; then echo "DEVICE_TOKEN=$DEVICE_TOKEN"; fi
 } | sudo tee "$ENV_FILE" > /dev/null
 
 # ── 9. systemd service ────────────────────────────────────────────────────────
@@ -163,7 +186,7 @@ sudo systemctl enable guidenco.service
 if [[ $UPDATE_MODE -eq 1 ]]; then
   sudo systemctl restart guidenco.service
   info "Update complete."
-  [[ $NEEDS_REBOOT -eq 1 ]] && warn "Reboot required to activate the TC358743 overlay: sudo reboot"
+  [[ $NEEDS_REBOOT -eq 1 ]] && warn "Reboot required to finish hardware setup: sudo reboot"
   exit 0
 fi
 
@@ -199,7 +222,7 @@ done
 echo "DEVICE_TOKEN=$DEVICE_TOKEN" | sudo tee -a "$ENV_FILE" > /dev/null
 
 if [[ $NEEDS_REBOOT -eq 1 ]]; then
-  box "${GREEN}Device linked!${NC}\n\n  ${YELLOW}The HDMI-to-CSI adapter needs a reboot.${NC}\n\n  Run:  sudo reboot\n\n  Guidenco starts automatically after reboot.\n  Open $CLOUD_URL to control it."
+  box "${GREEN}Device linked!${NC}\n\n  ${YELLOW}A reboot is required to finish hardware setup${NC}\n  ${YELLOW}(USB gadget / capture overlay).${NC}\n\n  Run:  sudo reboot\n\n  Guidenco starts automatically after reboot.\n  Open $CLOUD_URL to control it."
 else
   sudo systemctl start guidenco.service
   box "${GREEN}Device linked!${NC}\n\n  Your Raspberry Pi is now connected.\n  Open $CLOUD_URL to control it."
