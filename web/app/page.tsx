@@ -134,8 +134,8 @@ export default function LandingPage() {
               },
               {
                 icon: <Wifi className="w-5 h-5" />,
-                title: 'WebRTC stream',
-                body: 'The Pi opens a secure WebRTC connection to the Guidenco relay. Low-latency video and a bidirectional control channel flow over a single encrypted peer connection.',
+                title: 'Live stream',
+                body: 'The Pi opens a secure WebSocket to the Guidenco relay, forwarding the screen as a live frame stream. Your clicks and keystrokes flow back over the same encrypted connection.',
                 glow: 'rgba(0,117,255,0.12)',
               },
               {

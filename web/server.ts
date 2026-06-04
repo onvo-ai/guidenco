@@ -18,23 +18,26 @@ const port = parseInt(process.env.PORT ?? '3000', 10)
 const app = next({ dev, turbopack: false })
 const handle = app.getRequestHandler()
 
-// Parse JSON body from an IncomingMessage
+// ── HTTP helpers ──────────────────────────────────────────────────────────────
+
+function sendJson(res: ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify(body))
+}
+
+/** Parse a JSON request body, resolving null on malformed/empty input. */
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let raw = ''
     req.on('data', (chunk) => (raw += chunk))
     req.on('end', () => {
-      try {
-        resolve(JSON.parse(raw))
-      } catch {
-        resolve(null)
-      }
+      try { resolve(JSON.parse(raw)) } catch { resolve(null) }
     })
     req.on('error', reject)
   })
 }
 
-// Get a Better Auth session from raw Node.js headers
+/** Resolve a Better Auth session from raw Node.js request headers. */
 async function getSession(req: IncomingMessage) {
   const headers = new Headers()
   for (const [key, value] of Object.entries(req.headers)) {
@@ -43,193 +46,101 @@ async function getSession(req: IncomingMessage) {
   return auth.api.getSession({ headers })
 }
 
-// POST /api/relay/:deviceId/command
-async function handleCommand(req: IncomingMessage, res: ServerResponse, deviceId: string) {
+type DeviceHandler = (req: IncomingMessage, res: ServerResponse, deviceId: string) => Promise<void> | void
+
+/**
+ * Guard a device-scoped route: require a session and verify the caller owns the
+ * device, then invoke the handler. Replies 401/404 itself on failure.
+ */
+async function withDeviceAuth(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deviceId: string,
+  handler: DeviceHandler,
+) {
   const session = await getSession(req)
-  if (!session) {
-    res.writeHead(401, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Unauthorized' }))
-    return
-  }
+  if (!session) return sendJson(res, 401, { error: 'Unauthorized' })
 
   const [device] = await db
     .select({ id: devices.id })
     .from(devices)
     .where(and(eq(devices.id, deviceId), eq(devices.userId, session.user.id)))
     .limit(1)
+  if (!device) return sendJson(res, 404, { error: 'Not found' })
 
-  if (!device) {
-    res.writeHead(404, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Not found' }))
-    return
-  }
+  await handler(req, res, deviceId)
+}
 
-  if (!isDeviceOnline(deviceId)) {
-    res.writeHead(503, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Device offline' }))
-    return
-  }
+// ── Route handlers (auth + ownership already verified) ─────────────────────────
+
+// POST /api/relay/:deviceId/command
+async function handleCommand(req: IncomingMessage, res: ServerResponse, deviceId: string) {
+  if (!isDeviceOnline(deviceId)) return sendJson(res, 503, { error: 'Device offline' })
 
   const body = await readBody(req) as Record<string, string> | null
   const { goal, instructions } = body ?? {}
-
-  if (!goal) {
-    res.writeHead(400, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'goal required' }))
-    return
-  }
+  if (!goal) return sendJson(res, 400, { error: 'goal required' })
 
   startAgentLoop(deviceId, goal, instructions ?? '').catch((err) => {
     console.error(`[agent] loop crashed for ${deviceId}:`, err)
     emitToListeners(deviceId, JSON.stringify({ type: 'agent:error', message: String(err) }))
   })
-
-  res.writeHead(200, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify({ ok: true }))
+  sendJson(res, 200, { ok: true })
 }
 
 // POST /api/relay/:deviceId/input
 async function handleInput(req: IncomingMessage, res: ServerResponse, deviceId: string) {
-  const session = await getSession(req)
-  if (!session) {
-    res.writeHead(401, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Unauthorized' }))
-    return
-  }
-
-  const [device] = await db
-    .select({ id: devices.id })
-    .from(devices)
-    .where(and(eq(devices.id, deviceId), eq(devices.userId, session.user.id)))
-    .limit(1)
-
-  if (!device) {
-    res.writeHead(404, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Not found' }))
-    return
-  }
-
   const body = await readBody(req) as Record<string, unknown> | null
-  if (!body) {
-    res.writeHead(400, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Invalid body' }))
-    return
-  }
+  if (!body) return sendJson(res, 400, { error: 'Invalid body' })
 
   const sent = sendToDevice(deviceId, JSON.stringify({ type: 'action', action: body }))
-  res.writeHead(sent ? 200 : 503, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify({ ok: sent }))
+  sendJson(res, sent ? 200 : 503, { ok: sent })
 }
 
-// GET /api/relay/:deviceId/stream — SSE, proxied from the Pi and agent events.
-async function handleStream(req: IncomingMessage, res: ServerResponse, deviceId: string) {
-  const session = await getSession(req)
-  if (!session) {
-    res.writeHead(401, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Unauthorized' }))
-    return
-  }
-
-  const [device] = await db
-    .select({ id: devices.id })
-    .from(devices)
-    .where(and(eq(devices.id, deviceId), eq(devices.userId, session.user.id)))
-    .limit(1)
-
-  if (!device) {
-    res.writeHead(404, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Not found' }))
-    return
-  }
-
+// GET /api/relay/:deviceId/stream — SSE proxy of Pi frames + agent events.
+function handleStream(req: IncomingMessage, res: ServerResponse, deviceId: string) {
   res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
+    'Content-Type':  'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
+    'Connection':    'keep-alive',
   })
   res.flushHeaders()
 
   const remove = addBrowserListener(deviceId, (raw) => {
-    try {
-      res.write(`data: ${raw}\n\n`)
-    } catch { /* client disconnected */ }
+    try { res.write(`data: ${raw}\n\n`) } catch { /* client disconnected */ }
   })
-
   req.on('close', remove)
 }
 
-// GET /api/relay/:deviceId/thumbnail
-async function handleThumbnail(req: IncomingMessage, res: ServerResponse, deviceId: string) {
-  const session = await getSession(req)
-  if (!session) {
-    res.writeHead(401, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Unauthorized' }))
-    return
-  }
-
-  const [device] = await db
-    .select({ id: devices.id })
-    .from(devices)
-    .where(and(eq(devices.id, deviceId), eq(devices.userId, session.user.id)))
-    .limit(1)
-
-  if (!device) {
-    res.writeHead(404, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Not found' }))
-    return
-  }
-
+// GET /api/relay/:deviceId/thumbnail — live frame if connected, else stored.
+async function handleThumbnail(_req: IncomingMessage, res: ServerResponse, deviceId: string) {
   const live = getLatestFrame(deviceId)
-  if (live) {
-    const buf = Buffer.from(live, 'base64')
-    res.writeHead(200, {
-      'Content-Type':  'image/jpeg',
-      'Content-Length': buf.length,
-      'Cache-Control': 'no-store',
-    })
-    res.end(buf)
-    return
-  }
+  const jpeg = live ? Buffer.from(live, 'base64') : await fetchThumbnail(deviceId)
+  if (!jpeg) return sendJson(res, 404, { error: 'No thumbnail available' })
 
-  const stored = await fetchThumbnail(deviceId)
-  if (stored) {
-    res.writeHead(200, {
-      'Content-Type':  'image/jpeg',
-      'Content-Length': stored.length,
-      'Cache-Control': 'no-store',
-    })
-    res.end(stored)
-    return
-  }
-
-  res.writeHead(404, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify({ error: 'No thumbnail available' }))
+  res.writeHead(200, {
+    'Content-Type':   'image/jpeg',
+    'Content-Length': jpeg.length,
+    'Cache-Control':  'no-store',
+  })
+  res.end(jpeg)
 }
 
-async function handleStop(req: IncomingMessage, res: ServerResponse, deviceId: string) {
-  const session = await getSession(req)
-  if (!session) {
-    res.writeHead(401, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Unauthorized' }))
-    return
-  }
-
-  const [device] = await db
-    .select({ id: devices.id })
-    .from(devices)
-    .where(and(eq(devices.id, deviceId), eq(devices.userId, session.user.id)))
-    .limit(1)
-
-  if (!device) {
-    res.writeHead(404, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Not found' }))
-    return
-  }
-
+// POST /api/relay/:deviceId/stop
+function handleStop(_req: IncomingMessage, res: ServerResponse, deviceId: string) {
   requestAgentStop(deviceId)
-  res.writeHead(200, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify({ ok: true }))
+  sendJson(res, 200, { ok: true })
 }
+
+// ── Routing table ──────────────────────────────────────────────────────────────
+
+const ROUTES: { method: string; pattern: RegExp; handler: DeviceHandler }[] = [
+  { method: 'POST', pattern: /^\/api\/relay\/([^/]+)\/command$/,   handler: handleCommand },
+  { method: 'GET',  pattern: /^\/api\/relay\/([^/]+)\/stream$/,    handler: handleStream },
+  { method: 'POST', pattern: /^\/api\/relay\/([^/]+)\/input$/,     handler: handleInput },
+  { method: 'POST', pattern: /^\/api\/relay\/([^/]+)\/stop$/,      handler: handleStop },
+  { method: 'GET',  pattern: /^\/api\/relay\/([^/]+)\/thumbnail$/, handler: handleThumbnail },
+]
 
 app.prepare().then(async () => {
   await ensureBucket()
@@ -239,49 +150,24 @@ app.prepare().then(async () => {
     const parsedUrl = parse(req.url!, true)
     const pathname = parsedUrl.pathname ?? ''
 
-    const cmdMatch = pathname.match(/^\/api\/relay\/([^/]+)\/command$/)
-    if (cmdMatch && req.method === 'POST') {
-      await handleCommand(req, res, cmdMatch[1])
-      return
-    }
-
-    const streamMatch = pathname.match(/^\/api\/relay\/([^/]+)\/stream$/)
-    if (streamMatch && req.method === 'GET') {
-      await handleStream(req, res, streamMatch[1])
-      return
-    }
-
-    const inputMatch = pathname.match(/^\/api\/relay\/([^/]+)\/input$/)
-    if (inputMatch && req.method === 'POST') {
-      await handleInput(req, res, inputMatch[1])
-      return
-    }
-
-    const stopMatch = pathname.match(/^\/api\/relay\/([^/]+)\/stop$/)
-    if (stopMatch && req.method === 'POST') {
-      await handleStop(req, res, stopMatch[1])
-      return
-    }
-
-    const thumbMatch = pathname.match(/^\/api\/relay\/([^/]+)\/thumbnail$/)
-    if (thumbMatch && req.method === 'GET') {
-      await handleThumbnail(req, res, thumbMatch[1])
-      return
+    for (const { method, pattern, handler } of ROUTES) {
+      const match = pathname.match(pattern)
+      if (match && req.method === method) {
+        await withDeviceAuth(req, res, match[1], handler)
+        return
+      }
     }
 
     handle(req, res, parsedUrl)
   })
 
   const wss = new WebSocketServer({ noServer: true })
-
   const nextUpgrade = app.getUpgradeHandler()
 
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = parse(req.url ?? '/', true)
     if (pathname === '/relay/ws') {
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        handleRelayUpgrade(ws, req)
-      })
+      wss.handleUpgrade(req, socket, head, (ws) => handleRelayUpgrade(ws, req))
     } else {
       nextUpgrade(req, socket, head)
     }
