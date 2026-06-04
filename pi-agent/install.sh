@@ -2,7 +2,7 @@
 # Guidenco Pi installer — Ubuntu Server / Raspberry Pi OS, all Pi models.
 # Supports USB HDMI capture cards AND HDMI-to-CSI adapters (TC358743).
 #
-#   curl -fsSL https://guidenco.app/install.sh | bash
+#   curl -fsSL https://guidenco.app/install.sh | sudo bash
 #
 set -euo pipefail
 
