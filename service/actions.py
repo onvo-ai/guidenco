@@ -24,7 +24,9 @@ import time
 
 from config import COORD_SPACE, ABS_MAX
 from hid_maps import (
-    MOD_NONE, KEYMAP, NAMED_KEYS, MOD_NAMES, KB_RELEASE,
+    MOD_NONE, MOD_LSHIFT, MOD_LCTRL, MOD_LALT, MOD_LGUI,
+    KEYMAP, NAMED_KEYS, MOD_NAMES, KB_RELEASE,
+    JS_NAMED, JS_MODIFIER_KEYS,
     BTN_LEFT, BTN_RIGHT, BTN_MAP,
 )
 
@@ -147,13 +149,53 @@ def _w(target: str, data: bytes, _retried=False):
 # ── Keyboard helpers ──────────────────────────────────────────────────────────
 
 def _press_key(mod, code, delay=0.05):
+    code = code or 0          # code may be None for modifier-only presses (e.g. lone Windows key)
     if mod and code:
+        # Settle modifiers one report before the key so the host registers the combo.
         _w("kb", bytes([mod, 0, 0, 0, 0, 0, 0, 0]))
         time.sleep(0.02)
     _w("kb", bytes([mod, 0, code, 0, 0, 0, 0, 0]))
     time.sleep(delay)
     _w("kb", KB_RELEASE)
     time.sleep(delay)
+
+
+def _press_js_key(key: str, modifiers: dict) -> None:
+    """
+    Translate a browser KeyboardEvent into a HID keypress.
+
+    `key` is KeyboardEvent.key (a literal char like ' '/'a'/'A'/'!', or a name
+    like 'Enter'/'ArrowUp'/'Meta'); `modifiers` is {shift,ctrl,alt,meta} booleans.
+    """
+    modifiers = modifiers or {}
+    mod = MOD_NONE
+    if modifiers.get("shift"): mod |= MOD_LSHIFT
+    if modifiers.get("ctrl"):  mod |= MOD_LCTRL
+    if modifiers.get("alt"):   mod |= MOD_LALT
+    if modifiers.get("meta"):  mod |= MOD_LGUI
+
+    code = None
+    if key in JS_MODIFIER_KEYS:
+        # Lone modifier keydown — hold the modifier alone (Windows key → Start menu).
+        mod |= JS_MODIFIER_KEYS[key]
+    elif key in JS_NAMED:
+        code = JS_NAMED[key]
+    elif len(key) == 1:
+        if key in KEYMAP:
+            kmod, code = KEYMAP[key]
+            mod |= kmod           # KEYMAP already encodes shift for uppercase/symbols
+        else:
+            logger.warning("[hid] unmapped key char: %r", key)
+            return
+    else:
+        nk = key.lower()
+        if nk in NAMED_KEYS:
+            code = NAMED_KEYS[nk][1]
+        else:
+            logger.warning("[hid] unmapped key name: %r", key)
+            return
+
+    _press_key(mod, code)
 
 
 def _type_char(ch: str, delay=0.04):
@@ -214,15 +256,19 @@ def execute(action: dict) -> str:
     """
     with _lock:
         st = _host_state()
+        woke = False
         if st not in ("configured", None):
-            _wakeup_host()
+            woke = _wakeup_host()
         _open()
 
-        # Wake primer — silent F15 press
-        _w("kb", bytes([0, 0, 0x68, 0, 0, 0, 0, 0]))
-        time.sleep(0.02)
-        _w("kb", KB_RELEASE)
-        time.sleep(0.05)
+        # Wake primer — a silent F15 tap to nudge the OS awake.  Only needed right
+        # after a real wake; firing it on every action (esp. high-frequency mouse
+        # moves) just adds latency and spams F15 at the host.
+        if woke:
+            _w("kb", bytes([0, 0, 0x68, 0, 0, 0, 0, 0]))
+            time.sleep(0.02)
+            _w("kb", KB_RELEASE)
+            time.sleep(0.05)
 
         return _dispatch(action)
 
@@ -239,7 +285,9 @@ def _dispatch(action: dict) -> str:
             x = _frac_to_coord(float(action.get("x", 0.5)))
             y = _frac_to_coord(float(action.get("y", 0.5)))
             _move_to(x, y); time.sleep(0.05)
-            _held_btn = BTN_LEFT; _click(BTN_LEFT); _held_btn = 0
+            # Manual mode sends right-clicks as {type:'click', button:'right'}.
+            btn = BTN_RIGHT if action.get("button") == "right" else BTN_LEFT
+            _held_btn = btn; _click(btn); _held_btn = 0
 
         elif t == "right_click":
             x = _frac_to_coord(float(action.get("x", 0.5)))
@@ -284,7 +332,14 @@ def _dispatch(action: dict) -> str:
                 _type_char(ch)
 
         elif t == "key":
-            _press_combo(str(action.get("key", "")))
+            key = str(action.get("key", ""))
+            modifiers = action.get("modifiers")
+            if isinstance(modifiers, dict):
+                # Manual mode: KeyboardEvent.key + modifier booleans.
+                _press_js_key(key, modifiers)
+            else:
+                # Agent path: combo string like "ctrl+c" / "Return".
+                _press_combo(key)
 
         elif t == "wait":
             time.sleep(float(action.get("seconds", 1)))

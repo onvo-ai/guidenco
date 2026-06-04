@@ -59,6 +59,28 @@ MOD_NAMES = {
     'shift': MOD_LSHIFT,
 }
 
+# ── Browser KeyboardEvent.key → HID ───────────────────────────────────────────
+# Manual mode (DeviceViewer.tsx) sends {type:'key', key:<e.key>, modifiers:{…}}.
+# Printable keys arrive as their literal char (' ', 'a', 'A', '!') and resolve
+# via KEYMAP.  These are the non-printable named keys that don't.
+JS_NAMED = {
+    'Enter': 0x28, 'Tab': 0x2b, 'Backspace': 0x2a, 'Escape': 0x29,
+    'Delete': 0x4c, 'Insert': 0x49,
+    'Home': 0x4a, 'End': 0x4d, 'PageUp': 0x4b, 'PageDown': 0x4e,
+    'ArrowUp': 0x52, 'ArrowDown': 0x51, 'ArrowLeft': 0x50, 'ArrowRight': 0x4f,
+    'CapsLock': 0x39, 'NumLock': 0x53, 'ScrollLock': 0x47,
+    'PrintScreen': 0x46, 'Pause': 0x48, 'ContextMenu': 0x65,
+    'F1': 0x3a, 'F2': 0x3b, 'F3': 0x3c, 'F4': 0x3d, 'F5': 0x3e, 'F6': 0x3f,
+    'F7': 0x40, 'F8': 0x41, 'F9': 0x42, 'F10': 0x43, 'F11': 0x44, 'F12': 0x45,
+}
+
+# Standalone modifier keydowns (e.g. the Windows key pressed by itself to open
+# the Start menu).  e.key for the Windows key is 'Meta'.
+JS_MODIFIER_KEYS = {
+    'Shift': MOD_LSHIFT, 'Control': MOD_LCTRL, 'Alt': MOD_LALT,
+    'Meta': MOD_LGUI, 'OS': MOD_LGUI,
+}
+
 KB_RELEASE = bytes([0, 0, 0, 0, 0, 0, 0, 0])      # 8 bytes
 MOUSE_RELEASE = bytes([0, 0, 0, 0, 0])            # 5 bytes
 

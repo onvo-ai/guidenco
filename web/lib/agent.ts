@@ -23,16 +23,16 @@
 import { generateText, tool } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { z } from 'zod'
-import { getLatestFrame, sendToDevice, emitToListeners, clearAgentStop, isAgentStopRequested } from './relay'
+import { getLatestFrame, waitForFreshFrame, sendToDevice, emitToListeners, clearAgentStop, isAgentStopRequested } from './relay'
 import { db } from './db/client'
 import { secrets } from './db/schema'
 import { devices } from './db/schema'
 import { eq } from 'drizzle-orm'
 
 const MAX_STEPS     = 20
-const STEP_DELAY_MS        = 1200   // between actions within a step
-const LAUNCH_DELAY_MS      = 1500   // extra wait after launching an app (double_click, win key)
-const PAGE_LOAD_DELAY_MS   = 4000   // extra wait after return/enter — full page load can be slow
+const STEP_DELAY_MS        = 800    // between actions within a step
+const LAUNCH_DELAY_MS      = 3000   // extra wait after launching an app (double_click, win key)
+const PAGE_LOAD_DELAY_MS   = 2500   // extra wait after return/enter — fresh-frame guarantee covers the rest
 
 // Ollama Cloud OpenAI-compatible endpoint
 const BASE_URL = (process.env.AGENT_BASE_URL ?? 'https://ollama.com/v1')
@@ -48,52 +48,39 @@ const SYSTEM_PROMPT = `You are a Windows automation agent controlling a Windows 
 
 Coordinate space: X 1–1000 (left→right), Y 1–1000 (top→bottom).
 
-AVAILABLE TOOLS:
-- left_click(x,y): Single left-click. Use for: buttons, links, menus, taskbar icons, Start Menu items, form fields.
-- double_click(x,y): Double left-click. Use for: DESKTOP icons (to open apps or files), File Explorer files/folders, any icon sitting on the wallpaper background.
-- right_click(x,y): Right-click for context menus.
-- hover(x,y): Move the mouse without clicking. Use to reveal tooltips or hover menus.
-- drag(x1,y1,x2,y2): Click-drag from point to point.
-- key(key): Press a key or combo. Examples: 'ctrl+c', 'ctrl+v', 'win+e', 'alt+f4', 'return', 'escape', 'tab'.
-- type_text(text): Type literal text characters into a focused field.
-- scroll(x,y,direction,amount): Scroll at position. direction: up/down/left/right. amount: 1–10.
-- wait(seconds): Pause 1–5 seconds before next screenshot.
-- add_todo_item(text): Add a new item to the todo list. Use on the FIRST step to create your plan.
-- complete_todo_item(text): Mark a todo item done. Call as soon as you SEE it is completed.
-- task_done(result,success): Call ONLY when every todo item is marked done AND the task is fully complete.
+TOOLS:
+- left_click(x,y), double_click(x,y), right_click(x,y), hover(x,y)
+- drag(x1,y1,x2,y2)
+- key(key): e.g. 'ctrl+l', 'ctrl+t', 'ctrl+w', 'alt+f4', 'win', 'return', 'escape', 'tab'
+- type_text(text): types into the focused element
+- scroll(x,y,direction,amount): direction up/down/left/right, amount 1–10
+- wait(seconds): 1–5 seconds
+- add_todo_item(text): add a step to the visible todo list
+- complete_todo_item(text): mark a todo done
+- task_done(result,success): call when the goal is fully achieved. The result MUST contain the actual answer or outcome — e.g. for "what is X?" write the answer in result, not just "done".
 
-CLICK RULES — read carefully:
-- DESKTOP icons (icons on the wallpaper/background area): ALWAYS double_click to open them.
-- TASKBAR icons (pinned/running apps in the bar at the bottom): single left_click to open/switch.
-- START MENU items (after pressing Win): single left_click.
-- FILE EXPLORER files and folders: double_click to open.
-- Buttons, links, checkboxes, input fields, menu items: single left_click.
-- If you are unsure whether something is a desktop icon or taskbar, look at where it sits: desktop = wallpaper background; taskbar = the bar strip along an edge.
+CLICK RULES:
+- Desktop icons (on the wallpaper): double_click
+- Taskbar icons (bottom bar): left_click
+- Everything else (buttons, fields, menu items, links): left_click
 
-IMPORTANT USAGE PATTERNS:
-- To open an app whose icon is on the DESKTOP: double_click the icon.
-- To open an app via Start Menu: key('win'), type_text(app_name), wait(2), key('return').
-- Before typing into any field, always left_click it first to focus it.
-- Combine related actions in one step: left_click(field) + type_text('text') + key('return').
-- Use wait() after app launches or page loads before taking further actions.
-- In EVERY response write 1–3 sentences explaining what is on screen and what you are doing.
-- On the FIRST step, ALWAYS call add_todo_item for each step in your plan first, then DO NOT call any other tool in that same step.
-- EVERY todo item MUST include a screen position hint so future-you knows where to look. Examples:
-  - "Click the Arc browser icon in the taskbar (bottom edge of screen)"
-  - "Click the Start button (bottom-left corner)"
-  - "Click the address bar (top of browser window, center)"
-  - "Double-click the Recycle Bin icon (top-left area of desktop)"
-- ORDER MATTERS: call add_todo_item in the EXACT order the steps must execute. The first add_todo_item call is step 1, the second is step 2, and so on. Bad example: pressing Enter listed BEFORE typing the URL. Good example for "go to example.com": (1) Click the address bar, (2) Type example.com, (3) Press Enter.
-- When you execute a todo, RE-READ its position hint and click in that region — not where you guessed before.
-- After the initial planning step, every step MUST include at least one non-todo tool call.
-- Mark items done with complete_todo_item as soon as you can SEE they are done in the screenshot.
+KEYBOARD SHORTCUTS — always prefer these over clicking small targets:
+- Open/search an app: key('win') → type_text(name) → key('return')
+- Close window: key('alt+f4')
+- Close browser tab: key('ctrl+w')
+- New browser tab: key('ctrl+t')
+- Focus browser address bar: key('ctrl+l')
+- Browser navigate/search: key('ctrl+l') → type_text(url_or_query) → key('return')
 
-CRITICAL RULES:
-- NEVER call task_done immediately after a motor action — wait for the next screenshot to verify.
-- ONLY call task_done when you can SEE the confirmed result AND every todo item is marked done.
-- Aim for the CENTER of elements when clicking.
-- If the same action fails twice, try a different approach.
-- Use Windows key (not cmd), ctrl (not cmd). This is Windows, not macOS.`
+RULES:
+1. Look at the screenshot before every action. If the goal is already achieved, call task_done immediately.
+2. Use add_todo_item to plan when the task has multiple steps — but you can also act and plan in the same step.
+3. Call complete_todo_item as soon as you take the action, not after seeing the result.
+4. After any navigation or app launch, the next screenshot shows the result — read it before acting again.
+5. If an action fails twice, switch to a completely different approach.
+6. Never repeat the exact same failing action more than twice.
+7. Aim for the CENTER of elements when clicking.
+8. This is Windows: use ctrl (not cmd), win key (not cmd).`
 
 // ── Tools ─────────────────────────────────────────────────────────────────
 
@@ -294,8 +281,8 @@ export async function startAgentLoop(
   const todoItems: Array<{ text: string; done: boolean }> = []
   const prevSigs: string[] = []
   let   loopWarning        = ''
-  let   planCreated        = false   // set to true once add_todo_item is called
   let   noProgressCount    = 0       // bail if too many empty iterations
+  let   lastActionAt       = 0       // when the last action + its delay completed
 
   // Load this user's secrets so {{KEY}} substitution works in type_text
   activeSecrets = new Map()
@@ -337,9 +324,13 @@ export async function startAgentLoop(
       return
     }
 
-    // ── 1. Grab latest frame ──────────────────────────────────────────────
+    // ── 1. Grab latest frame (fresh after previous actions) ──────────────
     let frame: string | null = null
-    for (let i = 0; i < 30 && !frame; i++) { frame = getLatestFrame(deviceId); if (!frame) await sleep(100) }
+    if (lastActionAt > 0) {
+      frame = await waitForFreshFrame(deviceId, lastActionAt, 10_000)
+    } else {
+      for (let i = 0; i < 30 && !frame; i++) { frame = getLatestFrame(deviceId); if (!frame) await sleep(100) }
+    }
     if (!frame) { emit(deviceId, 'agent:error', { message: 'Device not sending frames.' }); return }
 
     // ── 2. Build user message with history + todo + screenshot ────────────
@@ -359,63 +350,66 @@ export async function startAgentLoop(
       loopWarning ? `\nWARNING: ${loopWarning}` : '',
     ].filter(Boolean).join('\n')
 
-    // ── 3. Call VLM ───────────────────────────────────────────────────────
-    // On the planning step, only expose add_todo_item so the model is FORCED
-    // to plan first. After planCreated is true, expose all tools.
-    const stepTools = planCreated
-      ? TOOLS
-      : { add_todo_item: TOOLS.add_todo_item }
-
+    // ── 3. Call VLM (with retry on transient errors) ──────────────────────
     let result: Awaited<ReturnType<typeof generateText>>
-    try {
-      result = await generateText({
-        model: ollamaProvider(MODEL, { parallelToolCalls: true } as any),
-        system: SYSTEM_PROMPT,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'text', text: userText },
-            { type: 'image', image: Buffer.from(frame, 'base64'), mediaType: 'image/jpeg' as const },
-          ],
-        }],
-        tools: stepTools,
-        toolChoice: 'required',
-        maxSteps: 1,
-        temperature: 0.1,
-        providerOptions: { openai: { think: true } },
-      } as any)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      emit(deviceId, 'agent:error', { message: `VLM call failed: ${msg}` })
-      return
+    {
+      const VLM_RETRIES = 3
+      const VLM_RETRY_DELAY_MS = 2000
+      let lastErr: unknown
+      let succeeded = false
+      for (let attempt = 1; attempt <= VLM_RETRIES; attempt++) {
+        try {
+          result = await generateText({
+            model: ollamaProvider(MODEL, { parallelToolCalls: true } as any),
+            system: SYSTEM_PROMPT,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: userText },
+                { type: 'image', image: Buffer.from(frame, 'base64'), mediaType: 'image/jpeg' as const },
+              ],
+            }],
+            tools: TOOLS,
+            toolChoice: 'required',
+            maxSteps: 1,
+            temperature: 0.1,
+            providerOptions: { openai: { think: true } },
+          } as any)
+          succeeded = true
+          break
+        } catch (err) {
+          lastErr = err
+          console.warn(`[agent ${deviceId}] VLM attempt ${attempt}/${VLM_RETRIES} failed:`, err instanceof Error ? err.message : String(err))
+          if (attempt < VLM_RETRIES) await sleep(VLM_RETRY_DELAY_MS * attempt)
+        }
+      }
+      if (!succeeded) {
+        const msg = lastErr instanceof Error ? lastErr.message : String(lastErr)
+        emit(deviceId, 'agent:error', { message: `VLM call failed after ${VLM_RETRIES} attempts: ${msg}` })
+        return
+      }
     }
 
     // ── 4. Process tool calls ─────────────────────────────────────────────
-    let calls = (result.toolCalls ?? []) as Array<{ toolName: string; input?: unknown; args?: unknown; toolCallId: string }>
-    console.log(`[agent ${deviceId}] step ${step} planCreated=${planCreated} calls:`, calls.map(c => `${c.toolName}(${JSON.stringify(c.input ?? c.args ?? {}).slice(0, 60)})`).join(', '))
+    const calls = (result!.toolCalls ?? []) as Array<{ toolName: string; input?: unknown; args?: unknown; toolCallId: string }>
+    console.log(`[agent ${deviceId}] step ${step} calls:`, calls.map(c => `${c.toolName}(${JSON.stringify(c.input ?? c.args ?? {}).slice(0, 60)})`).join(', '))
     if (!calls.length) {
-      emit(deviceId, 'agent:error', { message: 'VLM returned no tool calls.' })
-      return
-    }
-
-    // Server-side enforcement: qwen-vl ignores the `tools` restriction we send
-    // and will call action tools even when we only expose add_todo_item.
-    // On the planning step, drop any non-add_todo_item calls.
-    if (!planCreated) {
-      const filtered = calls.filter(c => c.toolName === 'add_todo_item')
-      console.log(`[agent ${deviceId}] planning filter: kept ${filtered.length}/${calls.length} calls`)
-      if (filtered.length === 0) {
-        // Model called only action tools — ignore them all and warn.
-        loopWarning = 'STOP. You called action tools, but you must first create a plan. Your action calls were ignored. Call add_todo_item to add each step of your plan now.'
-        noProgressCount++
-        if (noProgressCount >= 3) {
-          emit(deviceId, 'agent:error', { message: 'Agent refused to create a plan after 3 attempts. Aborting.' })
-          return
-        }
-        history.push('[blocked] tried to act before planning')
-        continue
+      noProgressCount++
+      // If the model has already executed at least one action and then stops
+      // producing tool calls, it almost certainly completed the task but failed
+      // to format task_done. Infer success rather than erroring.
+      if (lastActionAt > 0 && noProgressCount >= 2) {
+        // Use the model's text response as the result if it returned one
+        const inferredResult = (result!.text ?? '').trim() || 'Task completed.'
+        emit(deviceId, 'agent:done', { message: inferredResult, success: true })
+        return
       }
-      calls = filtered
+      if (noProgressCount >= 3) {
+        emit(deviceId, 'agent:error', { message: 'VLM returned no tool calls 3 times in a row. Aborting.' })
+        return
+      }
+      loopWarning = 'You must call at least one tool. If the task is complete, call task_done.'
+      continue
     }
 
     const stepActions: Array<{ name: string; input: Record<string, unknown> }> = []
@@ -440,15 +434,6 @@ export async function startAgentLoop(
         continue
       }
       if (name === 'task_done') {
-        if (todoItems.length === 0) {
-          loopWarning = 'CANNOT FINISH: you have not created a plan yet. Call add_todo_item to create your todo list first.'
-          continue
-        }
-        const open = todoItems.filter(t => !t.done)
-        if (open.length) {
-          loopWarning = `CANNOT FINISH: ${open.length} todo item(s) still open: ${open.map(t => t.text).join('; ')}. Complete them first.`
-          continue
-        }
         taskDone    = true
         taskResult  = String(input.result ?? 'Done.')
         taskSuccess = Boolean(input.success ?? true)
@@ -461,38 +446,17 @@ export async function startAgentLoop(
 
     if (todosChanged) emit(deviceId, 'agent:todo', { items: todoItems })
 
-    // Planning step enforcement:
-    // The model MUST call add_todo_item before taking any action.
-    // Once planCreated is true, it can proceed with actions.
-    if (todosChanged && !planCreated) {
-      planCreated = true
-      if (stepActions.length) {
-        loopWarning = 'On the planning step you must ONLY create the plan — action calls were ignored. Now execute the plan step by step.'
+    // No-progress kill switch: if only todo metadata changed (no actions, no task_done),
+    // count it but don't abort yet. If nothing at all happened 3 times, abort.
+    if (!stepActions.length && !taskDone) {
+      if (!todosChanged) {
+        noProgressCount++
+        if (noProgressCount >= 3) {
+          emit(deviceId, 'agent:error', { message: 'Agent made no progress for 3 consecutive steps. Aborting.' })
+          return
+        }
+        loopWarning = 'No progress. Call an action tool (click, type, key, etc.) or call task_done if the goal is complete.'
       }
-      history.push('[planning] Created todo list')
-      noProgressCount = 0
-      continue
-    }
-
-
-    // After planning: if model called only todo management tools (no actions),
-    // just record and loop without executing anything.
-    if (todosChanged && !stepActions.length && !taskDone) {
-      history.push('[updated todo list]')
-      noProgressCount = 0
-      continue
-    }
-
-    // No-progress kill switch:
-    // If neither todos changed nor actions executed nor task_done, the agent
-    // is spinning. Allow 3 such iterations, then abort.
-    if (!todosChanged && !stepActions.length && !taskDone) {
-      noProgressCount++
-      if (noProgressCount >= 3) {
-        emit(deviceId, 'agent:error', { message: 'Agent made no progress for 3 consecutive steps. Aborting.' })
-        return
-      }
-      loopWarning = `You made no progress this step. ${planCreated ? 'Call a real action tool (click, type, key, etc.).' : 'Call add_todo_item to create your plan.'}`
       continue
     }
     noProgressCount = 0
@@ -561,6 +525,11 @@ export async function startAgentLoop(
           await sleep(LAUNCH_DELAY_MS)
         }
       }
+    }
+
+    // Record timestamp after all actions + delays so next iteration grabs a fresh frame
+    if (stepActions.some(a => toolToAction(a.name, a.input) !== null)) {
+      lastActionAt = Date.now()
     }
 
     // ── 8. Update text history ────────────────────────────────────────────

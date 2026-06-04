@@ -32,7 +32,7 @@ logger = logging.getLogger("guidenco.ws_client")
 
 
 class _CaptureTrack(VideoStreamTrack):
-    """Feeds JPEG frames from CaptureManager into a WebRTC video track."""
+    """Feeds JPEG frames from CaptureManager into a WebRTC VP8 video track."""
 
     def __init__(self, sub: queue.Queue) -> None:
         super().__init__()
@@ -41,10 +41,8 @@ class _CaptureTrack(VideoStreamTrack):
 
     async def recv(self) -> av.VideoFrame:
         pts, time_base = await self.next_timestamp()
-
         loop = asyncio.get_running_loop()
         arr = await loop.run_in_executor(None, self._get_latest_as_array)
-
         vf = av.VideoFrame.from_ndarray(arr, format="rgb24")
         vf.pts = pts
         vf.time_base = time_base
@@ -53,7 +51,6 @@ class _CaptureTrack(VideoStreamTrack):
     def _get_latest_as_array(self) -> np.ndarray:
         """Block until a fresh frame arrives, decode JPEG to numpy array."""
         while True:
-            # Drain the queue to get the freshest frame; timeout allows stop() to work
             try:
                 frame = self._sub.get(timeout=1.0)
             except queue.Empty:
@@ -67,12 +64,9 @@ class _CaptureTrack(VideoStreamTrack):
                     break
             try:
                 img = Image.open(io.BytesIO(frame)).convert("RGB")
-                # Downscale to 1280×720 — 1920×1080 VP8 SW-encode is too slow on Pi
-                if img.width > 1280:
-                    img = img.resize((1280, 720), Image.BILINEAR)
                 return np.array(img)
             except Exception:
-                continue  # discard corrupt frame, get the next one
+                continue
 
     def stop(self) -> None:
         self._stopped = True
@@ -128,9 +122,12 @@ async def _handle_webrtc_offer(
 
     @pc.on("connectionstatechange")
     async def _on_state() -> None:
+        global _webrtc_active
         state = pc.connectionState
         logger.info(f"[ws_client] WebRTC connectionState: {state}")
-        if state in ("failed", "closed"):
+        if state == "connected":
+            _webrtc_active += 1
+        elif state in ("failed", "closed"):
             closed.set()
 
     try:
@@ -163,6 +160,8 @@ async def _handle_webrtc_offer(
     except Exception as exc:
         logger.error(f"[ws_client] WebRTC offer handling failed: {exc}")
     finally:
+        global _webrtc_active
+        _webrtc_active = max(0, _webrtc_active - 1)
         await pc.close()
         mgr.unsubscribe(sub)
         logger.info("[ws_client] WebRTC peer closed, capture unsubscribed")
@@ -170,6 +169,12 @@ async def _handle_webrtc_offer(
 
 _FRAME_INTERVAL = 0.2   # seconds between forwarded frames (~5 fps)
 _RECONNECT_DELAY = 5    # seconds before reconnect attempt
+
+# Tracks how many WebRTC peers are currently connected.
+# _frame_bridge skips WebSocket frame forwarding while any peer is active —
+# the browser is already receiving video over the WebRTC track, and double-
+# forwarding wastes CPU on the Pi Zero 2W.
+_webrtc_active = 0
 
 
 def start_in_thread() -> None:
@@ -241,7 +246,14 @@ def _frame_bridge(send_q: asyncio.Queue, loop: asyncio.AbstractEventLoop) -> Non
                     break
 
             now = time.monotonic()
-            if now - last_sent < _FRAME_INTERVAL:
+
+            # While WebRTC is active the browser gets live video from the VP8 track.
+            # We still forward frames over WebSocket, but at 1fps instead of 5fps —
+            # just enough to keep latestFrames fresh on the server so the agent always
+            # has an accurate screenshot.  Without this the agent gets a stale frame
+            # from before WebRTC connected and hallucinates about what's on screen.
+            interval = _FRAME_INTERVAL if _webrtc_active == 0 else 1.0
+            if now - last_sent < interval:
                 continue
 
             b64 = base64.b64encode(frame).decode()

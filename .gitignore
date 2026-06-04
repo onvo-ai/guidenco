@@ -1,5 +1,9 @@
 .DS_Store
 
+# Secrets / deploy credentials
+.env.deploy
+*.env.deploy
+
 # Web (Next.js)
 web/.next/
 web/node_modules/
@@ -7,11 +11,18 @@ web/package-lock.json
 web/.env.local
 web/lib/db/migrations/
 
-# Service (Python)
-service/__pycache__/
-service/**/__pycache__/
-service/*.pyc
-service/**/*.pyc
-service/venv/
-service/temp/
-service/.env
+# Pi agent (Python)
+pi-agent/__pycache__/
+pi-agent/**/__pycache__/
+pi-agent/*.pyc
+pi-agent/**/*.pyc
+pi-agent/venv/
+pi-agent/temp/
+pi-agent/.env
+
+# Desktop agent (Python)
+desktop-agent/**/__pycache__/
+desktop-agent/**/*.pyc
+desktop-agent/.venv/
+desktop-agent/*.egg-info/
+desktop-agent/.pytest_cache/
