@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Guidenco Setup</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#000;color:#fcfdff;font-family:Inter,-apple-system,sans-serif;
+  min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.card{background:#0a0a0c;border:1px solid rgba(255,255,255,0.14);border-radius:12px;
+  padding:32px;width:100%;max-width:400px}
+.logo{font-size:13px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;
+  color:rgba(252,253,255,0.4);margin-bottom:24px}
+h1{font-size:20px;font-weight:500;letter-spacing:-.3px;line-height:1.3;margin-bottom:20px}
+.net-list{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;
+  max-height:220px;overflow-y:auto}
+.net{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px;background:#000;border:1px solid rgba(255,255,255,0.06);
+  border-radius:8px;cursor:pointer;font-size:14px;color:rgba(252,253,255,0.86);
+  transition:border-color .12s}
+.net:hover{border-color:rgba(255,255,255,0.14)}
+.net.sel{border-color:#fcfdff;color:#fcfdff}
+.bars{display:flex;gap:2px;align-items:flex-end}
+.bars span{width:3px;border-radius:1px;background:rgba(255,255,255,0.2)}
+.bars span.on{background:#fcfdff}
+.b1{height:4px}.b2{height:8px}.b3{height:12px}.b4{height:16px}
+input{width:100%;background:#0a0a0c;border:1px solid rgba(255,255,255,0.14);
+  border-radius:8px;color:#fcfdff;font-family:inherit;font-size:14px;
+  padding:10px 14px;height:40px;outline:none;margin-bottom:14px}
+input:focus{border-color:#fcfdff}
+input::placeholder{color:rgba(255,255,255,0.25)}
+.btn{width:100%;height:36px;background:#fcfdff;color:#000;border:none;
+  border-radius:8px;font-family:inherit;font-size:14px;font-weight:500;
+  cursor:pointer;transition:background .12s}
+.btn:hover{background:#f1f7fe}
+.btn:disabled{background:rgba(252,253,255,0.15);color:rgba(0,0,0,0.4);cursor:default}
+.err{font-size:13px;color:#ff2047;margin-bottom:12px;display:none}
+.muted{color:rgba(252,253,255,0.5);font-size:14px}
+.spin-wrap{display:flex;flex-direction:column;align-items:center;gap:16px;padding:8px 0}
+.spin{width:32px;height:32px;border:2px solid rgba(255,255,255,0.1);
+  border-top-color:#fcfdff;border-radius:50%;animation:rot .7s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+.code{font-size:40px;font-weight:500;letter-spacing:.22em;text-align:center;
+  margin:24px 0 16px;font-variant-numeric:tabular-nums}
+.status{display:flex;align-items:center;gap:8px;justify-content:center;
+  font-size:14px;margin-bottom:8px}
+.dot{width:8px;height:8px;border-radius:50%;background:#11ff99;flex-shrink:0}
+.hint{font-size:12px;color:rgba(252,253,255,0.3);text-align:center}
+a{color:#3b9eff;text-decoration:none}
+#s-conn,#s-ok{display:none}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Guidenco</div>
+
+  <!-- State 1: pick network -->
+  <div id="s-pick">
+    <h1>Connect to WiFi</h1>
+    <div class="net-list" id="net-list">
+      <div class="muted" style="font-size:13px;padding:6px 0">Scanning…</div>
+    </div>
+    <input id="pw" type="password" placeholder="Password" autocomplete="current-password">
+    <div class="err" id="err"></div>
+    <button class="btn" id="btn-conn" disabled>Connect</button>
+  </div>
+
+  <!-- State 2: connecting -->
+  <div id="s-conn">
+    <h1>Connecting</h1>
+    <div class="spin-wrap">
+      <div class="spin"></div>
+      <p class="muted" id="conn-label">Connecting…</p>
+    </div>
+  </div>
+
+  <!-- State 3: paired -->
+  <div id="s-ok">
+    <h1>Enter this code in the Guidenco app</h1>
+    <div class="code" id="code-val">––––––</div>
+    <div class="status"><div class="dot"></div><span>Connected</span></div>
+    <p class="hint">You can disconnect from Guidenco-Setup now</p>
+  </div>
+</div>
+
+<script>
+var sel=null;
+function bars(dbm){var p=Math.max(0,Math.min(100,(dbm+90)*100/60));return p>75?4:p>50?3:p>25?2:1}
+function render(nets){
+  var el=document.getElementById('net-list');
+  if(!nets.length){el.innerHTML='<div class="muted" style="font-size:13px">No networks found. <a href="#" onclick="doScan();return false">Retry</a></div>';return}
+  el.innerHTML=nets.map(function(n){
+    var b=bars(n.signal);
+    var bh=[1,2,3,4].map(function(i){return'<span class="b'+i+(i<=b?' on':'')+'"></span>'}).join('');
+    return'<div class="net" data-ssid="'+esc(n.ssid)+'" onclick="pick(this)"><span>'+esc(n.ssid)+'</span><div class="bars">'+bh+'</div></div>'
+  }).join('');
+}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function pick(el){
+  document.querySelectorAll('.net').forEach(function(n){n.classList.remove('sel')});
+  el.classList.add('sel');sel=el.dataset.ssid;
+  document.getElementById('btn-conn').disabled=false;
+  document.getElementById('pw').focus();
+}
+function show(s){['pick','conn','ok'].forEach(function(x){document.getElementById('s-'+x).style.display=x===s?'':'none'})}
+function doScan(){
+  fetch('/scan').then(function(r){return r.json()}).then(function(d){render(d.networks||[])}).catch(function(){render([])});
+}
+document.getElementById('btn-conn').onclick=function(){
+  if(!sel)return;
+  document.getElementById('err').style.display='none';
+  document.getElementById('conn-label').textContent='Connecting to '+sel+'…';
+  show('conn');
+  fetch('/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:sel,password:document.getElementById('pw').value})})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.ok){document.getElementById('code-val').textContent=d.code;show('ok')}
+      else{show('pick');var e=document.getElementById('err');e.textContent=d.error||'Connection failed. Check your password.';e.style.display='block'}
+    })
+    .catch(function(){show('pick');var e=document.getElementById('err');e.textContent='Something went wrong. Please try again.';e.style.display='block'});
+};
+document.getElementById('pw').addEventListener('keydown',function(e){if(e.key==='Enter')document.getElementById('btn-conn').click()});
+doScan();
+</script>
+</body>
+</html>
