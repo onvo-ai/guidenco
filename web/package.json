@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx --env-file=.env.local server.ts",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "NODE_ENV=production tsx --env-file=.env.local server.ts",
     "lint": "next lint",
     "test": "vitest run",
