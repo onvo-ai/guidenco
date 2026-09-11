@@ -136,6 +136,27 @@ if command -v rfkill >/dev/null 2>&1 && rfkill list bluetooth 2>/dev/null | grep
 fi
 systemctl enable --now bluetooth >/dev/null 2>&1 || true
 
+# BlueZ advertises every 1280ms by default, which is fine for a beacon and far
+# too slow for a device someone is waiting on in a browser pairing dialog: the
+# name lives in the scan response, which needs a second round trip, so at that
+# rate the device appears late or under a stale cached name. The LEAdvertisement1
+# MinInterval/MaxInterval properties are accepted and then ignored by BlueZ 5.82,
+# so set it where it actually takes effect. Units are 0.625ms: 160 = 100ms.
+BT_CONF=/etc/bluetooth/main.conf
+if [[ -f "$BT_CONF" ]]; then
+  if grep -qE '^\s*#?\s*MinAdvertisementInterval=' "$BT_CONF"; then
+    sed -i 's/^\s*#\?\s*MinAdvertisementInterval=.*/MinAdvertisementInterval=160/' "$BT_CONF"
+    sed -i 's/^\s*#\?\s*MaxAdvertisementInterval=.*/MaxAdvertisementInterval=240/' "$BT_CONF"
+  elif grep -q '^\[LE\]' "$BT_CONF"; then
+    sed -i '/^\[LE\]/a MinAdvertisementInterval=160\nMaxAdvertisementInterval=240' "$BT_CONF"
+  fi
+  info "Bluetooth advertising interval set to 100-150ms"
+  # The kernel reads these before the adapter is powered, so it must cycle.
+  systemctl restart bluetooth >/dev/null 2>&1 || true
+  sleep 2
+  rfkill unblock bluetooth 2>/dev/null || true
+fi
+
 # ── 3. Boot configuration ─────────────────────────────────────────────────────
 CONFIG_TXT=/boot/firmware/config.txt
 [[ -f "$CONFIG_TXT" ]] || CONFIG_TXT=/boot/config.txt

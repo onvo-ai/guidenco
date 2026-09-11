@@ -57,7 +57,8 @@ _reason = "not initialised"
 _buttons = 0
 _x = 0                            # last position, in absolute HID units
 _y = 0
-_screen = (0, 0)                  # pixel space the API talks in
+_frame = (0, 0)                   # full captured frame, the space callers use
+_active = (0, 0, 0, 0)            # the screen within it, as (x, y, w, h)
 
 
 class InputUnavailable(RuntimeError):
@@ -71,14 +72,31 @@ def available() -> bool:
 
 
 def status() -> dict:
-    return {"available": _enabled, "detail": _reason,
-            "keyboard": KB_DEVICE, "mouse": MS_DEVICE}
+    x, y, w, h = _active
+    return {
+        "available": _enabled, "detail": _reason,
+        "keyboard": KB_DEVICE, "mouse": MS_DEVICE,
+        "frame": {"width": _frame[0], "height": _frame[1]},
+        # Exposed because a mismatch between these two is invisible in a
+        # screenshot but shifts every click, so it should be inspectable.
+        "active_area": {"x": x, "y": y, "width": w, "height": h},
+        "letterboxed": (x, y, w, h) != (0, 0, _frame[0], _frame[1]),
+    }
 
 
-def set_screen(width: int, height: int) -> None:
-    """Tell the module what pixel space incoming coordinates are in."""
-    global _screen
-    _screen = (width, height)
+def set_screen(width: int, height: int,
+               active: tuple[int, int, int, int] | None = None) -> None:
+    """
+    Tell the module what pixel space incoming coordinates are in.
+
+    *width*/*height* describe the whole captured frame, which is what callers
+    see and measure against. *active* is the part of it that is actually the
+    target's screen; it differs when the source is letterboxed, and pointer
+    position must be a fraction of that rather than of the frame.
+    """
+    global _frame, _active
+    _frame = (width, height)
+    _active = active if active else (0, 0, width, height)
 
 
 def init() -> bool:
@@ -200,10 +218,20 @@ def _write(target: str, data: bytes, _retried: bool = False) -> None:
 
 # ── Coordinates ───────────────────────────────────────────────────────────────
 
-def _to_abs(value: float, span: int) -> int:
+def _to_abs(value: float, origin: int, span: int) -> int:
+    """
+    A frame coordinate to the target's absolute HID range.
+
+    The target places the pointer at this fraction of ITS screen, so the
+    fraction has to be measured across the active area and offset by where that
+    area starts. Measuring across the whole frame instead is correct only when
+    there are no bars, and is wrong by up to a full bar-width at the edges —
+    exact at the centre, worst where the buttons are.
+    """
     if span <= 1:
         return 0
-    return max(0, min(ABS_MAX, round(value * ABS_MAX / (span - 1))))
+    fraction = (value - origin) / (span - 1)
+    return max(0, min(ABS_MAX, round(fraction * ABS_MAX)))
 
 
 def _mouse_report(buttons: int, x: int, y: int, wheel: int = 0) -> bytes:
@@ -231,7 +259,7 @@ def _move_duration_ms(dx: int, dy: int) -> float:
     Fitts's law: long sweeps cover more ground per millisecond than short
     adjustments do.
     """
-    span = max(_screen[0], 1)
+    span = max(_active[2], 1)
     pixels = math.hypot(dx, dy) / max(1, ABS_MAX) * span
     ms = MOUSE_MOVE_BASE_MS + MOUSE_MOVE_PER_ROOT_PX_MS * math.sqrt(max(pixels, 0.0))
     return min(ms, MOUSE_MOVE_MAX_MS)
@@ -262,7 +290,8 @@ def _glide(target_x: int, target_y: int) -> None:
 
 def _goto(x: float, y: float, smooth: bool | None) -> None:
     """Caller must hold the lock."""
-    tx, ty = _to_abs(x, _screen[0]), _to_abs(y, _screen[1])
+    ax, ay, aw, ah = _active
+    tx, ty = _to_abs(x, ax, aw), _to_abs(y, ay, ah)
     if MOUSE_SMOOTH if smooth is None else smooth:
         _glide(tx, ty)
     else:

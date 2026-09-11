@@ -39,6 +39,11 @@ WIFI_UUID = "6e6c1004-b5a3-f393-e0a9-e50e24dcca9e"
 MAX_PAYLOAD = 512
 
 
+def _encode(value) -> bytes:
+    """Compact JSON, the only form these characteristics ever carry."""
+    return json.dumps(value, separators=(",", ":")).encode()
+
+
 def _run(*args: str, timeout: float = 25.0) -> tuple[int, str]:
     try:
         result = subprocess.run(args, capture_output=True, timeout=timeout)
@@ -110,19 +115,62 @@ class SetupService:
     # ── Payloads ──────────────────────────────────────────────────────────────
 
     def status_payload(self) -> bytes:
+        """
+        The status document, sized to fit one BLE attribute read.
+
+        512 bytes is the hard ceiling for a BLE attribute value, so an
+        over-long document has to be shortened — but by dropping whole fields,
+        never by slicing bytes. Sliced JSON is invalid JSON, and the page would
+        then render nothing at all rather than show a partial status, which is
+        a far worse failure than a missing field.
+        """
         state = dict(self.state_provider())
         state["last_action"] = self.last_result
-        body = json.dumps(state, separators=(",", ":")).encode()
+
+        body = _encode(state)
+        if len(body) <= MAX_PAYLOAD:
+            return body
+
+        # An nmcli failure message is the usual reason this overflows, and also
+        # the least important thing here, so trim that first.
+        action = dict(self.last_result)
+        if isinstance(action.get("detail"), str):
+            action["detail"] = action["detail"][:80]
+            state["last_action"] = action
+            body = _encode(state)
+            if len(body) <= MAX_PAYLOAD:
+                return body
+
+        # Then shed fields in increasing order of how much they are missed.
+        for field in ("last_action", "mac", "signal", "screen", "input"):
+            state.pop(field, None)
+            body = _encode(state)
+            if len(body) <= MAX_PAYLOAD:
+                return body
+
+        # Nothing optional is left. Return the two things the page cannot work
+        # without, dropping even the URL rather than emitting anything
+        # unparseable.
+        minimal = {"host": state.get("host"), "url": state.get("url")}
+        body = _encode(minimal)
         if len(body) > MAX_PAYLOAD:
-            state.pop("last_action", None)
-            body = json.dumps(state, separators=(",", ":")).encode()
-        return body[:MAX_PAYLOAD]
+            minimal["url"] = None
+            body = _encode(minimal)
+        return body
 
     def networks_payload(self) -> bytes:
-        body = json.dumps(self.networks, separators=(",", ":")).encode()
-        while len(body) > MAX_PAYLOAD and self.networks:
-            self.networks.pop()
-            body = json.dumps(self.networks, separators=(",", ":")).encode()
+        """
+        The scan results, sized to fit one BLE attribute read.
+
+        Trims by dropping whole entries, weakest signal last, so the result is
+        always valid JSON. Works on a copy, because a read must not quietly
+        destroy the scan it is reporting.
+        """
+        networks = list(self.networks)
+        body = _encode(networks)
+        while len(body) > MAX_PAYLOAD and networks:
+            networks.pop()
+            body = _encode(networks)
         return body
 
     # ── Writes ────────────────────────────────────────────────────────────────

@@ -285,7 +285,7 @@ class ToolCallTest(McpTestCase):
         self.call_tool("click", {"x": 100, "y": 200, "smooth": False})
         self.assertIn(1, self.gadget.buttons)
         self.assertEqual(self.gadget.positions[-1],
-                         (self.hid._to_abs(100, 1920), self.hid._to_abs(200, 1080)))
+                         (self.hid._to_abs(100, 0, 1920), self.hid._to_abs(200, 0, 1080)))
 
     def test_type_text_reports_skipped_characters(self):
         body = self.call_tool("type_text", {"text": "hi \U0001f600"})
