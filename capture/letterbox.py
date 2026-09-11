@@ -34,6 +34,11 @@ BLACK_LIMIT = 24
 #: desktop — would otherwise be mistaken for bars and shrink the usable area.
 MIN_AREA_FRACTION = 0.40
 
+#: How far the two bars on an axis may differ and still count as padding. A real
+#: pillarbox measures 128 and 130 pixels either side — rounding, not asymmetry —
+#: while dark content at one edge gives a bar on that side and none on the other.
+_SYMMETRY_TOLERANCE_PX = 8
+
 _CROP = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
 
 
@@ -91,6 +96,22 @@ def detect(frame: bytes, width: int, height: int,
                     "can look like letterboxing.",
                     w, h, MIN_AREA_FRACTION * 100)
         return full
+
+    # Padding added by a scaler is centred, so the two bars on an axis match.
+    # Dark *content* touching one edge does not: a black menu bar, a maximised
+    # terminal, a photo with a dark sky. Keeping only the symmetric axes is what
+    # separates the two, and it matters — an unbalanced result here silently
+    # shifts every click on that axis by the width of the false bar.
+    if abs(x - (width - (x + w))) > _SYMMETRY_TOLERANCE_PX:
+        logger.info("[letterbox] left/right bars differ (%dpx vs %dpx); that is "
+                    "dark content rather than padding, so the full width is used",
+                    x, width - (x + w))
+        x, w = 0, width
+    if abs(y - (height - (y + h))) > _SYMMETRY_TOLERANCE_PX:
+        logger.info("[letterbox] top/bottom bars differ (%dpx vs %dpx); that is "
+                    "dark content rather than padding, so the full height is used",
+                    y, height - (y + h))
+        y, h = 0, height
 
     if (x, y, w, h) != full:
         logger.info("[letterbox] screen occupies %dx%d at +%d+%d of the %dx%d frame "

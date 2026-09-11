@@ -714,3 +714,45 @@ class CaptureBackendTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LetterboxSymmetryTest(unittest.TestCase):
+    """
+    Dark content at one edge must not be read as a bar.
+
+    cropdetect only reports where the non-black pixels are; it cannot tell
+    padding from a dark menu bar or a maximised terminal. Padding from a scaler
+    is centred, so the two bars on an axis match. Content is not, and treating
+    it as a bar shifts every click on that axis.
+    """
+
+    @staticmethod
+    def _frame(width, height, box_w, box_h, off_x, off_y):
+        """A bright box at an arbitrary offset on black."""
+        import subprocess
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+               "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:d=1",
+               "-f", "lavfi", "-i", f"color=c=white:s={box_w}x{box_h}:d=1",
+               "-filter_complex", f"[0][1]overlay={off_x}:{off_y}",
+               "-frames:v", "1", "-f", "mjpeg", "pipe:1"]
+        return subprocess.run(cmd, capture_output=True, timeout=30).stdout
+
+    def test_centred_pillarbox_is_kept(self):
+        from capture.letterbox import detect
+        # 1662 wide inside 1920: 129 either side, the real mirrored-Mac case.
+        x, y, w, h = detect(self._frame(1920, 1080, 1662, 1080, 129, 0), 1920, 1080)
+        self.assertAlmostEqual(x, 129, delta=8)
+        self.assertAlmostEqual(w, 1662, delta=16)
+        self.assertEqual((y, h), (0, 1080), "there are no top or bottom bars here")
+
+    def test_a_dark_strip_at_one_edge_is_not_a_bar(self):
+        from capture.letterbox import detect
+        # Content starts 36px down and runs to the bottom: a bar on one side
+        # only, which is what a dark menu bar looks like to cropdetect.
+        frame = self._frame(1920, 1080, 1662, 1044, 129, 36)
+        x, y, w, h = detect(frame, 1920, 1080)
+        self.assertEqual((y, h), (0, 1080),
+                         "an unbalanced vertical bar must not be trusted")
+        # The genuinely symmetric axis is still used.
+        self.assertAlmostEqual(x, 129, delta=8)
+        self.assertAlmostEqual(w, 1662, delta=16)
