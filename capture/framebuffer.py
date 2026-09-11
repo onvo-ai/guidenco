@@ -16,6 +16,10 @@ class Framebuffer:
         self._cond = threading.Condition()
         self.width = width
         self.height = height
+        #: The part of the frame that is actually the screen, as (x, y, w, h).
+        #: Equal to the whole frame unless the source is letterboxed. Input
+        #: coordinates are measured against this, not against the frame.
+        self.active = (0, 0, width, height)
         self.frame: bytes | None = None
         #: Incremented for every frame, so a consumer can tell "newer than the
         #: one I last saw" without comparing megabytes of pixels.
@@ -26,8 +30,14 @@ class Framebuffer:
             if (width, height) == (self.width, self.height):
                 return
             self.width, self.height = width, height
+            # A new geometry invalidates any previously detected screen area.
+            self.active = (0, 0, width, height)
             self.frame = None
             self._cond.notify_all()
+
+    def set_active(self, area: tuple[int, int, int, int]) -> None:
+        with self._cond:
+            self.active = area
 
     def update(self, frame: bytes) -> None:
         with self._cond:

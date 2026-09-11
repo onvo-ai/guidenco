@@ -20,10 +20,17 @@ import time
 from config import CAPTURE_TYPE
 from .base import CaptureBackend, iter_mjpeg
 from .framebuffer import Framebuffer
+from .letterbox import detect
 
 logger = logging.getLogger("guidenco.capture")
 
 _BACKOFF_SECONDS = 2
+
+#: How often to re-check for letterbox bars. They appear and vanish when the
+#: source changes display arrangement without changing capture resolution —
+#: switching between mirrored and extended, for instance — which no other
+#: signal would tell us about.
+_LETTERBOX_RECHECK_S = 60
 
 
 def _make_backend() -> CaptureBackend:
@@ -42,6 +49,7 @@ class CaptureManager:
         self.framebuffer = Framebuffer()
         self._backend = backend
         self._running = False
+        self._detecting = False
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -53,6 +61,21 @@ class CaptureManager:
 
     def stop(self) -> None:
         self._running = False
+
+    def _check_letterbox(self, frame: bytes, width: int, height: int) -> None:
+        if self._detecting:
+            return                      # one at a time; they would agree anyway
+        self._detecting = True
+
+        def work() -> None:
+            try:
+                self.framebuffer.set_active(detect(frame, width, height))
+            except Exception:
+                logger.exception("[capture] letterbox detection failed")
+            finally:
+                self._detecting = False
+
+        threading.Thread(target=work, daemon=True, name="letterbox").start()
 
     def _loop(self) -> None:
         backend = self._backend or _make_backend()
@@ -69,10 +92,17 @@ class CaptureManager:
                 stream, procs, width, height = backend.open()
                 logger.info("[capture] streaming %dx%d", width, height)
                 self.framebuffer.resize(width, height)
+                checked_at = 0.0
                 for frame in iter_mjpeg(stream):
                     if not self._running:
                         break
                     self.framebuffer.update(frame)
+                    now = time.monotonic()
+                    if now - checked_at >= _LETTERBOX_RECHECK_S:
+                        checked_at = now
+                        # Off the capture thread: detection spawns ffmpeg, and
+                        # blocking here would stall the frame stream behind it.
+                        self._check_letterbox(frame, width, height)
                 logger.info("[capture] stream ended — restarting")
             except Exception as exc:
                 logger.error("[capture] loop error: %s", exc)

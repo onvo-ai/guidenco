@@ -182,6 +182,7 @@ class Handler(BaseHTTPRequestHandler):
                 "ready": fb.ready,
                 "width": fb.width,
                 "height": fb.height,
+                "active_area": dict(zip(("x", "y", "width", "height"), fb.active)),
                 "frames": fb.sequence,
                 "source": config.CAPTURE_TYPE,
                 "device": config.VIDEO_DEV,

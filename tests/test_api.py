@@ -204,7 +204,7 @@ class PointerMotionTest(unittest.TestCase):
     def test_a_smooth_move_lands_exactly_on_target(self):
         self.hid.move(1234, 567, smooth=True)
         final = self.gadget.positions[-1]
-        expected = (self.hid._to_abs(1234, 1920), self.hid._to_abs(567, 1080))
+        expected = (self.hid._to_abs(1234, 0, 1920), self.hid._to_abs(567, 0, 1080))
         self.assertEqual(final, expected, "rounding must not leave the pointer short")
 
     def test_intermediate_points_advance_monotonically(self):
@@ -235,6 +235,97 @@ class PointerMotionTest(unittest.TestCase):
         self.assertEqual(self.gadget.positions[-1], (0, 0))
         self.hid.move(1919, 1079, smooth=False)
         self.assertEqual(self.gadget.positions[-1], (config.ABS_MAX, config.ABS_MAX))
+
+
+class LetterboxMappingTest(unittest.TestCase):
+    """
+    A frame is not always all screen.
+
+    When the source's aspect ratio differs from the capture device's, the frame
+    carries black bars and the screen sits inside them. Pointer position goes to
+    the target as a fraction of its screen, so measuring across the whole frame
+    is wrong by up to a bar-width — exactly zero error at the centre, growing
+    towards the edges, which is why it can look like it works.
+    """
+
+    # 1920x1080 frame holding a 1663x1080 screen: 128px bars left and right,
+    # which is what mirroring a 1512x982 desktop to a 1080p card produces.
+    FRAME = (1920, 1080)
+    ACTIVE = (128, 0, 1663, 1080)
+
+    def setUp(self):
+        import hid
+        self.hid = hid
+        self.gadget = RecordingGadget()
+        self.gadget.install(hid)
+
+    def tearDown(self):
+        self.hid._enabled = False
+
+    def test_without_bars_the_frame_is_the_screen(self):
+        self.hid.set_screen(*self.FRAME)
+        self.hid.move(0, 0, smooth=False)
+        self.assertEqual(self.gadget.positions[-1], (0, 0))
+        self.hid.move(1919, 1079, smooth=False)
+        self.assertEqual(self.gadget.positions[-1], (config.ABS_MAX, config.ABS_MAX))
+
+    def test_the_left_bar_edge_maps_to_the_screens_left_edge(self):
+        self.hid.set_screen(*self.FRAME, self.ACTIVE)
+        self.hid.move(128, 0, smooth=False)
+        self.assertEqual(self.gadget.positions[-1][0], 0,
+                         "the first pixel of the screen is the screen's origin")
+
+    def test_the_right_bar_edge_maps_to_the_screens_right_edge(self):
+        self.hid.set_screen(*self.FRAME, self.ACTIVE)
+        self.hid.move(128 + 1662, 0, smooth=False)
+        self.assertEqual(self.gadget.positions[-1][0], config.ABS_MAX)
+
+    def test_the_centre_is_unaffected_by_bars(self):
+        # Symmetric bars leave the centre exactly where it was, which is why
+        # this bug hides so well: centred targets always worked.
+        self.hid.set_screen(*self.FRAME)
+        self.hid.move(960, 540, smooth=False)
+        without = self.gadget.positions[-1]
+        self.gadget.mouse.clear()
+        self.hid.set_screen(*self.FRAME, self.ACTIVE)
+        self.hid.move(960, 540, smooth=False)
+        # Not bit-identical: the two mappings divide by different spans, so
+        # they differ by well under one pixel of the target's screen.
+        drift_px = abs(self.gadget.positions[-1][0] - without[0]) / config.ABS_MAX * 1512
+        self.assertLess(drift_px, 1.0, "the centre must not move perceptibly")
+
+    def test_an_off_centre_target_shifts(self):
+        self.hid.set_screen(*self.FRAME)
+        self.hid.move(1360, 93, smooth=False)
+        naive = self.gadget.positions[-1][0]
+        self.gadget.mouse.clear()
+        self.hid.set_screen(*self.FRAME, self.ACTIVE)
+        self.hid.move(1360, 93, smooth=False)
+        corrected = self.gadget.positions[-1][0]
+        self.assertGreater(corrected, naive,
+                           "correcting for a left bar must move the target right")
+        # About 50px of desktop at this position, which is the difference
+        # between hitting one toolbar control and its neighbour.
+        drift_px = (corrected - naive) / config.ABS_MAX * 1512
+        self.assertGreater(drift_px, 35)
+        self.assertLess(drift_px, 70)
+
+    def test_vertical_bars_work_the_same_way(self):
+        # A tall source in a wide frame letterboxes top and bottom instead.
+        self.hid.set_screen(1920, 1080, (0, 60, 1920, 960))
+        self.hid.move(0, 60, smooth=False)
+        self.assertEqual(self.gadget.positions[-1][1], 0)
+        self.hid.move(0, 60 + 959, smooth=False)
+        self.assertEqual(self.gadget.positions[-1][1], config.ABS_MAX)
+
+    def test_status_reports_the_active_area(self):
+        self.hid.set_screen(*self.FRAME, self.ACTIVE)
+        status = self.hid.status()
+        self.assertTrue(status["letterboxed"])
+        self.assertEqual(status["active_area"],
+                         {"x": 128, "y": 0, "width": 1663, "height": 1080})
+        self.hid.set_screen(*self.FRAME)
+        self.assertFalse(self.hid.status()["letterboxed"])
 
 
 class ClickAndScrollTest(unittest.TestCase):
@@ -490,6 +581,63 @@ class StreamTest(ServerTestCase):
                                 "the stream should deliver successive frames")
         self.assertIn(b"Content-Type: image/jpeg", data)
         self.assertIn(b"\xff\xd8", data)
+
+
+class LetterboxDetectionTest(unittest.TestCase):
+    """
+    Exercises the real ffmpeg invocation, because the failure mode here was
+    entirely in the invocation: cropdetect skips its first two frames by
+    default, so a single-frame probe reported nothing and every frame looked
+    bar-free.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import shutil
+        if not shutil.which("ffmpeg"):
+            raise unittest.SkipTest("ffmpeg is not installed")
+
+    @staticmethod
+    def _frame(width, height, inner_w, inner_h):
+        """A JPEG of a bright box centred on black, i.e. a letterboxed screen."""
+        import subprocess
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+               "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:d=1",
+               "-f", "lavfi", "-i", f"color=c=white:s={inner_w}x{inner_h}:d=1",
+               "-filter_complex", "[0][1]overlay=(W-w)/2:(H-h)/2",
+               "-frames:v", "1", "-f", "mjpeg", "pipe:1"]
+        return subprocess.run(cmd, capture_output=True, timeout=30).stdout
+
+    def test_a_frame_with_no_bars_is_left_alone(self):
+        from capture.letterbox import detect
+        frame = self._frame(640, 480, 640, 480)
+        self.assertEqual(detect(frame, 640, 480), (0, 0, 640, 480))
+
+    def test_pillarbox_bars_are_found(self):
+        from capture.letterbox import detect
+        # 480x480 screen inside a 640x480 frame: 80px bars either side.
+        x, y, w, h = detect(self._frame(640, 480, 480, 480), 640, 480)
+        self.assertAlmostEqual(x, 80, delta=4)
+        self.assertAlmostEqual(w, 480, delta=8)
+        self.assertAlmostEqual(h, 480, delta=8)
+
+    def test_letterbox_bars_are_found(self):
+        from capture.letterbox import detect
+        x, y, w, h = detect(self._frame(640, 480, 640, 360), 640, 480)
+        self.assertAlmostEqual(y, 60, delta=4)
+        self.assertAlmostEqual(h, 360, delta=8)
+
+    def test_a_nearly_black_frame_falls_back_to_the_whole_frame(self):
+        from capture.letterbox import detect
+        # A dark screen must not be mistaken for bars and shrink the usable
+        # area; that would be worse than not detecting at all.
+        frame = self._frame(640, 480, 40, 40)
+        self.assertEqual(detect(frame, 640, 480), (0, 0, 640, 480))
+
+    def test_garbage_input_falls_back_safely(self):
+        from capture.letterbox import detect
+        self.assertEqual(detect(b"not a jpeg", 640, 480), (0, 0, 640, 480))
+        self.assertEqual(detect(b"", 640, 480), (0, 0, 640, 480))
 
 
 class CaptureBackendTest(unittest.TestCase):

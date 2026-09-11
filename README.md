@@ -54,7 +54,8 @@ screenshot-act-verify loop and what to check when the bridge misbehaves.
 | `press_key` | `{key}` — `"Return"`, `"ctrl+c"`, `"cmd+shift+4"` |
 
 Coordinates are **pixels in the screenshot**, origin top-left. Read a position
-off the image and pass it back unchanged.
+off the image and pass it back unchanged — including when the image is
+letterboxed, which the bridge detects and corrects for on its own.
 
 ### Read-only HTTP
 
@@ -197,6 +198,8 @@ the API before it has credentials. Neither reveals anything about the target.
 ```
 capture/   ffmpeg reads the capture device and keeps the latest JPEG,
            restarting itself if the HDMI signal drops or changes resolution.
+           letterbox.py finds the screen within the frame when the source's
+           aspect ratio differs from the capture device's.
 api/       the MCP endpoint, the read-only routes, the Cloudflare tunnel,
            and network detection.
 ble/       the Bluetooth setup service. service.py holds the behaviour and has
@@ -206,6 +209,15 @@ hid/       turns intent into USB HID reports, including the eased motion.
 skill/     a Claude skill describing how to use the bridge well.
 web/       the Web Bluetooth setup page. Host it separately.
 ```
+
+**Coordinates are measured against the screen, not the frame.** A capture card
+delivers its own fixed resolution, so a 1512x982 desktop mirrored to a 1080p
+card arrives as 1662x1080 of picture with 128px black bars either side. Pointer
+position reaches the target as a fraction of *its* screen, so measuring across
+the whole frame puts every click off by up to a bar-width — zero error at the
+centre, growing towards the edges, which is the worst shape a bug can have:
+it looks like it works. ffmpeg's cropdetect finds the real area on a single
+frame at startup and once a minute after, never per frame.
 
 **Frames are never decoded.** A USB capture card already emits MJPEG, so ffmpeg
 copies frames through with `-c:v copy` — no decode, no scale, no re-encode. The
@@ -265,10 +277,13 @@ Otherwise confirm `dtoverlay=dwc2,dr_mode=peripheral` is in `config.txt` under
 filters that never apply to a Model B. Check the USB cable to the target carries
 data rather than only power.
 
-**Clicks land in the wrong place.** The pointer is positioned as a fraction of
-the target's screen, so the captured image has to correspond to the whole
-desktop. Mirroring a display of a different aspect ratio, overscan, and
-capturing one screen of an extended desktop all break that correspondence.
+**Clicks land in the wrong place.** Check `active_area` in `get_status`. A
+capture device delivers its own fixed resolution, so a source with a different
+aspect ratio arrives letterboxed, and the frame is bigger than the screen inside
+it. That is detected automatically and corrected for, but the detection can be
+fooled by a screen that is genuinely almost entirely black, in which case it
+falls back to treating the whole frame as the screen. Capturing only one screen
+of an extended desktop breaks the correspondence in a way nothing can detect.
 
 **Input stops after the target sleeps.** The service re-binds the gadget to wake
 the host, which works on most machines. If it does not, the target's USB wake

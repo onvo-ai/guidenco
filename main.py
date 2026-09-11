@@ -37,9 +37,10 @@ def _track_screen_size(framebuffer) -> None:
     """
     Keep hid/ told what pixel space API coordinates are in.
 
-    The capture resolution follows the HDMI source, so it can change while
-    running — a target that switches mode must not silently start receiving
-    clicks scaled to the old geometry.
+    Both the capture resolution and the letterboxing can change while running —
+    the source switches display mode, or goes from mirrored to extended — and a
+    target that changes geometry must not silently start receiving clicks
+    mapped to the old one.
     """
     last = None
     sequence = 0
@@ -48,11 +49,16 @@ def _track_screen_size(framebuffer) -> None:
         # instantly once any frame existed, turning this into a spin loop that
         # burns a whole core.
         _, sequence = framebuffer.next_after(sequence, timeout=30.0)
-        current = (framebuffer.width, framebuffer.height)
-        if current != last and all(current):
-            hid.set_screen(*current)
+        current = (framebuffer.width, framebuffer.height, framebuffer.active)
+        if current != last and all(current[:2]):
+            hid.set_screen(current[0], current[1], current[2])
             if last is not None:
-                logger.info("[main] screen size changed %s -> %s", last, current)
+                if current[:2] != last[:2]:
+                    logger.info("[main] screen size changed %s -> %s",
+                                last[:2], current[:2])
+                if current[2] != last[2]:
+                    logger.info("[main] active screen area changed %s -> %s",
+                                last[2], current[2])
             last = current
 
 
