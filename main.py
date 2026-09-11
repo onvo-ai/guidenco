@@ -6,9 +6,10 @@ Captures a machine's HDMI output and presents itself to that machine as a USB
 keyboard and mouse, exposing both over a small HTTP API. Nothing is installed
 on the target.
 
-    GET  /openapi.json   the whole API, for discovery
+    POST /mcp            Model Context Protocol — how an agent drives it
     GET  /screenshot     what the target is showing
-    POST /click,/type    drive it
+    GET  /stream         the same, live, in a browser
+    GET  /health         capture, input and network state
 """
 
 import logging
@@ -19,6 +20,8 @@ import threading
 import config
 import hid
 from api import serve
+from api.tunnel import Tunnel
+from ble import SetupService
 from capture import get_manager
 
 logging.basicConfig(
@@ -53,6 +56,24 @@ def _track_screen_size(framebuffer) -> None:
             last = current
 
 
+def _setup_state(framebuffer, server):
+    """What the Bluetooth setup page shows: where we are and how to reach us."""
+    def state():
+        from api import netinfo
+        network = netinfo.describe()
+        return {
+            "host": network["hostname"],
+            "net": network["type"],
+            "ssid": network["ssid"],
+            "ip": network["address"],
+            "signal": network["signal_dbm"],
+            "url": server.tunnel_url,
+            "screen": [framebuffer.width, framebuffer.height] if framebuffer.ready else None,
+            "input": hid.available(),
+        }
+    return state
+
+
 def main() -> None:
     manager = get_manager()
     manager.start()
@@ -64,8 +85,28 @@ def main() -> None:
 
     server = serve(framebuffer, host=config.API_HOST, port=config.API_PORT)
 
+    tunnel = None
+    if config.TUNNEL_ENABLED:
+        if not config.API_TOKEN:
+            # Refusing is the whole point: a tunnel without a token publishes
+            # keyboard and mouse control of the target machine to the internet.
+            logger.error("[main] TUNNEL_ENABLED is on but API_TOKEN is empty. "
+                         "Refusing to open a public tunnel to an unauthenticated "
+                         "service. Set API_TOKEN in /etc/guidenco/config.env.")
+        else:
+            tunnel = Tunnel(server.server_port,
+                            on_url=lambda url: setattr(server, "tunnel_url", url))
+            tunnel.start()
+
+    setup = None
+    if config.BLE_ENABLED:
+        setup = SetupService(_setup_state(framebuffer, server), config.BLE_NAME)
+        setup.start()
+
     def shutdown(signum, frame):
         logger.info("[main] shutting down")
+        if tunnel:
+            tunnel.stop()
         server.shutdown()
         manager.stop()
         hid.cleanup()

@@ -29,6 +29,11 @@ apt-get update -q -y
 # usbutils and psmisc are NOT on a minimal Ubuntu Server image, and both are
 # used below — without usbutils, capture detection silently guesses wrong.
 apt-get install -y -q --no-install-recommends python3 ffmpeg v4l-utils usbutils psmisc
+# Bluetooth setup needs BlueZ over D-Bus. These are the only dependencies the
+# project has beyond the standard library, and both come from apt, not pip.
+apt-get install -y -q --no-install-recommends \
+  bluez python3-dbus python3-gi network-manager || \
+  warn "Bluetooth setup packages unavailable; BLE configuration will be disabled"
 
 # The USB gadget needs dwc2 and libcomposite. A module counts as available if
 # it is loadable OR compiled into the kernel — on Raspberry Pi OS dwc2 is
@@ -100,6 +105,37 @@ VIDEO_DEV="$(detect_video_dev)"
 info "Board:   $MODEL"
 info "Capture: $CAPTURE_TYPE ($VIDEO_DEV)"
 
+# ── 2b. cloudflared (optional) ────────────────────────────────────────────────
+install_cloudflared() {
+  command -v cloudflared >/dev/null 2>&1 && { info "cloudflared already present"; return 0; }
+  local arch
+  case "$(dpkg --print-architecture)" in
+    arm64) arch=arm64 ;;
+    armhf) arch=arm ;;
+    amd64) arch=amd64 ;;
+    *) warn "no cloudflared build for $(dpkg --print-architecture)"; return 1 ;;
+  esac
+  info "Installing cloudflared ($arch)..."
+  local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}.deb"
+  local tmp; tmp="$(mktemp -d)"
+  if curl -fsSL --max-time 120 "$url" -o "$tmp/cloudflared.deb" \
+     && dpkg -i "$tmp/cloudflared.deb" >/dev/null 2>&1; then
+    rm -rf "$tmp"; info "cloudflared installed"; return 0
+  fi
+  rm -rf "$tmp"; warn "could not install cloudflared; the tunnel will stay off"
+  return 1
+}
+install_cloudflared || true
+
+# Raspberry Pi OS ships with the Bluetooth radio soft-blocked by rfkill, so
+# BlueZ reports the adapter as "off-blocked" and registering an advertisement
+# fails with a bare org.bluez.Error.Failed that explains nothing.
+if command -v rfkill >/dev/null 2>&1 && rfkill list bluetooth 2>/dev/null | grep -q "Soft blocked: yes"; then
+  info "Unblocking the Bluetooth radio (rfkill soft block)..."
+  rfkill unblock bluetooth || warn "could not unblock Bluetooth; BLE setup will not start"
+fi
+systemctl enable --now bluetooth >/dev/null 2>&1 || true
+
 # ── 3. Boot configuration ─────────────────────────────────────────────────────
 CONFIG_TXT=/boot/firmware/config.txt
 [[ -f "$CONFIG_TXT" ]] || CONFIG_TXT=/boot/config.txt
@@ -154,8 +190,8 @@ info "Installing to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
 # Clear out every component directory, including ones from older versions
 # (rfb/ was the VNC server), so a stale module never shadows a current one.
-rm -rf "$INSTALL_DIR"/{capture,api,hid,rfb}
-for item in main.py config.py capture api hid; do
+rm -rf "$INSTALL_DIR"/{capture,api,hid,ble,rfb}
+for item in main.py config.py capture api hid ble; do
   cp -r "$SOURCE_DIR/$item" "$INSTALL_DIR/"
 done
 install -m 755 "$SOURCE_DIR/hid-gadget-setup.sh" /usr/local/bin/guidenco-hid-setup
@@ -201,6 +237,17 @@ HID_ENABLED=auto
 # Pointer moves are interpolated with easing. Set to "off" for instant jumps —
 # faster for bulk automation, but hover states and drags often stop working.
 MOUSE_SMOOTH=on
+
+# Cloudflare quick tunnel. Set to "on" to publish this bridge to the internet on
+# a random trycloudflare.com hostname that changes on every restart. The service
+# refuses to open a tunnel while API_TOKEN is empty, because that would hand
+# keyboard and mouse control of the target to anyone who finds the URL.
+TUNNEL_ENABLED=off
+
+# Bluetooth setup service: lets a browser set Wi-Fi and read the tunnel URL
+# without the Pi being reachable on any network.
+BLE_ENABLED=on
+BLE_NAME=guidenco
 EOF
   chmod 600 "$CONFIG_FILE"
 else
@@ -220,6 +267,9 @@ else
   ensure_key CAPTURE_MAX_H 1080
   ensure_key MOUSE_SMOOTH on
   ensure_key HID_ENABLED auto
+  ensure_key TUNNEL_ENABLED off
+  ensure_key BLE_ENABLED on
+  ensure_key BLE_NAME guidenco
   for dead in VNC_PORT VNC_PASSWORD VNC_MAX_CLIENTS VNC_HOST VNC_NAME; do
     if grep -qE "^${dead}=" "$CONFIG_FILE"; then
       info "  removing $dead (no longer used)"
@@ -253,15 +303,19 @@ echo
 info "Done."
 cat <<EOF
 
-  API      $BASE
-  Spec     $BASE/openapi.json
+  MCP      $BASE/mcp
   Screen   $BASE/screenshot
   Watch    $BASE/stream        (open this in a browser)
+  Health   $BASE/health
 
-  Token    ${TOKEN:-(none - the API is open)}
+  Token    ${TOKEN:-(none - the service is open)}
 
-  Try it:
-    curl -s $BASE/health -H "Authorization: Bearer $TOKEN"
+  Connect Claude to it:
+    claude mcp add --transport http guidenco $BASE/mcp \\
+      --header "Authorization: Bearer $TOKEN"
 
 EOF
-info "Point an agent at $BASE/openapi.json and it can discover the rest."
+info "Bluetooth setup advertises as \"$(grep -E '^BLE_NAME=' "$CONFIG_FILE" | cut -d= -f2- || echo guidenco)\" for Wi-Fi and tunnel URL."
+if command -v cloudflared >/dev/null 2>&1; then
+  info "For a public URL, set TUNNEL_ENABLED=on in $CONFIG_FILE and restart."
+fi

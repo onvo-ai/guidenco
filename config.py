@@ -58,6 +58,20 @@ API_TOKEN = os.environ.get("API_TOKEN", "")
 # How long /stream waits for a new frame before giving up on a stalled capture.
 STREAM_TIMEOUT_S = _int("STREAM_TIMEOUT_S", 10)
 
+# ── Cloudflare quick tunnel ───────────────────────────────────────────────────
+# Publishes the bridge to the internet on a random trycloudflare.com hostname.
+# The hostname changes every restart, which is what the Bluetooth setup service
+# is for. A tunnel without a token is refused outright rather than warned about:
+# it would expose keyboard and mouse control of the target to anyone who finds
+# the URL.
+TUNNEL_ENABLED = os.environ.get("TUNNEL_ENABLED", "off").strip().lower() == "on"
+
+# ── Bluetooth setup ───────────────────────────────────────────────────────────
+# Lets a browser configure Wi-Fi and read the tunnel URL without the Pi being
+# reachable on the network at all.
+BLE_ENABLED = os.environ.get("BLE_ENABLED", "on").strip().lower() != "off"
+BLE_NAME = os.environ.get("BLE_NAME", "guidenco")
+
 # ── USB HID gadget ────────────────────────────────────────────────────────────
 # "auto" replays input when /dev/hidg0 exists and serves screen-only when it
 # does not (e.g. a Pi Zero whose single USB port is taken by a capture card).

@@ -1,12 +1,20 @@
 """
-api/server.py — the HTTP control surface.
+api/server.py — the HTTP surface.
 
-Screenshots are served as the capture device's own JPEG, passed through
-untouched, so an idle service does no work at all. Input arrives as intent
-("click here", "type this") and hid/ turns it into HID reports.
+Two things share one port:
 
-Built on http.server, which is enough for a handful of clients on a LAN and
-keeps the dependency count at zero.
+  /mcp        Model Context Protocol, which is how an agent drives the machine.
+  GET /...    a small read-only surface for humans — a screenshot, a browser
+              stream, and a health check you can curl when something breaks.
+
+Actions live only behind MCP. Keeping a second write path to the same hardware
+would mean two sets of validation to keep in step for no one's benefit.
+
+Screenshots are the capture device's own JPEG, passed through untouched, so an
+idle service does no work at all.
+
+Built on http.server, which is enough for a handful of clients and keeps the
+dependency count at zero.
 """
 
 import json
@@ -17,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import config
 import hid
 from . import netinfo
+from .mcp import McpEndpoint, origin_allowed, protocol_version_ok
 from .openapi import build_spec
 
 logger = logging.getLogger("guidenco.api")
@@ -24,9 +33,11 @@ logger = logging.getLogger("guidenco.api")
 MAX_BODY_BYTES = 64 * 1024
 STREAM_BOUNDARY = "guidencoframe"
 
-#: Paths reachable without a token, so an agent can discover the API before it
-#: has been given credentials. Neither reveals anything about the target.
+#: Paths reachable without a token, so a client can discover the service before
+#: it has been given credentials. Neither reveals anything about the target.
 PUBLIC_PATHS = {"/", "/openapi.json"}
+
+MCP_PATH = "/mcp"
 
 
 class ApiError(Exception):
@@ -77,17 +88,6 @@ class Handler(BaseHTTPRequestHandler):
     def _fail(self, status: int, message: str) -> None:
         self._json(status, {"error": message})
 
-    def _read_json(self) -> dict:
-        length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_BODY_BYTES:
-            raise ApiError(413, "request body too large")
-        if length == 0:
-            return {}
-        try:
-            return json.loads(self.rfile.read(length) or b"{}")
-        except (ValueError, UnicodeDecodeError) as exc:
-            raise ApiError(400, f"body is not valid JSON: {exc}")
-
     # ── Routing ───────────────────────────────────────────────────────────────
 
     def do_GET(self):
@@ -106,6 +106,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._screenshot()
             if path == "/stream":
                 return self._stream()
+            if path == MCP_PATH:
+                # The transport allows a server to decline an SSE stream, and we
+                # have no server-initiated messages to send.
+                return self._fail(405, "this MCP endpoint does not offer an SSE stream")
             return self._fail(404, f"no such endpoint: {path}")
         except ApiError as exc:
             return self._fail(exc.status, exc.message)
@@ -115,35 +119,59 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if path != MCP_PATH:
+            return self._fail(404, f"no such endpoint: {path}. Actions live at {MCP_PATH}.")
+        if not origin_allowed(self.headers.get("Origin")):
+            # Required by the transport spec: without it a hostile web page
+            # could reach this LAN address and drive the target machine.
+            return self._fail(403, "origin not allowed")
+        if not protocol_version_ok(self.headers.get("MCP-Protocol-Version")):
+            return self._fail(400, "unsupported MCP-Protocol-Version")
         if not self._authorised(path):
             return self._fail(401, "missing or invalid bearer token")
-        action = ACTIONS.get(path)
-        if action is None:
-            return self._fail(404, f"no such endpoint: {path}")
         try:
-            body = self._read_json()
-            result = action(self, body)
-            return self._json(200, {"ok": True, **(result or {})})
-        except ApiError as exc:
-            return self._fail(exc.status, exc.message)
-        except hid.InputUnavailable as exc:
-            return self._fail(503, f"input is unavailable: {exc}")
-        except hid.UnknownKey as exc:
-            return self._fail(400, str(exc))
-        except ValueError as exc:
-            return self._fail(400, str(exc))
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > MAX_BODY_BYTES:
+                return self._fail(413, "request body too large")
+            body = self.rfile.read(length) if length else b""
+            status, extra, payload = self.server.mcp.handle_post(body, self.headers)
         except Exception:
-            logger.exception("[api] POST %s failed", path)
+            logger.exception("[mcp] request failed")
             return self._fail(500, "internal error")
+        if payload is None:
+            self.send_response(status)
+            self.send_header("Content-Length", "0")
+            for key, value in extra.items():
+                self.send_header(key, value)
+            self.end_headers()
+            return
+        self._send(status, payload, "application/json", extra)
+
+    def do_DELETE(self):
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if path != MCP_PATH:
+            return self._fail(404, f"no such endpoint: {path}")
+        if not self._authorised(path):
+            return self._fail(401, "missing or invalid bearer token")
+        status, extra, _ = self.server.mcp.handle_delete(self.headers)
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        for key, value in extra.items():
+            self.send_header(key, value)
+        self.end_headers()
 
     # ── Read endpoints ────────────────────────────────────────────────────────
 
     def _index(self) -> dict:
         return {
             "service": "guidenco",
-            "description": "HDMI capture and USB HID control for the attached machine",
+            "description": "See and control a machine through its HDMI output "
+                           "and a USB HID gadget.",
+            "mcp": MCP_PATH,
             "openapi": "/openapi.json",
+            "read_endpoints": ["/screenshot", "/stream", "/health"],
             "authentication": "bearer token required" if config.API_TOKEN else "open",
+            "tunnel": self.server.tunnel_url,
         }
 
     def _health(self) -> dict:
@@ -160,6 +188,7 @@ class Handler(BaseHTTPRequestHandler):
             },
             "input": hid.status(),
             "network": netinfo.describe(),
+            "tunnel": self.server.tunnel_url,
             "uptime_seconds": round(time.monotonic() - self.server.started_at, 1),
         }
 
@@ -194,98 +223,6 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass                               # viewer closed the tab
 
-    # ── Body parsing helpers ──────────────────────────────────────────────────
-
-    def _coord(self, body: dict, x_key: str = "x", y_key: str = "y") -> tuple[float, float]:
-        fb = self.framebuffer
-        if not fb.ready:
-            raise ApiError(503, "no frame captured yet, so the screen size is unknown")
-        try:
-            x, y = float(body[x_key]), float(body[y_key])
-        except KeyError as exc:
-            raise ApiError(400, f"missing required field {exc.args[0]!r}")
-        except (TypeError, ValueError):
-            raise ApiError(400, f"{x_key} and {y_key} must be numbers")
-        if not (0 <= x < fb.width and 0 <= y < fb.height):
-            raise ApiError(400, f"({x:.0f},{y:.0f}) is outside the "
-                                f"{fb.width}x{fb.height} screen")
-        return x, y
-
-    @staticmethod
-    def _smooth(body: dict) -> bool | None:
-        value = body.get("smooth")
-        if value is None:
-            return None
-        if not isinstance(value, bool):
-            raise ApiError(400, "smooth must be true or false")
-        return value
-
-
-# ── Action endpoints ──────────────────────────────────────────────────────────
-
-def _act_move(h: Handler, body: dict) -> dict:
-    x, y = h._coord(body)
-    hid.move(x, y, smooth=h._smooth(body))
-    return {"x": x, "y": y}
-
-
-def _act_click(h: Handler, body: dict) -> dict:
-    x, y = h._coord(body)
-    button = body.get("button", "left")
-    count = body.get("count", 1)
-    if not isinstance(count, int) or isinstance(count, bool):
-        raise ApiError(400, "count must be an integer")
-    hid.click(x, y, button=button, count=count, smooth=h._smooth(body))
-    return {"x": x, "y": y, "button": button, "count": count}
-
-
-def _act_drag(h: Handler, body: dict) -> dict:
-    fx, fy = h._coord(body, "from_x", "from_y")
-    tx, ty = h._coord(body, "to_x", "to_y")
-    button = body.get("button", "left")
-    hid.drag(fx, fy, tx, ty, button=button, smooth=h._smooth(body))
-    return {"from": [fx, fy], "to": [tx, ty], "button": button}
-
-
-def _act_scroll(h: Handler, body: dict) -> dict:
-    x, y = h._coord(body)
-    amount = body.get("amount")
-    if not isinstance(amount, int) or isinstance(amount, bool):
-        raise ApiError(400, "amount must be a non-zero integer; positive scrolls up")
-    hid.scroll(x, y, amount, smooth=h._smooth(body))
-    return {"x": x, "y": y, "amount": amount}
-
-
-def _act_type(h: Handler, body: dict) -> dict:
-    text = body.get("text")
-    if not isinstance(text, str):
-        raise ApiError(400, "text must be a string")
-    skipped = hid.type_text(text)
-    result: dict = {"typed": len(text) - len(skipped)}
-    if skipped:
-        # Report rather than hide it: the caller's text did not fully arrive.
-        result["skipped"] = "".join(sorted(set(skipped)))
-        result["note"] = "characters with no US-layout mapping were skipped"
-    return result
-
-
-def _act_key(h: Handler, body: dict) -> dict:
-    combo = body.get("key")
-    if not isinstance(combo, str) or not combo.strip():
-        raise ApiError(400, "key must be a non-empty string, e.g. 'ctrl+c'")
-    hid.press_key(combo)
-    return {"key": combo}
-
-
-ACTIONS = {
-    "/move": _act_move,
-    "/click": _act_click,
-    "/drag": _act_drag,
-    "/scroll": _act_scroll,
-    "/type": _act_type,
-    "/key": _act_key,
-}
-
 
 class ApiServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -294,13 +231,17 @@ class ApiServer(ThreadingHTTPServer):
     def __init__(self, framebuffer, host: str, port: int) -> None:
         super().__init__((host, port), Handler)
         self.framebuffer = framebuffer
+        self.mcp = McpEndpoint(framebuffer)
         self.started_at = time.monotonic()
+        #: Set by the tunnel once Cloudflare hands us a public hostname.
+        self.tunnel_url: str | None = None
 
 
 def serve(framebuffer, host: str = "0.0.0.0", port: int = 8080) -> ApiServer:
     server = ApiServer(framebuffer, host, port)
     if config.API_TOKEN:
-        logger.info("[api] listening on %s:%d (bearer token required)", host, server.server_port)
+        logger.info("[api] listening on %s:%d — MCP at %s (bearer token required)",
+                    host, server.server_port, MCP_PATH)
     else:
         logger.warning("[api] listening on %s:%d with NO TOKEN — anyone who can reach "
                        "this port can control the target machine. Set API_TOKEN.",

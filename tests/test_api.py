@@ -378,19 +378,14 @@ class DiscoveryTest(ServerTestCase):
         for field in ("title", "version"):
             self.assertIn(field, spec["info"])
 
-    def test_every_action_endpoint_is_described(self):
-        from api.server import ACTIONS
+    def test_the_spec_covers_the_read_surface(self):
         _, spec = self.get_json("/openapi.json")
-        for path in ACTIONS:
-            self.assertIn(path, spec["paths"], f"{path} is missing from the spec")
-            self.assertIn("post", spec["paths"][path])
+        self.assertEqual(set(spec["paths"]), {"/health", "/screenshot", "/stream"})
 
-    def test_every_described_path_actually_exists(self):
-        from api.server import ACTIONS
+    def test_the_spec_points_control_at_mcp(self):
+        # Actions are MCP tools; restating them here would let the two drift.
         _, spec = self.get_json("/openapi.json")
-        known = set(ACTIONS) | {"/health", "/screenshot", "/stream", "/openapi.json"}
-        for path in spec["paths"]:
-            self.assertIn(path, known, f"the spec describes {path}, which is not routed")
+        self.assertIn("/mcp", spec["info"]["description"])
 
     def test_each_operation_has_an_id_and_summary(self):
         _, spec = self.get_json("/openapi.json")
@@ -445,72 +440,6 @@ class ScreenshotTest(ServerTestCase):
         self.assertEqual(body, newer)
 
 
-class ActionTest(ServerTestCase):
-    def test_move_reaches_the_gadget(self):
-        status, body = self.request("/move", {"x": 100, "y": 200, "smooth": False})[0], None
-        self.assertEqual(status, 200)
-        self.assertEqual(self.gadget.positions[-1],
-                         (self.hid._to_abs(100, 1920), self.hid._to_abs(200, 1080)))
-
-    def test_click_reaches_the_gadget(self):
-        self.request("/click", {"x": 10, "y": 10, "smooth": False})
-        self.assertIn(1, self.gadget.buttons)
-
-    def test_type_reports_how_much_was_typed(self):
-        _, _, body = self.request("/type", {"text": "hello"})
-        self.assertEqual(json.loads(body)["typed"], 5)
-
-    def test_type_reports_skipped_characters(self):
-        _, _, body = self.request("/type", {"text": "ok \U0001f600"})
-        payload = json.loads(body)
-        self.assertEqual(payload["typed"], 3)
-        self.assertIn("\U0001f600", payload["skipped"])
-
-    def test_key_combination_sets_the_modifier(self):
-        self.request("/key", {"key": "ctrl+c"})
-        self.assertEqual(self.gadget.keyboard[0][0], MOD_LCTRL)
-
-    def test_scroll_requires_an_amount(self):
-        with self.assertRaises(urllib.error.HTTPError) as caught:
-            self.request("/scroll", {"x": 5, "y": 5})
-        self.assertEqual(caught.exception.code, 400)
-
-    def test_off_screen_coordinates_are_rejected(self):
-        for point in ({"x": 1920, "y": 0}, {"x": 0, "y": 1080}, {"x": -1, "y": 0}):
-            with self.assertRaises(urllib.error.HTTPError) as caught:
-                self.request("/click", point)
-            self.assertEqual(caught.exception.code, 400, point)
-
-    def test_missing_fields_are_rejected(self):
-        with self.assertRaises(urllib.error.HTTPError) as caught:
-            self.request("/click", {"x": 5})
-        self.assertEqual(caught.exception.code, 400)
-
-    def test_malformed_json_is_rejected(self):
-        url = f"http://127.0.0.1:{self.port}/click"
-        req = urllib.request.Request(url, data=b"{not json", method="POST")
-        req.add_header("Content-Type", "application/json")
-        with self.assertRaises(urllib.error.HTTPError) as caught:
-            urllib.request.urlopen(req, timeout=10)
-        self.assertEqual(caught.exception.code, 400)
-
-    def test_an_unknown_key_name_is_rejected(self):
-        with self.assertRaises(urllib.error.HTTPError) as caught:
-            self.request("/key", {"key": "ctrl+wibble"})
-        self.assertEqual(caught.exception.code, 400)
-
-    def test_unknown_endpoints_are_404(self):
-        with self.assertRaises(urllib.error.HTTPError) as caught:
-            self.request("/nope", {})
-        self.assertEqual(caught.exception.code, 404)
-
-    def test_input_unavailable_reports_503(self):
-        self.hid._enabled = False
-        with self.assertRaises(urllib.error.HTTPError) as caught:
-            self.request("/click", {"x": 5, "y": 5})
-        self.assertEqual(caught.exception.code, 503)
-
-
 class AuthTest(ServerTestCase):
     TOKEN = "s3cret"
 
@@ -525,11 +454,6 @@ class AuthTest(ServerTestCase):
     def test_reads_require_a_token(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.request("/health")
-        self.assertEqual(caught.exception.code, 401)
-
-    def test_actions_require_a_token(self):
-        with self.assertRaises(urllib.error.HTTPError) as caught:
-            self.request("/click", {"x": 1, "y": 1})
         self.assertEqual(caught.exception.code, 401)
 
     def test_the_right_token_is_accepted(self):
