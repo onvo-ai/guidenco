@@ -26,26 +26,61 @@ CONFIG_FILE="$CONFIG_DIR/config.env"
 # are no Python dependencies at all, so no pip, no venv and no compiler.
 info "Installing system packages..."
 apt-get update -q -y
-apt-get install -y -q --no-install-recommends python3 ffmpeg v4l-utils
+# usbutils and psmisc are NOT on a minimal Ubuntu Server image, and both are
+# used below — without usbutils, capture detection silently guesses wrong.
+apt-get install -y -q --no-install-recommends python3 ffmpeg v4l-utils usbutils psmisc
+
+# Ubuntu's Pi images keep dwc2 and libcomposite in a separate package that the
+# server image does not always pull in. Without them there is no USB gadget.
+if ! modinfo libcomposite >/dev/null 2>&1 || ! modinfo dwc2 >/dev/null 2>&1; then
+  if apt-cache show "linux-modules-extra-$(uname -r)" >/dev/null 2>&1; then
+    info "Installing USB gadget kernel modules..."
+    apt-get install -y -q "linux-modules-extra-$(uname -r)" || \
+      warn "could not install linux-modules-extra-$(uname -r); USB HID may not work"
+  else
+    warn "libcomposite/dwc2 not found and no matching linux-modules-extra package"
+  fi
+fi
 
 # ── 2. Hardware detection ─────────────────────────────────────────────────────
 pi_model() { tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "unknown"; }
 
 detect_capture_type() {
-  # Known USB HDMI capture chipsets: Macrosilicon MS2109/MS2130, and the
-  # Empia em28xx family used by many cheap cards.
-  if lsusb 2>/dev/null | grep -qiE '534d:|1b71:|eb1a:|345f:'; then
+  # Ask the capture device itself how it is attached, rather than matching a
+  # list of vendor IDs that will always be incomplete. v4l2 reports "usb-..."
+  # in Bus info for a UVC capture card and "platform:..." for a CSI adapter.
+  for dev in /dev/video*; do
+    [[ -e "$dev" ]] || continue
+    # "|| true" matters: under set -e a failing v4l2-ctl would abort the
+    # installer instead of moving on to the next device node.
+    local probe=""
+    probe="$(v4l2-ctl -d "$dev" --info 2>/dev/null || true)"
+    grep -q "Video Capture" <<<"$probe" || continue
+    if grep -qi "Bus info.*usb" <<<"$probe"; then echo usb; return; fi
+    if grep -qi "tc358743\|unicam\|platform" <<<"$probe"; then echo csi; return; fi
+  done
+
+  # No usable /dev/video yet. A CSI adapter has no node until its overlay is
+  # enabled and the Pi has rebooted, so fall back to the USB bus: if a known
+  # capture chipset is plugged in it is a card, otherwise assume CSI.
+  if lsusb 2>/dev/null | grep -qiE '534d:|1b71:|eb1a:|345f:|1e4e:|05e1:'; then
     echo usb
   else
-    # No USB capture device — assume an HDMI-to-CSI adapter (TC358743).
     echo csi
   fi
 }
 
 detect_video_dev() {
+  # Pick a node that can actually hand us frames. Checking the capability
+  # strings is not enough: uvcvideo exposes a metadata node alongside the real
+  # one (often as the LOWER number, e.g. video0 metadata + video1 capture) and
+  # both advertise the driver's combined capabilities. A node that can deliver
+  # video is the one that lists at least one pixel format.
   for dev in /dev/video*; do
     [[ -e "$dev" ]] || continue
-    if v4l2-ctl -d "$dev" --all 2>/dev/null | grep -q "Video Capture"; then
+    local formats=""
+    formats="$(v4l2-ctl -d "$dev" --list-formats 2>/dev/null || true)"
+    if grep -qE "\[[0-9]+\]: '[A-Za-z0-9 ]{4}'" <<<"$formats"; then
       echo "$dev"; return
     fi
   done
