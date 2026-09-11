@@ -97,10 +97,11 @@ def _text(message: str) -> dict:
 
 
 class Tools:
-    """The tool surface, bound to a framebuffer."""
+    """The tool surface, bound to a framebuffer and the capture manager."""
 
-    def __init__(self, framebuffer) -> None:
+    def __init__(self, framebuffer, capture=None) -> None:
         self.framebuffer = framebuffer
+        self.capture = capture
 
     # ── Descriptions ──────────────────────────────────────────────────────────
 
@@ -110,8 +111,10 @@ class Tools:
                 "name": "screenshot",
                 "title": "Take a screenshot",
                 "description": ("Capture what the target machine is displaying right "
-                                "now. Call this before acting, and again afterwards "
-                                "to check the result."),
+                                "now. The image is taken when you ask, not read "
+                                "from a cache, so it always reflects the current "
+                                "screen. Call this before acting, and again "
+                                "afterwards to check the result."),
                 "inputSchema": {"type": "object", "properties": {}},
             },
             {
@@ -249,10 +252,15 @@ class Tools:
     # ── Tools ─────────────────────────────────────────────────────────────────
 
     def _tool_screenshot(self, args: dict) -> dict:
-        frame, _ = self.framebuffer.latest(timeout=5.0)
+        # Through the manager, so the image is captured after this call rather
+        # than being whatever the last background frame happened to be.
+        if self.capture is not None:
+            frame = self.capture.frame()
+        else:
+            frame, _ = self.framebuffer.latest(timeout=5.0)
         if frame is None:
             raise McpError(INTERNAL_ERROR,
-                           "no frame captured yet — is an HDMI source connected?")
+                           "no frame captured — is an HDMI source connected?")
         width, height = self.framebuffer.width, self.framebuffer.height
         return {"content": [
             {"type": "image",
@@ -268,7 +276,8 @@ class Tools:
         fb = self.framebuffer
         status = {
             "screen": {"ready": fb.ready, "width": fb.width, "height": fb.height,
-                       "frames_captured": fb.sequence},
+                       "frames_captured": fb.sequence,
+                       "capturing": bool(self.capture and self.capture.capturing)},
             "input": hid.status(),
             "network": netinfo.describe(),
         }
@@ -362,8 +371,8 @@ class Sessions:
 # ── Protocol handling ─────────────────────────────────────────────────────────
 
 class McpEndpoint:
-    def __init__(self, framebuffer) -> None:
-        self.tools = Tools(framebuffer)
+    def __init__(self, framebuffer, capture=None) -> None:
+        self.tools = Tools(framebuffer, capture)
         self.sessions = Sessions()
 
     # Returns (status, headers, body-bytes-or-None)

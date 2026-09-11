@@ -204,7 +204,7 @@ class CsiBackend(CaptureBackend):
             "-video_size", f"{w}x{h}",
             "-framerate", str(STREAM_FPS),
             "-i", "pipe:0",
-        ] + encode_outputs(STREAM_W, STREAM_H)
+        ] + encode_outputs(STREAM_W, STREAM_H, STREAM_FPS)
 
         v4l2_proc = subprocess.Popen(v4l2_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=v4l2_proc.stdout,

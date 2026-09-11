@@ -648,14 +648,14 @@ class CaptureBackendTest(unittest.TestCase):
         manager = CaptureManager(backend=TestBackend(width=64, height=64, fps=30))
         manager.start()
         try:
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and not manager.framebuffer.ready:
-                time.sleep(0.02)
-            self.assertTrue(manager.framebuffer.ready, "no frame arrived")
-            frame = manager.framebuffer.frame
+            # start() only arms the idle reaper now; capture begins when a
+            # frame is actually requested.
+            frame = manager.frame(timeout=10)
+            self.assertIsNotNone(frame, "no frame arrived")
             self.assertEqual(frame[:2], b"\xff\xd8", "frame should start with JPEG SOI")
             self.assertEqual(frame[-2:], b"\xff\xd9", "frame should end with JPEG EOI")
-            self.assertEqual((manager.framebuffer.width, manager.framebuffer.height), (64, 64))
+            self.assertEqual((manager.framebuffer.width, manager.framebuffer.height),
+                             (64, 64))
         finally:
             manager.stop()
 
