@@ -42,7 +42,9 @@ _BACKOFF_SECONDS = 2
 #: How often to re-check for letterbox bars. They appear and vanish when the
 #: source changes display arrangement without changing capture resolution —
 #: switching between mirrored and extended, for instance — which no other
-#: signal would tell us about.
+#: signal would tell us about. The clock lives on the manager rather than on a
+#: single run: on-demand capture stops and restarts the pipeline constantly, and
+#: a per-run clock would re-run this ffmpeg pass on every cold start.
 _LETTERBOX_RECHECK_S = 60
 
 #: How often the reaper looks for an idle pipeline.
@@ -74,6 +76,7 @@ class CaptureManager:
         self._holders = 0
         self._last_used = 0.0
         self._detecting = False
+        self._checked_at = 0.0
         self._reaper: threading.Thread | None = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -163,10 +166,18 @@ class CaptureManager:
         if self._detecting:
             return                      # one at a time; they would agree anyway
         self._detecting = True
+        # Stamped on the attempt, not the result: a detection that keeps failing
+        # must not respawn ffmpeg on every frame.
+        self._checked_at = time.monotonic()
 
         def work() -> None:
             try:
-                self.framebuffer.set_active(detect(frame, width, height))
+                area = detect(frame, width, height)
+                # None means detection could not tell. Keep what we have: an
+                # area detected earlier is far better than falling back to the
+                # whole frame, which would put every click back off by a bar.
+                if area is not None:
+                    self.framebuffer.set_active(area)
             except Exception:
                 logger.exception("[capture] letterbox detection failed")
             finally:
@@ -194,14 +205,12 @@ class CaptureManager:
                 logger.info("[capture] streaming %dx%d after %.1fs",
                             width, height, time.monotonic() - started)
                 self.framebuffer.resize(width, height)
-                checked_at = 0.0
                 for frame in iter_mjpeg(stream):
                     if self._run_stop.is_set() or self._shutdown.is_set():
                         break
                     self.framebuffer.update(frame)
                     now = time.monotonic()
-                    if now - checked_at >= _LETTERBOX_RECHECK_S:
-                        checked_at = now
+                    if now - self._checked_at >= _LETTERBOX_RECHECK_S:
                         # Off the capture thread: detection spawns ffmpeg, and
                         # blocking here would stall the frame stream behind it.
                         self._check_letterbox(frame, width, height)
