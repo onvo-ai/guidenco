@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # guidenco installer — Raspberry Pi OS / Ubuntu Server, Pi Zero 2 W through Pi 5.
 #
+#   curl -fsSL https://raw.githubusercontent.com/onvo-ai/guidenco/main/install.sh | sudo bash
+#
+# or, from a checkout:
+#
 #   git clone https://github.com/onvo-ai/guidenco
 #   cd guidenco && sudo ./install.sh
 #
@@ -14,12 +18,34 @@ info()  { echo -e "${GREEN}[guidenco]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[guidenco] WARN:${NC} $*"; }
 error() { echo -e "${RED}[guidenco] ERROR:${NC} $*" >&2; exit 1; }
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_URL="${GUIDENCO_REPO:-https://github.com/onvo-ai/guidenco}"
+REPO_REF="${GUIDENCO_REF:-main}"
 INSTALL_DIR=/opt/guidenco
 CONFIG_DIR=/etc/guidenco
 CONFIG_FILE="$CONFIG_DIR/config.env"
 
 [[ $EUID -eq 0 ]] || error "run with sudo"
+
+# ── 0. Find the source ────────────────────────────────────────────────────────
+# Piped from curl there is no script file, so ${BASH_SOURCE[0]} is "bash" and
+# its directory is wherever the shell happens to be — never the project. Decide
+# by looking for the files we actually copy rather than by trusting that path,
+# and clone them when they are not there. Set GUIDENCO_REF to install a branch.
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || echo /nonexistent)"
+
+if [[ ! -f "$SOURCE_DIR/main.py" || ! -d "$SOURCE_DIR/capture" ]]; then
+  info "Fetching guidenco ($REPO_REF)..."
+  if ! command -v git >/dev/null 2>&1; then
+    apt-get update -q -y
+    apt-get install -y -q --no-install-recommends git
+  fi
+  SOURCE_DIR="$(mktemp -d)"
+  # Cleaned up on every exit path, including the error() ones.
+  trap 'rm -rf "$SOURCE_DIR"' EXIT
+  git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$SOURCE_DIR" -q \
+    || error "could not clone $REPO_URL ($REPO_REF)"
+  info "Fetched $(git -C "$SOURCE_DIR" rev-parse --short HEAD)"
+fi
 
 # ── 1. System packages ────────────────────────────────────────────────────────
 # ffmpeg and v4l-utils drive the capture device; python3 runs the service. There

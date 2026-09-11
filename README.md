@@ -19,15 +19,30 @@ access software at all.
 
 ## Install
 
+Flash Raspberry Pi OS, enable SSH, sign in, and run:
+
 ```bash
-git clone https://github.com/onvo-ai/guidenco
-cd guidenco && sudo ./install.sh
+curl -fsSL https://raw.githubusercontent.com/onvo-ai/guidenco/main/install.sh | sudo bash
 ```
 
 The installer detects the capture hardware, sets the boot overlays it needs,
 generates an API token, installs the service and starts it, then prints the URLs
 and the token. A reboot is required the first time, because the USB gadget
-overlay only takes effect at boot.
+overlay only takes effect at boot. Re-running it updates an existing install in
+place and keeps the token and any settings you have changed.
+
+It fetches the code itself, so there is nothing to clone first. From a checkout
+it uses the files next to it instead:
+
+```bash
+git clone https://github.com/onvo-ai/guidenco
+cd guidenco && sudo ./install.sh
+```
+
+Set `GUIDENCO_REF` to install something other than `main` — a branch or a tag.
+
+The Bluetooth setup page for Wi-Fi and the public URL is at
+<https://onvo-ai.github.io/guidenco/>, and needs Chrome or Edge.
 
 ## Connecting Claude
 
