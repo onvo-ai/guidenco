@@ -50,6 +50,13 @@
   .grid dt { color: var(--muted); }
   .grid dd { margin: 0; overflow-wrap: anywhere; }
   code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  /* The command is long and must stay copyable verbatim, so it scrolls inside
+     its own box rather than wrapping mid-URL or widening the page. */
+  .cmd {
+    flex: 1; min-width: 0; overflow-x: auto; white-space: pre;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; user-select: all;
+  }
   .url { display: flex; gap: 8px; align-items: center; }
   .url a { color: var(--accent); overflow-wrap: anywhere; }
   .note { font-size: 13px; color: var(--muted); margin-top: 12px; }
@@ -74,6 +81,23 @@
     <strong>This browser can't do Web Bluetooth.</strong>
     It only exists in Chrome and Edge, on desktop and Android. Safari and Firefox
     have never shipped it, and no browser on iOS has it. Open this page in Chrome.
+  </div>
+
+  <div class="card">
+    <h2>Install</h2>
+    <p class="note" style="margin-top:0">
+      Flash Raspberry Pi OS, enable SSH and sign in, then run this once:
+    </p>
+    <div class="row">
+      <code class="cmd" id="installcmd">curl -fsSL https://raw.githubusercontent.com/onvo-ai/guidenco/main/install.sh | sudo bash</code>
+      <button id="copycmd">Copy</button>
+    </div>
+    <p class="note">
+      It works out which capture device you have, sets the boot overlays, and
+      starts the service. Reboot when it finishes — the USB gadget that types and
+      moves the mouse only appears at boot. After that the Pi advertises itself
+      over Bluetooth and you can set it up below, no network needed.
+    </p>
   </div>
 
   <div class="card">
@@ -287,6 +311,16 @@ $('join').addEventListener('click', async () => {
   } catch (err) {
     say($('wifistatus'), `Could not send credentials: ${err.message}`, 'bad');
   }
+});
+
+// The install command is useful before any Bluetooth connection exists, so this
+// listener is bound outside everything that waits on one.
+$('copycmd').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('installcmd').textContent.trim());
+    $('copycmd').textContent = 'Copied';
+    setTimeout(() => { $('copycmd').textContent = 'Copy'; }, 1500);
+  } catch { /* clipboard needs a secure context; the text is selectable anyway */ }
 });
 
 $('copy').addEventListener('click', async () => {
