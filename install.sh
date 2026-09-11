@@ -30,15 +30,22 @@ apt-get update -q -y
 # used below — without usbutils, capture detection silently guesses wrong.
 apt-get install -y -q --no-install-recommends python3 ffmpeg v4l-utils usbutils psmisc
 
-# Ubuntu's Pi images keep dwc2 and libcomposite in a separate package that the
-# server image does not always pull in. Without them there is no USB gadget.
-if ! modinfo libcomposite >/dev/null 2>&1 || ! modinfo dwc2 >/dev/null 2>&1; then
+# The USB gadget needs dwc2 and libcomposite. A module counts as available if
+# it is loadable OR compiled into the kernel — on Raspberry Pi OS dwc2 is
+# built in, and modinfo reports built-in modules as "not found", so checking
+# modinfo alone would send us chasing a package we do not need.
+have_module() {
+  modinfo "$1" >/dev/null 2>&1 && return 0
+  grep -q "/$1\.ko" "/lib/modules/$(uname -r)/modules.builtin" 2>/dev/null
+}
+if ! have_module libcomposite || ! have_module dwc2; then
+  # Ubuntu's Pi server images split these into a separate package.
   if apt-cache show "linux-modules-extra-$(uname -r)" >/dev/null 2>&1; then
     info "Installing USB gadget kernel modules..."
     apt-get install -y -q "linux-modules-extra-$(uname -r)" || \
       warn "could not install linux-modules-extra-$(uname -r); USB HID may not work"
   else
-    warn "libcomposite/dwc2 not found and no matching linux-modules-extra package"
+    warn "libcomposite/dwc2 unavailable and no linux-modules-extra package matches"
   fi
 fi
 
@@ -113,7 +120,20 @@ fi
 # which needs the dwc2 controller in peripheral mode. Pi 4/5 stock configs often
 # put dwc2 under a CM-only filter ([cm4]/[cm5]) that never applies to a Model B,
 # so add it under [all] where it definitely takes effect.
-if ! grep -qE '^\s*dtoverlay=dwc2.*dr_mode=peripheral' "$CONFIG_TXT"; then
+# Section-aware: stock images ship "dtoverlay=dwc2,dr_mode=host" under [cm5]
+# and "otg_mode=1" under [cm4]. Neither filter applies to a Model B, so a naive
+# grep would either miss them or be fooled by an inert peripheral line sitting
+# under a filter that never fires. Only a line in effect for THIS board counts.
+dwc2_peripheral_active() {
+  awk '
+    /^\[/    { section = $0; next }
+    /dtoverlay=dwc2/ && /dr_mode=peripheral/ {
+      if (section == "" || section == "[all]") { found = 1 }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$CONFIG_TXT"
+}
+if ! dwc2_peripheral_active; then
   info "Enabling USB gadget mode (dwc2 peripheral)..."
   printf '\n# guidenco: USB HID gadget\n[all]\ndtoverlay=dwc2,dr_mode=peripheral\n' >> "$CONFIG_TXT"
   REBOOT_NEEDED=1
@@ -132,8 +152,10 @@ fi
 # ── 4. Install ────────────────────────────────────────────────────────────────
 info "Installing to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
-rm -rf "$INSTALL_DIR"/{capture,rfb,hid}
-for item in main.py config.py capture rfb hid; do
+# Clear out every component directory, including ones from older versions
+# (rfb/ was the VNC server), so a stale module never shadows a current one.
+rm -rf "$INSTALL_DIR"/{capture,api,hid,rfb}
+for item in main.py config.py capture api hid; do
   cp -r "$SOURCE_DIR/$item" "$INSTALL_DIR/"
 done
 install -m 755 "$SOURCE_DIR/hid-gadget-setup.sh" /usr/local/bin/guidenco-hid-setup
@@ -142,34 +164,69 @@ install -m 755 "$SOURCE_DIR/hid-gadget-setup.sh" /usr/local/bin/guidenco-hid-set
 # Written once and never overwritten, so re-running the installer does not throw
 # away a password or a tuned resolution.
 if [[ ! -f "$CONFIG_FILE" ]]; then
+  # A token is generated rather than left blank, because an unconfigured bridge
+  # on an open port hands full keyboard and mouse control of the target machine
+  # to anyone who can reach it.
+  TOKEN="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
   info "Writing $CONFIG_FILE"
   cat > "$CONFIG_FILE" <<EOF
-# guidenco VNC bridge configuration. Restart after editing:
+# guidenco configuration. Restart after editing:
 #   sudo systemctl restart guidenco
 
 # Capture hardware — "usb", "csi", or "test" for a synthetic pattern.
 CAPTURE_TYPE=$CAPTURE_TYPE
 VIDEO_DEV=$VIDEO_DEV
 
-# Served screen size. 0 means native resolution, which gives the sharpest text.
-# Set both (e.g. 1280 and 720) if a Pi Zero cannot keep up at 1080p.
+# Served screen size. 0 means the capture device's own resolution, which is
+# also the only setting that allows JPEG passthrough with no re-encoding.
 STREAM_W=0
 STREAM_H=0
 STREAM_FPS=10
 
-# VNC. Leave VNC_PASSWORD empty to run with no authentication — only sensible
-# on a network you fully trust, since anyone who reaches port 5900 gets control.
-VNC_PORT=5900
-VNC_PASSWORD=
-VNC_MAX_CLIENTS=4
+# Ceiling on the capture mode chosen by probing. Cards advertise what their
+# chip can do, not what is plugged in; raise this only if the source is
+# genuinely above 1080p.
+CAPTURE_MAX_W=1920
+CAPTURE_MAX_H=1080
 
-# Input replay: "auto" uses the USB HID gadget when it is present, "off" serves
-# the screen read-only, "on" makes a missing gadget a loud error.
+# HTTP API. Clear API_TOKEN to run without authentication — only sensible on a
+# network you fully trust.
+API_PORT=8080
+API_TOKEN=$TOKEN
+
+# Input replay: "auto" uses the USB HID gadget when present, "off" serves the
+# screen read-only, "on" makes a missing gadget a loud error.
 HID_ENABLED=auto
+
+# Pointer moves are interpolated with easing. Set to "off" for instant jumps —
+# faster for bulk automation, but hover states and drags often stop working.
+MOUSE_SMOOTH=on
 EOF
   chmod 600 "$CONFIG_FILE"
 else
   info "Keeping existing $CONFIG_FILE"
+  # Settings change between versions. Rather than leave a config that silently
+  # lacks new keys — and so runs on defaults the operator never chose — add
+  # what is missing and retire what no longer means anything.
+  ensure_key() {
+    grep -qE "^${1}=" "$CONFIG_FILE" || {
+      info "  adding $1"
+      printf '%s=%s\n' "$1" "$2" >> "$CONFIG_FILE"
+    }
+  }
+  ensure_key API_PORT 8080
+  ensure_key API_TOKEN "$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
+  ensure_key CAPTURE_MAX_W 1920
+  ensure_key CAPTURE_MAX_H 1080
+  ensure_key MOUSE_SMOOTH on
+  ensure_key HID_ENABLED auto
+  for dead in VNC_PORT VNC_PASSWORD VNC_MAX_CLIENTS VNC_HOST VNC_NAME; do
+    if grep -qE "^${dead}=" "$CONFIG_FILE"; then
+      info "  removing $dead (no longer used)"
+      sed -i "/^${dead}=/d" "$CONFIG_FILE"
+    fi
+  done
+  TOKEN="$(grep -E '^API_TOKEN=' "$CONFIG_FILE" | cut -d= -f2-)"
 fi
 
 # ── 6. Service ────────────────────────────────────────────────────────────────
@@ -190,6 +247,21 @@ else
 fi
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+PORT="$(grep -E '^API_PORT=' "$CONFIG_FILE" | cut -d= -f2- || echo 8080)"
+BASE="http://${IP:-<pi-address>}:${PORT:-8080}"
 echo
-info "Done. Connect a VNC client to:  ${IP:-<pi-address>}:5900"
-info "Set a password in $CONFIG_FILE before exposing this beyond your LAN."
+info "Done."
+cat <<EOF
+
+  API      $BASE
+  Spec     $BASE/openapi.json
+  Screen   $BASE/screenshot
+  Watch    $BASE/stream        (open this in a browser)
+
+  Token    ${TOKEN:-(none - the API is open)}
+
+  Try it:
+    curl -s $BASE/health -H "Authorization: Bearer $TOKEN"
+
+EOF
+info "Point an agent at $BASE/openapi.json and it can discover the rest."

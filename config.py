@@ -30,9 +30,17 @@ CAPTURE_TYPE = os.environ.get("CAPTURE_TYPE", "usb")
 VIDEO_DEV    = os.environ.get("VIDEO_DEV", "/dev/video0")
 
 # Source geometry. USB cards are probed and these act only as a fallback; the
-# TC358743 dictates its own timings. Set them to override.
+# TC358743 dictates its own timings. Set them to pin an exact capture mode.
 CAPTURE_W = _int("CAPTURE_W", 1920)
 CAPTURE_H = _int("CAPTURE_H", 1080)
+
+# Ceiling on the capture mode chosen by probing. HDMI capture cards advertise
+# their maximum capability, not the resolution of the signal actually plugged
+# in — a common MS2130 offers 2560x1600, which is 12MB per frame once decoded
+# to RGB24 and roughly 123MB/s of memory traffic at 10fps. That is a poor
+# default on a Pi. Raise it if your source really is above 1080p.
+CAPTURE_MAX_W = _int("CAPTURE_MAX_W", 1920)
+CAPTURE_MAX_H = _int("CAPTURE_MAX_H", 1080)
 
 # Served screen size. 0 means "whatever the capture device gives us" — native
 # resolution, no scaling, sharpest text. Set both to a smaller size (e.g.
@@ -41,18 +49,31 @@ STREAM_W   = _int("STREAM_W", 0)
 STREAM_H   = _int("STREAM_H", 0)
 STREAM_FPS = _int("STREAM_FPS", 10)
 
-# ── VNC server ────────────────────────────────────────────────────────────────
-VNC_HOST        = os.environ.get("VNC_HOST", "0.0.0.0")
-VNC_PORT        = _int("VNC_PORT", 5900)
-# Empty password means the server offers the "None" security type: anyone who
-# can reach the port gets in. Set a password for anything but a trusted LAN.
-VNC_PASSWORD    = os.environ.get("VNC_PASSWORD", "")
-VNC_MAX_CLIENTS = _int("VNC_MAX_CLIENTS", 4)
-VNC_NAME        = os.environ.get("VNC_NAME", "guidenco")
+# ── HTTP API ──────────────────────────────────────────────────────────────────
+API_HOST = os.environ.get("API_HOST", "0.0.0.0")
+API_PORT = _int("API_PORT", 8080)
+# Empty token means the API is open: anyone who can reach the port can move the
+# mouse and type on the target machine. Set one for anything but a trusted LAN.
+API_TOKEN = os.environ.get("API_TOKEN", "")
+# How long /stream waits for a new frame before giving up on a stalled capture.
+STREAM_TIMEOUT_S = _int("STREAM_TIMEOUT_S", 10)
 
 # ── USB HID gadget ────────────────────────────────────────────────────────────
 # "auto" replays input when /dev/hidg0 exists and serves screen-only when it
-# doesn't (e.g. a Pi Zero whose single USB port is taken by a capture card).
+# does not (e.g. a Pi Zero whose single USB port is taken by a capture card).
 HID_ENABLED = _bool_or_auto("HID_ENABLED")
 
 ABS_MAX = 32767   # USB HID absolute pointer range
+
+# ── Pointer motion ────────────────────────────────────────────────────────────
+# Moves are interpolated with easing instead of teleporting. Beyond looking
+# natural this is functional: applications need intermediate motion to fire
+# hover states and to recognise a drag at all.
+MOUSE_SMOOTH = os.environ.get("MOUSE_SMOOTH", "on").strip().lower() != "off"
+# Duration model: base + k * sqrt(pixels), capped. Square root rather than
+# linear echoes Fitts's law — long sweeps travel faster per pixel.
+MOUSE_MOVE_BASE_MS = _int("MOUSE_MOVE_BASE_MS", 80)
+MOUSE_MOVE_PER_ROOT_PX_MS = _int("MOUSE_MOVE_PER_ROOT_PX_MS", 14)
+MOUSE_MOVE_MAX_MS = _int("MOUSE_MOVE_MAX_MS", 600)
+# One HID report per step; 8ms matches a real mouse's 125Hz poll rate.
+MOUSE_STEP_MS = _int("MOUSE_STEP_MS", 8)

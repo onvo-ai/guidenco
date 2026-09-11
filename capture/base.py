@@ -1,47 +1,78 @@
 """
 capture/base.py — shared pieces for the capture backends.
 
-A backend produces a process whose stdout is a stream of raw BGR24 frames at a
-known size.
-
-BGR rather than RGB is deliberate, for two reasons. It is the byte order most
-real VNC servers advertise, so clients are well tested against it — including
-nodejs-rfb, the library mcp-vnc uses, whose decoder hardcodes a BGR-to-RGBA
-swap and ignores the negotiated channel shifts entirely. And it is byte-for-byte
-the CPIXEL layout such a client wants, so the RFB encoder slices pixels straight
-out of the framebuffer with no per-pixel conversion.
+A backend produces a process whose stdout is a stream of JPEG frames. JPEG is
+the native currency here: USB capture cards emit MJPEG on the wire, and the API
+serves JPEG, so for those cards ffmpeg copies frames through without decoding
+or re-encoding them at all. The CSI adapter delivers raw UYVY and is the only
+path that pays for an encode.
 """
 
 import subprocess
 from typing import Iterator
 
-BYTES_PER_PIXEL = 3   # BGR24
+# ffmpeg mjpeg -q:v scale (1 = best, 31 = worst). Only used where we actually
+# encode; a passthrough card's own quality is whatever it chose.
+FFMPEG_QUALITY = 4
+
+# Frames shorter than this are treated as truncated fragments, which a source
+# emits while changing resolution or losing sync. Kept low: a real 1080p frame
+# is tens of kilobytes, but a small or very dark capture can be legitimately
+# tiny, and silently discarding real frames is far worse than passing on a
+# fragment that the client will simply fail to decode.
+MIN_FRAME_BYTES = 256
+
+
+def iter_mjpeg(stream, chunk_size: int = 65536) -> Iterator[bytes]:
+    """
+    Yield complete JPEG frames from a byte stream.
+
+    Frames are delimited by the JPEG SOI (FF D8) and EOI (FF D9) markers.
+    Terminates at EOF, e.g. when the producing process exits.
+
+    Reads with read1() rather than read(): on a buffered pipe, read(n) blocks
+    until it has all n bytes, so frames would sit unpublished in the buffer
+    waiting for enough of the *next* ones to arrive. read1() returns whatever
+    a single syscall gives, which is what a live stream needs.
+    """
+    read = getattr(stream, "read1", None) or stream.read
+    buf = b""
+    while True:
+        data = read(chunk_size)
+        if not data:
+            return
+        buf += data
+        while True:
+            start = buf.find(b"\xff\xd8")
+            if start == -1:
+                buf = b""
+                break
+            end = buf.find(b"\xff\xd9", start + 2)
+            if end == -1:
+                buf = buf[start:]
+                break
+            frame = buf[start:end + 2]
+            buf = buf[end + 2:]
+            if len(frame) > MIN_FRAME_BYTES:
+                yield frame
 
 
 def encode_outputs(scale_w: int, scale_h: int) -> list[str]:
-    """
-    ffmpeg output stage: emit raw BGR24 on stdout, optionally downscaled.
-
-    scale_w/scale_h of 0 means "no scaling" — serve the source resolution.
-    """
+    """ffmpeg output stage that re-encodes to MJPEG, optionally downscaling."""
     args = []
     if scale_w and scale_h:
         args += ["-vf", f"scale={scale_w}:{scale_h}:flags=fast_bilinear"]
-    return args + ["-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1"]
+    return args + ["-q:v", str(FFMPEG_QUALITY), "-f", "mjpeg", "pipe:1"]
 
 
-def iter_frames(stream, frame_bytes: int) -> Iterator[bytes]:
+def passthrough_outputs() -> list[str]:
     """
-    Yield fixed-size raw frames from a byte stream.
+    ffmpeg output stage that copies JPEG frames verbatim.
 
-    Raw video has no framing markers, so a frame is simply the next
-    ``frame_bytes`` bytes. Stops at EOF, discarding any trailing partial frame.
+    No decode, no scale, no re-encode — the card's own frames reach the client
+    untouched. This is why an idle Pi costs essentially nothing.
     """
-    while True:
-        buf = stream.read(frame_bytes)
-        if buf is None or len(buf) < frame_bytes:
-            return
-        yield buf
+    return ["-c:v", "copy", "-f", "mjpeg", "pipe:1"]
 
 
 class CaptureBackend:
@@ -59,9 +90,36 @@ class CaptureBackend:
         Start the capture pipeline.
 
         Returns (stream, procs, width, height): *stream* is a readable file
-        object yielding raw RGB24 frames of exactly width*height*3 bytes, and
-        *procs* is every process to terminate on shutdown or restart. Returning
-        a bare stream rather than a process lets the synthetic test backend use
-        the same path without spawning anything.
+        object yielding JPEG frames, and *procs* is every process to terminate
+        on shutdown or restart.
         """
         raise NotImplementedError
+
+
+def jpeg_size(frame: bytes) -> tuple[int, int] | None:
+    """
+    Width and height from a JPEG's start-of-frame marker, or None.
+
+    Used where the true frame size matters more than the size we asked for.
+    Walks the marker segments rather than guessing at fixed offsets, because
+    the number and order of headers before SOF varies between encoders.
+    """
+    index = 2                      # skip SOI
+    while index + 9 < len(frame):
+        if frame[index] != 0xFF:
+            index += 1
+            continue
+        marker = frame[index + 1]
+        # SOF0-SOF15, excluding the non-frame markers DHT, JPGA and DAC.
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            height = int.from_bytes(frame[index + 5:index + 7], "big")
+            width = int.from_bytes(frame[index + 7:index + 9], "big")
+            return width, height
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            index += 2
+            continue
+        length = int.from_bytes(frame[index + 2:index + 4], "big")
+        if length < 2:
+            return None
+        index += 2 + length
+    return None

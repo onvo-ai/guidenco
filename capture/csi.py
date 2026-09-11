@@ -14,7 +14,8 @@ only after a signal loss) and drain pending events before each ffmpeg start.
 ffmpeg's v4l2 demuxer mishandles V4L2_BUF_FLAG_ERROR (it re-queues the bad
 buffer and loops on a partial frame forever), so we stream raw frames via
 v4l2-ctl — which re-applies timings on error — and pipe them into ffmpeg purely
-to convert the adapter's native pixel format (usually UYVY) into RGB24.
+to convert the adapter's native pixel format (usually UYVY) into MJPEG.
+This is the one capture path that pays for an encode; USB cards pass through.
 """
 
 import glob

@@ -18,8 +18,8 @@ import threading
 import time
 
 from config import CAPTURE_TYPE
-from .base import CaptureBackend, BYTES_PER_PIXEL, iter_frames
-from .framebuffer import Framebuffer, BAND_H
+from .base import CaptureBackend, iter_mjpeg
+from .framebuffer import Framebuffer
 
 logger = logging.getLogger("guidenco.capture")
 
@@ -67,11 +67,9 @@ class CaptureManager:
             stream = None
             try:
                 stream, procs, width, height = backend.open()
-                frame_bytes = width * height * BYTES_PER_PIXEL
-                logger.info("[capture] streaming %dx%d (%d bytes/frame)",
-                            width, height, frame_bytes)
+                logger.info("[capture] streaming %dx%d", width, height)
                 self.framebuffer.resize(width, height)
-                for frame in iter_frames(stream, frame_bytes):
+                for frame in iter_mjpeg(stream):
                     if not self._running:
                         break
                     self.framebuffer.update(frame)
@@ -107,4 +105,4 @@ def get_manager() -> CaptureManager:
     return _manager
 
 
-__all__ = ["CaptureManager", "get_manager", "Framebuffer", "BAND_H", "BYTES_PER_PIXEL"]
+__all__ = ["CaptureManager", "get_manager", "Framebuffer"]

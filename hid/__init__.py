@@ -1,30 +1,36 @@
 """
-hid — replay VNC input on the target machine via the USB HID gadget.
+hid — drive the target machine's mouse and keyboard over the USB HID gadget.
 
-VNC input is raw: PointerEvent carries an absolute position and a button
-bitmask, KeyEvent carries one keysym going down or up. The client does all the
-sequencing — a double click is two PointerEvent pairs, typing is a stream of
-key downs and ups — so this module only has to hold the current hardware state
-and push a report whenever it changes.
+The API sends intent — click here, type this, press ctrl+c — so this module
+owns the sequencing that turns intent into HID reports.
 
 Two gadget interfaces are used, matching hid-gadget-setup.sh:
     /dev/hidg0  boot keyboard, 8-byte report: modifiers, reserved, 6 key slots
     /dev/hidg1  absolute mouse, 6-byte report: buttons, X (LE16), Y (LE16), wheel
 
-When the gadget is absent — most often a Pi Zero whose one USB port is taken by
-a capture card — every entry point becomes a no-op and the server runs as a
-screen-only VNC endpoint.
+Pointer moves are interpolated rather than teleported. That is not cosmetic: a
+cursor that jumps never crosses the pixels in between, so hover states never
+fire, menus that open on hover stay shut, and drag-and-drop frequently fails
+outright because applications decide a drag has begun by observing motion while
+a button is held.
+
+When the gadget is absent every entry point raises InputUnavailable, and
+/health reports input as unavailable rather than silently doing nothing.
 """
 
 import errno
 import logging
+import math
 import os
 import struct
 import threading
 import time
 
-from config import ABS_MAX, HID_ENABLED
-from rfb.keysyms import MODIFIERS, lookup
+from config import (
+    ABS_MAX, HID_ENABLED, MOUSE_SMOOTH, MOUSE_MOVE_BASE_MS,
+    MOUSE_MOVE_PER_ROOT_PX_MS, MOUSE_MOVE_MAX_MS, MOUSE_STEP_MS,
+)
+from .keys import CHARS, MOD_LSHIFT, UnknownKey, parse_combo
 
 logger = logging.getLogger("guidenco.hid")
 
@@ -33,62 +39,76 @@ MS_DEVICE = "/dev/hidg1"
 _GADGET_DIR = "/sys/kernel/config/usb_gadget/hid_keyboard"
 
 KB_RELEASE = b"\x00" * 8
-MAX_KEY_SLOTS = 6   # boot keyboard is 6-key rollover
 
-#: VNC button bitmask positions. Bits 3-6 are wheel clicks, not real buttons:
-#: the client presses and releases them to signal one notch of scrolling.
-_BTN_LEFT, _BTN_MIDDLE, _BTN_RIGHT = 0x01, 0x02, 0x04
-_WHEEL_UP, _WHEEL_DOWN = 0x08, 0x10
+#: HID orders the button bits left, right, middle.
+BUTTONS = {"left": 0x01, "right": 0x02, "middle": 0x04}
+
+# Delay between a press and its release. Too short and some applications drop
+# the event; this sits comfortably inside what a real click looks like.
+_PRESS_MS = 40
+_KEYSTROKE_MS = 12
 
 _lock = threading.RLock()
 _kb_fd = None
 _ms_fd = None
 _enabled = False
-_warned = False
+_reason = "not initialised"
 
-# Current hardware state, mirrored so we only write when something changes.
-_modifiers = 0
-_keys: list[int] = []
 _buttons = 0
-_x = 0
+_x = 0                            # last position, in absolute HID units
 _y = 0
+_screen = (0, 0)                  # pixel space the API talks in
 
 
-# ── Availability ──────────────────────────────────────────────────────────────
+class InputUnavailable(RuntimeError):
+    """The USB HID gadget is not usable on this machine."""
+
+
+# ── Lifecycle ─────────────────────────────────────────────────────────────────
+
+def available() -> bool:
+    return _enabled
+
+
+def status() -> dict:
+    return {"available": _enabled, "detail": _reason,
+            "keyboard": KB_DEVICE, "mouse": MS_DEVICE}
+
+
+def set_screen(width: int, height: int) -> None:
+    """Tell the module what pixel space incoming coordinates are in."""
+    global _screen
+    _screen = (width, height)
+
 
 def init() -> bool:
-    """
-    Open the gadget devices. Returns False when running screen-only.
-
-    Called once at startup so the operator sees the verdict in the log rather
-    than discovering it on the first click.
-    """
-    global _enabled
+    global _enabled, _reason
     with _lock:
         if HID_ENABLED == "off":
-            logger.info("[hid] disabled by config — screen-only")
-            _enabled = False
+            _enabled, _reason = False, "disabled by configuration"
+            logger.info("[hid] disabled by config — screen only")
             return False
         if not (os.path.exists(KB_DEVICE) and os.path.exists(MS_DEVICE)):
-            message = ("[hid] %s and %s missing — serving screen only, input will be "
-                       "ignored. On a Pi Zero the single USB port cannot be both "
-                       "a HID gadget and a capture-card host; use the HDMI-to-CSI "
-                       "adapter if you need input.")
-            if HID_ENABLED == "on":
-                logger.error(message, KB_DEVICE, MS_DEVICE)
-            else:
-                logger.warning(message, KB_DEVICE, MS_DEVICE)
             _enabled = False
+            _reason = (f"{KB_DEVICE} and {MS_DEVICE} are missing — the USB gadget "
+                       "is not bound. On a Pi Zero the single USB port cannot be "
+                       "both a HID gadget and a capture-card host.")
+            (logger.error if HID_ENABLED == "on" else logger.warning)("[hid] %s", _reason)
             return False
         try:
             _open()
         except Exception as exc:
-            logger.error("[hid] could not open gadget devices (%s) — screen-only", exc)
-            _enabled = False
+            _enabled, _reason = False, f"could not open gadget devices: {exc}"
+            logger.error("[hid] %s", _reason)
             return False
-        _enabled = True
+        _enabled, _reason = True, "ready"
         logger.info("[hid] gadget ready (%s, %s)", KB_DEVICE, MS_DEVICE)
         return True
+
+
+def _require() -> None:
+    if not _enabled:
+        raise InputUnavailable(_reason)
 
 
 # ── Device I/O ────────────────────────────────────────────────────────────────
@@ -119,10 +139,9 @@ def _wakeup_host() -> bool:
     """
     Re-bind the gadget to jolt a sleeping host awake.
 
-    A suspended Windows machine leaves writes failing with EAGAIN forever.
+    A suspended machine leaves writes failing with EAGAIN indefinitely.
     Unbinding and rebinding the UDC looks like a re-plug, which wakes it.
     """
-    global _kb_fd, _ms_fd
     try:
         udcs = os.listdir("/sys/class/udc")
         if not udcs:
@@ -166,131 +185,222 @@ def _open() -> None:
 
 
 def _write(target: str, data: bytes, _retried: bool = False) -> None:
-    global _warned
     fd = _kb_fd if target == "kb" else _ms_fd
     if fd is None:
-        return
+        raise InputUnavailable("gadget device is not open")
     try:
         fd.write(data)
         fd.flush()
     except OSError as exc:
         if _retried or not _wakeup_host():
-            if not _warned:
-                logger.warning("[hid] write failed (%s) — is the target plugged in?", exc)
-                _warned = True
-            return
+            raise InputUnavailable(f"write to the gadget failed: {exc}")
         _open()
         _write(target, data, _retried=True)
 
 
-# ── Keyboard ──────────────────────────────────────────────────────────────────
+# ── Coordinates ───────────────────────────────────────────────────────────────
 
-def _keyboard_report(modifiers: int | None = None) -> bytes:
-    slots = _keys[:MAX_KEY_SLOTS]
-    padding = [0] * (MAX_KEY_SLOTS - len(slots))
-    mods = _modifiers if modifiers is None else modifiers
-    return struct.pack("8B", mods, 0, *slots, *padding)
-
-
-def key(keysym: int, down: bool) -> None:
-    """Handle one KeyEvent."""
-    global _modifiers
-    if not _enabled:
-        return
-    with _lock:
-        modifier = MODIFIERS.get(keysym)
-        if modifier is not None:
-            _modifiers = (_modifiers | modifier) if down else (_modifiers & ~modifier)
-            _write("kb", _keyboard_report())
-            return
-
-        entry = lookup(keysym)
-        if entry is None:
-            logger.debug("[hid] no mapping for keysym %#x", keysym)
-            return
-        usage, needs_shift = entry
-
-        if down:
-            if usage in _keys:
-                return
-            if len(_keys) >= MAX_KEY_SLOTS:
-                # Boot keyboards hold six keys; drop the oldest rather than
-                # silently swallowing the new one.
-                _keys.pop(0)
-            _keys.append(usage)
-            # Assert Shift for characters that need it even if the client did
-            # not send a Shift event of its own. Redundant when it did.
-            _write("kb", _keyboard_report(_modifiers | (0x02 if needs_shift else 0)))
-        else:
-            if usage in _keys:
-                _keys.remove(usage)
-            _write("kb", _keyboard_report())
-
-
-# ── Pointer ───────────────────────────────────────────────────────────────────
-
-def _mouse_report(buttons: int, x: int, y: int, wheel: int = 0) -> bytes:
-    return struct.pack("<BHHb", buttons & 0x07, x, y, wheel)
-
-
-def _to_abs(value: int, span: int) -> int:
+def _to_abs(value: float, span: int) -> int:
     if span <= 1:
         return 0
     return max(0, min(ABS_MAX, round(value * ABS_MAX / (span - 1))))
 
 
-def pointer(x: int, y: int, width: int, height: int, button_mask: int) -> None:
-    """
-    Handle one PointerEvent.
+def _mouse_report(buttons: int, x: int, y: int, wheel: int = 0) -> bytes:
+    return struct.pack("<BHHb", buttons & 0x07, x, y, wheel)
 
-    ``x``/``y`` are pixel coordinates in the framebuffer; the gadget reports an
-    absolute position over the full 0-32767 HID range, so the target's own
-    screen size never has to be known.
+
+def _emit(x: int, y: int, wheel: int = 0) -> None:
+    global _x, _y
+    _x, _y = x, y
+    _write("ms", _mouse_report(_buttons, x, y, wheel))
+
+
+# ── Pointer motion ────────────────────────────────────────────────────────────
+
+def _ease_in_out_cubic(t: float) -> float:
+    """Accelerate away, decelerate in — roughly how a hand moves."""
+    return 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
+
+
+def _move_duration_ms(dx: int, dy: int) -> float:
     """
-    global _buttons, _x, _y
-    if not _enabled:
+    How long a move of this distance should take.
+
+    Scales with the square root of distance rather than linearly, echoing
+    Fitts's law: long sweeps cover more ground per millisecond than short
+    adjustments do.
+    """
+    span = max(_screen[0], 1)
+    pixels = math.hypot(dx, dy) / max(1, ABS_MAX) * span
+    ms = MOUSE_MOVE_BASE_MS + MOUSE_MOVE_PER_ROOT_PX_MS * math.sqrt(max(pixels, 0.0))
+    return min(ms, MOUSE_MOVE_MAX_MS)
+
+
+def _glide(target_x: int, target_y: int) -> None:
+    """Interpolate from the current position to the target with easing."""
+    start_x, start_y = _x, _y
+    dx, dy = target_x - start_x, target_y - start_y
+    if dx == 0 and dy == 0:
+        _emit(target_x, target_y)
         return
+
+    duration = _move_duration_ms(dx, dy)
+    steps = max(1, min(240, int(duration / MOUSE_STEP_MS)))
+    step_seconds = (duration / steps) / 1000.0
+
+    for step in range(1, steps + 1):
+        progress = _ease_in_out_cubic(step / steps)
+        _emit(round(start_x + dx * progress), round(start_y + dy * progress))
+        if step < steps:
+            time.sleep(step_seconds)
+    # Land exactly on the target: rounding during the glide can leave us a unit
+    # short, and a click must not be a pixel off.
+    if (_x, _y) != (target_x, target_y):
+        _emit(target_x, target_y)
+
+
+def _goto(x: float, y: float, smooth: bool | None) -> None:
+    """Caller must hold the lock."""
+    tx, ty = _to_abs(x, _screen[0]), _to_abs(y, _screen[1])
+    if MOUSE_SMOOTH if smooth is None else smooth:
+        _glide(tx, ty)
+    else:
+        _emit(tx, ty)
+
+
+def move(x: float, y: float, smooth: bool | None = None) -> None:
+    """Move the pointer to a pixel position in the screen's coordinate space."""
+    _require()
     with _lock:
-        _x = _to_abs(x, width)
-        _y = _to_abs(y, height)
+        _goto(x, y, smooth)
 
-        # HID button order is left, right, middle; VNC's is left, middle, right.
-        hid_buttons = ((button_mask & _BTN_LEFT)
-                       | ((button_mask & _BTN_RIGHT) >> 1)
-                       | ((button_mask & _BTN_MIDDLE) << 1))
 
-        newly = button_mask & ~_buttons
-        _buttons = button_mask
+# ── Buttons ───────────────────────────────────────────────────────────────────
 
-        wheel = 0
-        if newly & _WHEEL_UP:
-            wheel = 1
-        elif newly & _WHEEL_DOWN:
-            wheel = -1
+def _button_bit(name: str) -> int:
+    try:
+        return BUTTONS[name]
+    except KeyError:
+        raise ValueError(f"unknown button {name!r}; expected one of {sorted(BUTTONS)}")
 
-        _write("ms", _mouse_report(hid_buttons, _x, _y, wheel))
-        if wheel:
+
+def click(x: float, y: float, button: str = "left", count: int = 1,
+          smooth: bool | None = None) -> None:
+    global _buttons
+    _require()
+    if not 1 <= count <= 3:
+        raise ValueError("count must be 1, 2 or 3")
+    bit = _button_bit(button)
+    with _lock:
+        _goto(x, y, smooth)
+        for n in range(count):
+            _buttons = bit
+            _emit(_x, _y)
+            time.sleep(_PRESS_MS / 1000.0)
+            _buttons = 0
+            _emit(_x, _y)
+            if n + 1 < count:
+                time.sleep(0.06)   # inside every OS's double-click interval
+
+
+def drag(from_x: float, from_y: float, to_x: float, to_y: float,
+         button: str = "left", smooth: bool | None = None) -> None:
+    """Press at one point, glide to another, release."""
+    global _buttons
+    _require()
+    bit = _button_bit(button)
+    with _lock:
+        _goto(from_x, from_y, smooth)
+        _buttons = bit
+        _emit(_x, _y)
+        time.sleep(_PRESS_MS / 1000.0)
+        _goto(to_x, to_y, smooth)
+        time.sleep(_PRESS_MS / 1000.0)
+        _buttons = 0
+        _emit(_x, _y)
+
+
+def scroll(x: float, y: float, amount: int, smooth: bool | None = None) -> None:
+    """Scroll by a signed number of notches: positive up, negative down."""
+    _require()
+    amount = int(amount)
+    if amount == 0:
+        return
+    step = 1 if amount > 0 else -1
+    with _lock:
+        _goto(x, y, smooth)
+        for _ in range(abs(amount)):
+            _emit(_x, _y, wheel=step)
             # A notch is an edge, not a state — clear it so the target does not
             # see one continuous scroll.
-            _write("ms", _mouse_report(hid_buttons, _x, _y, 0))
+            _emit(_x, _y, wheel=0)
+            time.sleep(0.02)
 
 
-# ── Lifecycle ─────────────────────────────────────────────────────────────────
+# ── Keyboard ──────────────────────────────────────────────────────────────────
+
+def _kb_report(modifiers: int = 0, usage: int = 0) -> bytes:
+    return struct.pack("8B", modifiers, 0, usage, 0, 0, 0, 0, 0)
+
+
+def _tap(modifiers: int, usage: int, hold_ms: float = _KEYSTROKE_MS) -> None:
+    _write("kb", _kb_report(modifiers, usage))
+    time.sleep(hold_ms / 1000.0)
+    _write("kb", KB_RELEASE)
+
+
+def type_text(text: str) -> list[str]:
+    """
+    Type a string. Returns the characters that had no US-layout mapping.
+
+    Unmappable characters are skipped rather than aborting the whole string, so
+    one stray emoji in a sentence does not lose the sentence.
+    """
+    _require()
+    skipped: list[str] = []
+    with _lock:
+        for char in text:
+            entry = CHARS.get(char)
+            if entry is None:
+                skipped.append(char)
+                continue
+            usage, needs_shift = entry
+            _tap(MOD_LSHIFT if needs_shift else 0, usage)
+    return skipped
+
+
+def press_key(combo: str) -> None:
+    """Press a key or combination, e.g. "Return", "ctrl+c", "cmd+shift+4"."""
+    _require()
+    modifiers, usage = parse_combo(combo)
+    with _lock:
+        _tap(modifiers, usage, hold_ms=50)
+
+
+# ── Shutdown ──────────────────────────────────────────────────────────────────
 
 def release_all() -> None:
-    """Drop every held key and button — called when a client disconnects."""
-    global _modifiers, _buttons
+    global _buttons
     if not _enabled:
         return
     with _lock:
-        _modifiers = 0
-        _keys.clear()
         _buttons = 0
-        _write("kb", KB_RELEASE)
-        _write("ms", _mouse_report(0, _x, _y))
+        try:
+            _write("kb", KB_RELEASE)
+            _write("ms", _mouse_report(0, _x, _y))
+        except InputUnavailable:
+            pass
 
 
 def cleanup() -> None:
     release_all()
     with _lock:
         _close_fds()
+
+
+__all__ = [
+    "InputUnavailable", "UnknownKey", "available", "status", "init", "set_screen",
+    "move", "click", "drag", "scroll", "type_text", "press_key",
+    "release_all", "cleanup", "BUTTONS",
+]
