@@ -1,0 +1,110 @@
+"""
+capture — persistent HDMI capture reader.
+
+The CaptureManager runs a background thread that owns a capture backend (USB,
+CSI or the synthetic test source, chosen by CAPTURE_TYPE), reads its raw RGB24
+stream, and writes each frame into the shared Framebuffer. Backends are
+restarted automatically if they exit, which is what happens when the HDMI
+source is unplugged or changes resolution.
+
+Public API:
+    mgr = get_manager()
+    mgr.start()
+    fb = mgr.framebuffer        # capture.framebuffer.Framebuffer
+"""
+
+import logging
+import threading
+import time
+
+from config import CAPTURE_TYPE
+from .base import CaptureBackend, BYTES_PER_PIXEL, iter_frames
+from .framebuffer import Framebuffer, BAND_H
+
+logger = logging.getLogger("guidenco.capture")
+
+_BACKOFF_SECONDS = 2
+
+
+def _make_backend() -> CaptureBackend:
+    if CAPTURE_TYPE == "csi":
+        from .csi import CsiBackend
+        return CsiBackend()
+    if CAPTURE_TYPE == "test":
+        from .test_source import TestBackend
+        return TestBackend()
+    from .usb import UsbBackend
+    return UsbBackend()
+
+
+class CaptureManager:
+    def __init__(self, backend: CaptureBackend | None = None) -> None:
+        self.framebuffer = Framebuffer()
+        self._backend = backend
+        self._running = False
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="capture")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+
+    def _loop(self) -> None:
+        backend = self._backend or _make_backend()
+        logger.info("[capture] backend: %s", type(backend).__name__)
+
+        while self._running:
+            if not backend.prepare():
+                time.sleep(_BACKOFF_SECONDS + 1)
+                continue
+
+            procs: list = []
+            stream = None
+            try:
+                stream, procs, width, height = backend.open()
+                frame_bytes = width * height * BYTES_PER_PIXEL
+                logger.info("[capture] streaming %dx%d (%d bytes/frame)",
+                            width, height, frame_bytes)
+                self.framebuffer.resize(width, height)
+                for frame in iter_frames(stream, frame_bytes):
+                    if not self._running:
+                        break
+                    self.framebuffer.update(frame)
+                logger.info("[capture] stream ended — restarting")
+            except Exception as exc:
+                logger.error("[capture] loop error: %s", exc)
+            finally:
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                for p in procs:
+                    try:
+                        p.kill()
+                        p.wait()
+                    except Exception:
+                        pass
+
+            if self._running:
+                time.sleep(_BACKOFF_SECONDS)
+
+
+_manager: CaptureManager | None = None
+_manager_lock = threading.Lock()
+
+
+def get_manager() -> CaptureManager:
+    global _manager
+    with _manager_lock:
+        if _manager is None:
+            _manager = CaptureManager()
+    return _manager
+
+
+__all__ = ["CaptureManager", "get_manager", "Framebuffer", "BAND_H", "BYTES_PER_PIXEL"]
