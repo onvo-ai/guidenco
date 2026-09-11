@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>guidenco setup</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa; --panel: #fff; --line: #e4e2dd; --ink: #1f1e1c;
+    --muted: #6b6862; --accent: #3d6fd4; --ok: #1f7a4d; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #191817; --panel: #211f1e; --line: #34312e; --ink: #f0eeea;
+      --muted: #a29d95; --accent: #7ea4ee; --ok: #6cc79a; --bad: #f2837a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px; margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin: 0 0 14px; font-weight: 600;
+  }
+  button {
+    font: inherit; font-weight: 500; padding: 10px 16px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input, select {
+    font: inherit; width: 100%; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grid { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; font-size: 14px; }
+  .grid dt { color: var(--muted); }
+  .grid dd { margin: 0; overflow-wrap: anywhere; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  .url { display: flex; gap: 8px; align-items: center; }
+  .url a { color: var(--accent); overflow-wrap: anywhere; }
+  .note { font-size: 13px; color: var(--muted); margin-top: 12px; }
+  .status { font-size: 13px; margin-top: 12px; min-height: 1.3em; }
+  .status.ok { color: var(--ok); }
+  .status.bad { color: var(--bad); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.on { background: var(--ok); }
+  .banner {
+    border: 1px solid var(--bad); color: var(--bad); border-radius: 10px;
+    padding: 14px; margin-bottom: 16px; font-size: 14px;
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>guidenco setup</h1>
+  <p class="sub">Configure the bridge over Bluetooth — no network needed.</p>
+
+  <div class="banner" id="unsupported" hidden>
+    <strong>This browser can't do Web Bluetooth.</strong>
+    It only exists in Chrome and Edge, on desktop and Android. Safari and Firefox
+    have never shipped it, and no browser on iOS has it. Open this page in Chrome.
+  </div>
+
+  <div class="card">
+    <h2>Connection</h2>
+    <div class="row">
+      <button id="connect" class="primary">Connect to bridge</button>
+      <button id="disconnect" disabled>Disconnect</button>
+      <span class="row" style="margin-left:auto">
+        <span class="dot" id="dot"></span>
+        <span class="mono" id="connstate">offline</span>
+      </span>
+    </div>
+    <p class="note">
+      Pick the device named <code>guidenco</code>. The Pi must be powered on and
+      within a few metres.
+    </p>
+    <div class="status" id="connstatus"></div>
+  </div>
+
+  <div class="card" id="statuscard" hidden>
+    <h2>Status</h2>
+    <dl class="grid">
+      <dt>Host</dt><dd class="mono" id="s-host">—</dd>
+      <dt>Network</dt><dd class="mono" id="s-net">—</dd>
+      <dt>Address</dt><dd class="mono" id="s-ip">—</dd>
+      <dt>Screen</dt><dd class="mono" id="s-screen">—</dd>
+      <dt>Input</dt><dd class="mono" id="s-input">—</dd>
+    </dl>
+  </div>
+
+  <div class="card" id="urlcard" hidden>
+    <h2>Public URL</h2>
+    <div class="url">
+      <a id="tunnel" href="#" target="_blank" rel="noopener" class="mono">—</a>
+      <button id="copy" style="margin-left:auto">Copy</button>
+    </div>
+    <p class="note" id="urlnote">
+      This changes every time the bridge restarts, which is why it lives here.
+    </p>
+  </div>
+
+  <div class="card" id="wificard" hidden>
+    <h2>Wi-Fi</h2>
+    <div class="row">
+      <button id="scan">Scan for networks</button>
+      <span class="mono" id="scancount" style="color:var(--muted)"></span>
+    </div>
+    <label for="ssid">Network</label>
+    <select id="ssid"><option value="">— scan first, or type below —</option></select>
+    <label for="ssidmanual">Or enter a name (for a hidden network)</label>
+    <input id="ssidmanual" placeholder="Network name" autocomplete="off">
+    <label for="psk">Password</label>
+    <input id="psk" type="password" placeholder="Leave empty for an open network"
+           autocomplete="new-password">
+    <div class="row" style="margin-top:16px">
+      <button id="join" class="primary">Join network</button>
+    </div>
+    <p class="note">
+      The password is sent to the Pi and never read back. Joining a new network
+      drops the current connection, so this page may go quiet for a few seconds.
+    </p>
+    <div class="status" id="wifistatus"></div>
+  </div>
+</main>
+
+<script>
+const SERVICE  = '6e6c1000-b5a3-f393-e0a9-e50e24dcca9e';
+const STATUS   = '6e6c1001-b5a3-f393-e0a9-e50e24dcca9e';
+const NETWORKS = '6e6c1002-b5a3-f393-e0a9-e50e24dcca9e';
+const SCAN     = '6e6c1003-b5a3-f393-e0a9-e50e24dcca9e';
+const WIFI     = '6e6c1004-b5a3-f393-e0a9-e50e24dcca9e';
+
+const $ = id => document.getElementById(id);
+const decoder = new TextDecoder();
+const encoder = new TextEncoder();
+let device = null, chars = {};
+
+if (!navigator.bluetooth) {
+  $('unsupported').hidden = false;
+  $('connect').disabled = true;
+}
+
+function say(el, message, kind) {
+  el.textContent = message;
+  el.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+function setConnected(on) {
+  $('dot').classList.toggle('on', on);
+  $('connstate').textContent = on ? 'connected' : 'offline';
+  $('connect').disabled = on;
+  $('disconnect').disabled = !on;
+  for (const id of ['statuscard', 'urlcard', 'wificard']) $(id).hidden = !on;
+}
+
+function renderStatus(state) {
+  $('s-host').textContent = state.host ?? '—';
+  const net = state.net === 'wifi'
+    ? `wifi · ${state.ssid ?? 'unknown'}${state.signal != null ? ` · ${state.signal} dBm` : ''}`
+    : (state.net ?? '—');
+  $('s-net').textContent = net;
+  $('s-ip').textContent = state.ip ?? 'not connected';
+  $('s-screen').textContent = state.screen ? `${state.screen[0]}x${state.screen[1]}` : 'no signal';
+  $('s-input').textContent = state.input ? 'available' : 'unavailable';
+
+  const link = $('tunnel');
+  if (state.url) {
+    link.textContent = state.url;
+    link.href = state.url;
+    $('urlnote').textContent = 'This changes every time the bridge restarts, which is why it lives here.';
+  } else {
+    link.textContent = 'no tunnel running';
+    link.removeAttribute('href');
+    $('urlnote').textContent = 'No public URL. Either the tunnel is off, or it has no API token set — the bridge refuses to publish an unauthenticated service.';
+  }
+
+  if (state.last_action?.action === 'join') {
+    say($('wifistatus'), state.last_action.detail || '',
+        state.last_action.ok ? 'ok' : 'bad');
+  }
+  if (state.last_action?.action === 'scan') {
+    $('scancount').textContent = `${state.last_action.found} found`;
+    readNetworks();
+  }
+}
+
+async function readStatus() {
+  try {
+    renderStatus(JSON.parse(decoder.decode(await chars.status.readValue())));
+  } catch (err) { console.warn('status read failed', err); }
+}
+
+async function readNetworks() {
+  try {
+    const list = JSON.parse(decoder.decode(await chars.networks.readValue()));
+    const select = $('ssid');
+    select.innerHTML = '<option value="">— choose a network —</option>';
+    for (const net of list) {
+      const option = document.createElement('option');
+      option.value = net.ssid;
+      option.textContent = `${net.ssid}  ·  ${net.signal}%${net.secure ? '' : '  · open'}`;
+      select.append(option);
+    }
+  } catch (err) { console.warn('network read failed', err); }
+}
+
+$('connect').addEventListener('click', async () => {
+  say($('connstatus'), 'Choose "guidenco" in the pairing dialog…');
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SERVICE] }], optionalServices: [SERVICE],
+    });
+    device.addEventListener('gattserverdisconnected', () => {
+      setConnected(false);
+      say($('connstatus'), 'Disconnected.', 'bad');
+    });
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE);
+    chars.status   = await service.getCharacteristic(STATUS);
+    chars.networks = await service.getCharacteristic(NETWORKS);
+    chars.scan     = await service.getCharacteristic(SCAN);
+    chars.wifi     = await service.getCharacteristic(WIFI);
+
+    await chars.status.startNotifications();
+    chars.status.addEventListener('characteristicvaluechanged', event => {
+      try { renderStatus(JSON.parse(decoder.decode(event.target.value))); }
+      catch (err) { console.warn('bad notification', err); }
+    });
+
+    setConnected(true);
+    say($('connstatus'), `Connected to ${device.name || 'the bridge'}.`, 'ok');
+    await readStatus();
+    await readNetworks();
+  } catch (err) {
+    say($('connstatus'),
+        err.name === 'NotFoundError'
+          ? 'No bridge chosen. Make sure the Pi is powered on and advertising.'
+          : `Could not connect: ${err.message}`,
+        'bad');
+  }
+});
+
+$('disconnect').addEventListener('click', () => {
+  if (device?.gatt.connected) device.gatt.disconnect();
+  setConnected(false);
+  say($('connstatus'), '');
+});
+
+$('scan').addEventListener('click', async () => {
+  say($('wifistatus'), 'Scanning…');
+  $('scancount').textContent = '';
+  try {
+    await chars.scan.writeValue(encoder.encode('scan'));
+    // The Pi scans in the background and notifies when it has results; poll
+    // once as a fallback in case the notification is missed.
+    setTimeout(readStatus, 6000);
+  } catch (err) {
+    say($('wifistatus'), `Scan failed: ${err.message}`, 'bad');
+  }
+});
+
+$('join').addEventListener('click', async () => {
+  const ssid = $('ssidmanual').value.trim() || $('ssid').value;
+  if (!ssid) { say($('wifistatus'), 'Pick a network or type its name.', 'bad'); return; }
+  say($('wifistatus'), `Joining ${ssid}…`);
+  try {
+    await chars.wifi.writeValue(encoder.encode(JSON.stringify({
+      ssid, psk: $('psk').value,
+    })));
+    $('psk').value = '';
+  } catch (err) {
+    say($('wifistatus'), `Could not send credentials: ${err.message}`, 'bad');
+  }
+});
+
+$('copy').addEventListener('click', async () => {
+  const url = $('tunnel').textContent;
+  if (!url.startsWith('http')) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    $('copy').textContent = 'Copied';
+    setTimeout(() => { $('copy').textContent = 'Copy'; }, 1500);
+  } catch { /* clipboard needs a secure context; the link is selectable anyway */ }
+});
+</script>
+</body>
+</html>
