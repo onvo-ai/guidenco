@@ -17,6 +17,7 @@ Built on http.server, which is enough for a handful of clients and keeps the
 dependency count at zero.
 """
 
+import contextlib
 import json
 import logging
 import time
@@ -38,6 +39,25 @@ STREAM_BOUNDARY = "guidencoframe"
 PUBLIC_PATHS = {"/", "/openapi.json"}
 
 MCP_PATH = "/mcp"
+
+
+@contextlib.contextmanager
+def _nothing():
+    """Stands in for a capture hold when there is no manager, as in tests."""
+    yield
+
+
+def capture_frame(server, timeout: float | None = None) -> bytes | None:
+    """
+    A frame taken after this call, from whichever source the server has.
+
+    Shared by the read endpoints and the MCP screenshot tool so both get the
+    same freshness guarantee.
+    """
+    if server.capture is not None:
+        return server.capture.frame(timeout=timeout)
+    frame, _ = server.framebuffer.latest(timeout=timeout or 5.0)
+    return frame
 
 
 class ApiError(Exception):
@@ -194,9 +214,9 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     def _screenshot(self) -> None:
-        frame, _ = self.framebuffer.latest(timeout=5.0)
+        frame = capture_frame(self.server)
         if frame is None:
-            raise ApiError(503, "no frame captured yet — is an HDMI source connected?")
+            raise ApiError(503, "no frame captured — is an HDMI source connected?")
         self._send(200, frame, "image/jpeg", {
             "X-Screen-Width": str(self.framebuffer.width),
             "X-Screen-Height": str(self.framebuffer.height),
@@ -204,6 +224,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stream(self) -> None:
         """MJPEG over multipart, which any browser renders natively."""
+        # Streaming holds the pipeline open; without this it would be shut down
+        # between frames by the idle reaper.
+        holder = self.server.capture.hold() if self.server.capture else _nothing()
+        with holder:
+            self._stream_frames()
+
+    def _stream_frames(self) -> None:
         self.send_response(200)
         self.send_header("Content-Type",
                          f"multipart/x-mixed-replace; boundary={STREAM_BOUNDARY}")
@@ -229,17 +256,23 @@ class ApiServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, framebuffer, host: str, port: int) -> None:
+    def __init__(self, framebuffer, host: str, port: int, capture=None) -> None:
         super().__init__((host, port), Handler)
         self.framebuffer = framebuffer
-        self.mcp = McpEndpoint(framebuffer)
+        #: The capture manager, when one exists. Requests go through it so the
+        #: pipeline runs only while something is reading, and so a screenshot
+        #: is a frame taken after the request rather than whatever was lying
+        #: around. Tests construct the server without one.
+        self.capture = capture
+        self.mcp = McpEndpoint(framebuffer, capture)
         self.started_at = time.monotonic()
         #: Set by the tunnel once Cloudflare hands us a public hostname.
         self.tunnel_url: str | None = None
 
 
-def serve(framebuffer, host: str = "0.0.0.0", port: int = 8080) -> ApiServer:
-    server = ApiServer(framebuffer, host, port)
+def serve(framebuffer, host: str = "0.0.0.0", port: int = 8080,
+          capture=None) -> ApiServer:
+    server = ApiServer(framebuffer, host, port, capture)
     if config.API_TOKEN:
         logger.info("[api] listening on %s:%d — MCP at %s (bearer token required)",
                     host, server.server_port, MCP_PATH)

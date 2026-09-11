@@ -140,7 +140,7 @@ class UsbBackend(CaptureBackend):
             outputs = passthrough_outputs()
             logger.info("[usb] MJPEG passthrough %dx%d (no re-encode)", w, h)
         else:
-            outputs = encode_outputs(STREAM_W, STREAM_H)
+            outputs = encode_outputs(STREAM_W, STREAM_H, STREAM_FPS)
             logger.info("[usb] decoding %s %dx%d and re-encoding to MJPEG %dx%d",
                         input_format, w, h, out_w, out_h)
 

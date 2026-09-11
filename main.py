@@ -89,7 +89,8 @@ def main() -> None:
     threading.Thread(target=_track_screen_size, args=(framebuffer,),
                      daemon=True, name="screen-size").start()
 
-    server = serve(framebuffer, host=config.API_HOST, port=config.API_PORT)
+    server = serve(framebuffer, host=config.API_HOST, port=config.API_PORT,
+                   capture=manager)
 
     tunnel = None
     if config.TUNNEL_ENABLED:

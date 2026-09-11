@@ -57,11 +57,24 @@ def iter_mjpeg(stream, chunk_size: int = 65536) -> Iterator[bytes]:
                 yield frame
 
 
-def encode_outputs(scale_w: int, scale_h: int) -> list[str]:
-    """ffmpeg output stage that re-encodes to MJPEG, optionally downscaling."""
-    args = []
+def encode_outputs(scale_w: int, scale_h: int, fps: int = 0) -> list[str]:
+    """
+    ffmpeg output stage that re-encodes to MJPEG, optionally downscaling and
+    rate-limiting.
+
+    The fps cap matters more than it looks. A capture device streams at the
+    source's rate — 30fps or more — and without a filter ffmpeg encodes every
+    frame it is handed, however many that is. On anything but the fastest board
+    that saturates the CPU producing frames nobody will ever read, since only
+    the most recent one is ever served. Passing -framerate on a rawvideo input
+    does NOT cap it: that is a declaration about the input, not a limit.
+    """
+    filters = []
+    if fps:
+        filters.append(f"fps={fps}")
     if scale_w and scale_h:
-        args += ["-vf", f"scale={scale_w}:{scale_h}:flags=fast_bilinear"]
+        filters.append(f"scale={scale_w}:{scale_h}:flags=fast_bilinear")
+    args = ["-vf", ",".join(filters)] if filters else []
     return args + ["-q:v", str(FFMPEG_QUALITY), "-f", "mjpeg", "pipe:1"]
 
 

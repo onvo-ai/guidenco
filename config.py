@@ -49,6 +49,16 @@ STREAM_W   = _int("STREAM_W", 0)
 STREAM_H   = _int("STREAM_H", 0)
 STREAM_FPS = _int("STREAM_FPS", 10)
 
+# Capture runs only while something is reading it. After the last request it
+# stays warm this long, so a burst of screenshots does not pay start-up each
+# time, then shuts down. Raise it for interactive use, lower it to idle sooner.
+CAPTURE_IDLE_TIMEOUT_S = _int("CAPTURE_IDLE_TIMEOUT_S", 30)
+
+# How long to wait for a frame after asking for one. It has to cover a cold
+# start: a CSI adapter negotiates EDID and latches DV timings before the first
+# frame, which takes several seconds the first time.
+CAPTURE_WARMUP_S = _int("CAPTURE_WARMUP_S", 20)
+
 # ── HTTP API ──────────────────────────────────────────────────────────────────
 API_HOST = os.environ.get("API_HOST", "0.0.0.0")
 API_PORT = _int("API_PORT", 8080)

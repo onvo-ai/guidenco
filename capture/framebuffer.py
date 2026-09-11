@@ -9,6 +9,7 @@ went with it.
 """
 
 import threading
+import time
 
 
 class Framebuffer:
@@ -47,23 +48,34 @@ class Framebuffer:
 
     def latest(self, timeout: float = 5.0) -> tuple[bytes | None, int]:
         """The current frame, waiting up to *timeout* for the first one."""
+        deadline = time.monotonic() + timeout
         with self._cond:
-            if self.frame is None:
-                self._cond.wait(timeout)
+            while self.frame is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None, self.sequence
+                self._cond.wait(remaining)
             return self.frame, self.sequence
 
     def next_after(self, sequence: int, timeout: float = 5.0) -> tuple[bytes | None, int]:
         """
         Block until a frame newer than *sequence* arrives.
 
-        Returns (None, sequence) on timeout so a streaming client can decide
-        whether to keep waiting or drop the connection.
+        Waits in a loop against the condition rather than once, which is not
+        pedantry: resize() notifies every waiter when a stream opens, so a
+        single wait would be woken before any frame existed and would then
+        report a timeout that had not happened.
+
+        Returns (None, sequence) on a real timeout, so a caller can decide
+        whether to keep waiting or give up.
         """
+        deadline = time.monotonic() + timeout
         with self._cond:
-            if self.sequence <= sequence:
-                self._cond.wait(timeout)
-            if self.sequence <= sequence:
-                return None, sequence
+            while self.sequence <= sequence:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None, sequence
+                self._cond.wait(remaining)
             return self.frame, self.sequence
 
     @property

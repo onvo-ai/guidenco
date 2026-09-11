@@ -38,17 +38,24 @@ _CROP = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
 
 
 def detect(frame: bytes, width: int, height: int,
-           timeout: float = 10.0) -> tuple[int, int, int, int]:
+           timeout: float = 25.0) -> tuple[int, int, int, int] | None:
     """
     The active screen area within a frame, as (x, y, width, height).
 
-    Returns the whole frame when there are no bars, when detection fails, or
-    when the result looks implausible. Falling back to the full frame is always
-    safe: it is exactly the behaviour of not detecting at all.
+    Returns None when the area could not be determined — a timeout, a broken
+    ffmpeg, or a nonsensical result. That is not the same as "no bars": None
+    means "I do not know", and the caller must keep whatever it already had.
+    Returning the full frame here instead would silently undo a correct earlier
+    detection and put every click back off by the width of a bar.
+
+    The timeout is generous because the cost is almost all ffmpeg start-up and
+    scheduling, not pixel work: on a Pi Zero 2 W a 1080p frame measures 6s of
+    wall time for under 1s of CPU, and that stretches further while the capture
+    pipeline is competing for cores.
     """
     full = (0, 0, width, height)
     if not frame or width <= 0 or height <= 0:
-        return full
+        return None
 
     try:
         result = subprocess.run(
@@ -59,18 +66,25 @@ def detect(frame: bytes, width: int, height: int,
              "-vf", f"cropdetect=limit={BLACK_LIMIT}:round=2:skip=0:reset=1",
              "-frames:v", "1", "-f", "null", "-"],
             input=frame, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logger.warning("[letterbox] cropdetect did not finish within %.0fs; "
+                       "keeping the area already in use", timeout)
+        return None
     except Exception as exc:
-        logger.debug("[letterbox] cropdetect failed: %s", exc)
-        return full
+        logger.warning("[letterbox] cropdetect failed (%s); "
+                       "keeping the area already in use", exc)
+        return None
 
     matches = _CROP.findall(result.stderr.decode(errors="replace"))
     if not matches:
-        return full
+        logger.warning("[letterbox] cropdetect reported no crop; "
+                       "keeping the area already in use")
+        return None
 
     w, h, x, y = (int(v) for v in matches[-1])
     if w <= 0 or h <= 0 or x < 0 or y < 0 or x + w > width or y + h > height:
         logger.warning("[letterbox] ignoring nonsensical crop %dx%d+%d+%d", w, h, x, y)
-        return full
+        return None
     if (w * h) < (width * height * MIN_AREA_FRACTION):
         logger.info("[letterbox] detected area %dx%d is under %.0f%% of the frame; "
                     "treating the whole frame as the screen. A very dark screen "

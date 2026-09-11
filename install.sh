@@ -57,24 +57,53 @@ fi
 # ── 2. Hardware detection ─────────────────────────────────────────────────────
 pi_model() { tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "unknown"; }
 
+# The per-node capability block. A Pi exposes a dozen /dev/video* nodes and most
+# of them are its own codec and ISP hardware, so "is this a capture device" has
+# to be asked precisely. Device Caps describes THIS node; Capabilities describes
+# the whole driver and is useless for telling sibling nodes apart.
+device_caps() {
+  v4l2-ctl -d "$1" --info 2>/dev/null | awk '/Device Caps/{f=1;next} f&&/^\t\t/{print} f&&!/^\t\t/{exit}'
+}
+
+# True for a node that can actually hand us frames from an input. Memory-to-
+# memory nodes are the Pi's encoders, decoders and ISP: they advertise "Video
+# Capture" and enumerate pixel formats, but they capture from another buffer,
+# not from a cable, and selecting one yields a service that never sees a frame.
+# The SoC's own image-processing blocks. Several of them present capture nodes
+# that satisfy every generic test — right capabilities, real pixel formats — but
+# they process buffers handed to them, they are not an input. Only unicam (the
+# CSI receiver) and uvcvideo (USB cards) see a cable.
+_INTERNAL_DRIVERS='bcm2835-codec|bcm2835-isp|rpi-hevc|rpi-.*-dec'
+
+is_real_capture() {
+  local driver
+  driver="$(v4l2-ctl -d "$1" --info 2>/dev/null | awk -F: '/Driver name/{print $2; exit}' | xargs)"
+  [[ -z "$driver" ]] && return 1
+  grep -qE "^($_INTERNAL_DRIVERS)$" <<<"$driver" && return 1
+
+  local caps; caps="$(device_caps "$1")"
+  grep -q "Video Capture" <<<"$caps" || return 1
+  grep -qi "Memory-to-Memory" <<<"$caps" && return 1
+  # A capture node with no pixel formats is a metadata node, which uvcvideo
+  # exposes next to the real one and sometimes at the lower number.
+  v4l2-ctl -d "$1" --list-formats 2>/dev/null | grep -qE "\[[0-9]+\]: '[A-Za-z0-9 ]{4}'"
+}
+
 detect_capture_type() {
-  # Ask the capture device itself how it is attached, rather than matching a
-  # list of vendor IDs that will always be incomplete. v4l2 reports "usb-..."
-  # in Bus info for a UVC capture card and "platform:..." for a CSI adapter.
+  # Ask the device how it is attached rather than matching vendor IDs, which
+  # will always be an incomplete list.
   for dev in /dev/video*; do
     [[ -e "$dev" ]] || continue
-    # "|| true" matters: under set -e a failing v4l2-ctl would abort the
-    # installer instead of moving on to the next device node.
+    is_real_capture "$dev" || continue
     local probe=""
     probe="$(v4l2-ctl -d "$dev" --info 2>/dev/null || true)"
-    grep -q "Video Capture" <<<"$probe" || continue
     if grep -qi "Bus info.*usb" <<<"$probe"; then echo usb; return; fi
     if grep -qi "tc358743\|unicam\|platform" <<<"$probe"; then echo csi; return; fi
   done
 
-  # No usable /dev/video yet. A CSI adapter has no node until its overlay is
-  # enabled and the Pi has rebooted, so fall back to the USB bus: if a known
-  # capture chipset is plugged in it is a card, otherwise assume CSI.
+  # No usable node yet. A CSI adapter has none until its overlay is enabled and
+  # the Pi has rebooted, which is the normal state on a first install, so fall
+  # back to the USB bus: a known capture chipset means a card, otherwise CSI.
   if lsusb 2>/dev/null | grep -qiE '534d:|1b71:|eb1a:|345f:|1e4e:|05e1:'; then
     echo usb
   else
@@ -83,18 +112,9 @@ detect_capture_type() {
 }
 
 detect_video_dev() {
-  # Pick a node that can actually hand us frames. Checking the capability
-  # strings is not enough: uvcvideo exposes a metadata node alongside the real
-  # one (often as the LOWER number, e.g. video0 metadata + video1 capture) and
-  # both advertise the driver's combined capabilities. A node that can deliver
-  # video is the one that lists at least one pixel format.
   for dev in /dev/video*; do
     [[ -e "$dev" ]] || continue
-    local formats=""
-    formats="$(v4l2-ctl -d "$dev" --list-formats 2>/dev/null || true)"
-    if grep -qE "\[[0-9]+\]: '[A-Za-z0-9 ]{4}'" <<<"$formats"; then
-      echo "$dev"; return
-    fi
+    if is_real_capture "$dev"; then echo "$dev"; return; fi
   done
   echo /dev/video0
 }
@@ -108,21 +128,30 @@ info "Capture: $CAPTURE_TYPE ($VIDEO_DEV)"
 # ── 2b. cloudflared (optional) ────────────────────────────────────────────────
 install_cloudflared() {
   command -v cloudflared >/dev/null 2>&1 && { info "cloudflared already present"; return 0; }
+  # cloudflared publishes a .deb per Debian architecture name, so the name maps
+  # straight across. It also publishes a separate "arm" build declaring
+  # Architecture: arm, which dpkg refuses on an armhf system — mapping armhf to
+  # that one is the obvious-looking mistake.
   local arch
   case "$(dpkg --print-architecture)" in
-    arm64) arch=arm64 ;;
-    armhf) arch=arm ;;
-    amd64) arch=amd64 ;;
+    arm64|armhf|amd64) arch="$(dpkg --print-architecture)" ;;
+    armel) arch=arm ;;
     *) warn "no cloudflared build for $(dpkg --print-architecture)"; return 1 ;;
   esac
   info "Installing cloudflared ($arch)..."
   local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}.deb"
   local tmp; tmp="$(mktemp -d)"
-  if curl -fsSL --max-time 120 "$url" -o "$tmp/cloudflared.deb" \
-     && dpkg -i "$tmp/cloudflared.deb" >/dev/null 2>&1; then
-    rm -rf "$tmp"; info "cloudflared installed"; return 0
+  if ! curl -fsSL --max-time 180 "$url" -o "$tmp/cloudflared.deb"; then
+    rm -rf "$tmp"; warn "could not download cloudflared from $url"; return 1
   fi
-  rm -rf "$tmp"; warn "could not install cloudflared; the tunnel will stay off"
+  # Surface dpkg's reason rather than swallowing it; an architecture mismatch
+  # here is silent otherwise and the tunnel just never works.
+  local output
+  if output="$(dpkg -i "$tmp/cloudflared.deb" 2>&1)"; then
+    rm -rf "$tmp"; info "cloudflared installed ($arch)"; return 0
+  fi
+  warn "could not install cloudflared: $(echo "$output" | tail -2 | tr '\n' ' ')"
+  rm -rf "$tmp"
   return 1
 }
 install_cloudflared || true
@@ -165,7 +194,16 @@ CONFIG_TXT=/boot/firmware/config.txt
 REBOOT_NEEDED=0
 
 if [[ "$CAPTURE_TYPE" == "csi" ]]; then
-  if ! grep -q "dtoverlay=tc358743" "$CONFIG_TXT"; then
+  # Automatic camera detection probes the CSI port for known Pi cameras and
+  # claims it. A manually declared overlay has to own the port instead, so the
+  # two cannot both be on — with autodetect left enabled the TC358743 may never
+  # appear, and nothing says why.
+  if grep -qE '^\s*camera_auto_detect=1' "$CONFIG_TXT"; then
+    info "Disabling camera_auto_detect (it conflicts with a manual CSI overlay)..."
+    sed -i 's/^\s*camera_auto_detect=1/camera_auto_detect=0/' "$CONFIG_TXT"
+    REBOOT_NEEDED=1
+  fi
+  if ! grep -qE '^\s*dtoverlay=tc358743' "$CONFIG_TXT"; then
     info "Enabling the HDMI-to-CSI adapter (TC358743)..."
     printf '\n# guidenco: HDMI-to-CSI adapter\ndtoverlay=tc358743\n' >> "$CONFIG_TXT"
     REBOOT_NEEDED=1

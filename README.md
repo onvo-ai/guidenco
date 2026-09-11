@@ -161,7 +161,9 @@ sudo systemctl restart guidenco
 | `VIDEO_DEV` | detected | capture device node |
 | `STREAM_W` / `STREAM_H` | `0` | `0` keeps the native size **and enables JPEG passthrough** |
 | `CAPTURE_MAX_W` / `_H` | `1920` / `1080` | ceiling on the probed capture mode |
-| `STREAM_FPS` | `10` | capture frame rate |
+| `STREAM_FPS` | `10` | capture frame rate, enforced as a real cap |
+| `CAPTURE_IDLE_TIMEOUT_S` | `30` | how long the pipeline stays warm after the last request |
+| `CAPTURE_WARMUP_S` | `20` | how long to wait for a frame, covering a cold start |
 | `API_PORT` | `8080` | |
 | `API_TOKEN` | generated | blank disables authentication entirely |
 | `HID_ENABLED` | `auto` | `auto`, `on` (missing gadget is an error), `off` |
@@ -209,6 +211,19 @@ hid/       turns intent into USB HID reports, including the eased motion.
 skill/     a Claude skill describing how to use the bridge well.
 web/       the Web Bluetooth setup page. Host it separately.
 ```
+
+**Capture runs only while something is reading it.** Ask for a screenshot and
+the pipeline starts, stays warm for `CAPTURE_IDLE_TIMEOUT_S`, then shuts down.
+That is partly cost — a CSI adapter delivers raw frames, so a Pi Zero would
+otherwise hold three of its four cores compressing images nobody reads — and
+mostly freshness: a background pipeline hands you whichever frame last landed,
+while an on-demand one returns an image captured *after* you asked, which is
+what "what is on screen now" has to mean if the next thing you do is click on
+it.
+
+`STREAM_FPS` is enforced with an ffmpeg `fps` filter. Passing `-framerate` on a
+rawvideo input only declares what the input is; without the filter ffmpeg
+encodes every frame the device produces, at the source's rate, regardless.
 
 **Coordinates are measured against the screen, not the frame.** A capture card
 delivers its own fixed resolution, so a 1512x982 desktop mirrored to a 1080p

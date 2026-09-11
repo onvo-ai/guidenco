@@ -627,17 +627,69 @@ class LetterboxDetectionTest(unittest.TestCase):
         self.assertAlmostEqual(y, 60, delta=4)
         self.assertAlmostEqual(h, 360, delta=8)
 
-    def test_a_nearly_black_frame_falls_back_to_the_whole_frame(self):
-        from capture.letterbox import detect
-        # A dark screen must not be mistaken for bars and shrink the usable
-        # area; that would be worse than not detecting at all.
-        frame = self._frame(640, 480, 40, 40)
-        self.assertEqual(detect(frame, 640, 480), (0, 0, 640, 480))
+    def test_a_nearly_black_frame_never_shrinks_the_usable_area(self):
+        """
+        A dark screen — a screensaver, a full-screen terminal — must not be
+        mistaken for bars. cropdetect reports nothing at all for such a frame,
+        so detect() says "I do not know" and the area in use is left as it was.
+        """
+        from capture import CaptureManager
+        mgr = CaptureManager()
+        mgr.framebuffer.resize(640, 480)
+        before = mgr.framebuffer.active
 
-    def test_garbage_input_falls_back_safely(self):
+        mgr._check_letterbox(self._frame(640, 480, 40, 40), 640, 480)
+        for _ in range(200):
+            if not mgr._detecting:
+                break
+            time.sleep(0.05)
+        self.assertEqual(mgr.framebuffer.active, before)
+
+    def test_garbage_input_reports_that_it_does_not_know(self):
         from capture.letterbox import detect
-        self.assertEqual(detect(b"not a jpeg", 640, 480), (0, 0, 640, 480))
-        self.assertEqual(detect(b"", 640, 480), (0, 0, 640, 480))
+        # None, not the full frame: the caller must keep the area it already
+        # has. See test_a_failed_recheck_keeps_the_area_already_found.
+        self.assertIsNone(detect(b"not a jpeg", 640, 480))
+        self.assertIsNone(detect(b"", 640, 480))
+
+    def test_a_failed_recheck_keeps_the_area_already_found(self):
+        """
+        A detection that fails must not undo one that succeeded.
+
+        Detection is re-run periodically, and on a loaded Pi it can time out.
+        When it used to answer "the whole frame" in that case, one slow run
+        silently threw away correct bar positions and put every click back off
+        by the width of a bar — worst of all at the screen edges.
+        """
+        from capture import CaptureManager
+        mgr = CaptureManager()
+        mgr.framebuffer.resize(640, 480)
+        mgr.framebuffer.set_active((80, 0, 480, 480))
+
+        mgr._check_letterbox(b"not a jpeg", 640, 480)
+        for _ in range(200):
+            if not mgr._detecting:
+                break
+            time.sleep(0.05)
+        self.assertEqual(mgr.framebuffer.active, (80, 0, 480, 480))
+
+    def test_a_failed_attempt_still_stamps_the_recheck_clock(self):
+        """
+        The capture loop only re-runs detection once the recheck interval has
+        passed since the last attempt. If a failed attempt left the clock alone,
+        the loop would spawn an ffmpeg for every single frame — far more
+        expensive than the capture it is meant to support.
+        """
+        from capture import CaptureManager
+        mgr = CaptureManager()
+        self.assertEqual(mgr._checked_at, 0.0)
+        mgr._check_letterbox(b"not a jpeg", 640, 480)
+        for _ in range(200):
+            if not mgr._detecting:
+                break
+            time.sleep(0.05)
+        self.assertGreater(mgr._checked_at, 0.0,
+                           "a failed attempt must still stamp the clock")
 
 
 class CaptureBackendTest(unittest.TestCase):
@@ -648,14 +700,14 @@ class CaptureBackendTest(unittest.TestCase):
         manager = CaptureManager(backend=TestBackend(width=64, height=64, fps=30))
         manager.start()
         try:
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and not manager.framebuffer.ready:
-                time.sleep(0.02)
-            self.assertTrue(manager.framebuffer.ready, "no frame arrived")
-            frame = manager.framebuffer.frame
+            # start() only arms the idle reaper now; capture begins when a
+            # frame is actually requested.
+            frame = manager.frame(timeout=10)
+            self.assertIsNotNone(frame, "no frame arrived")
             self.assertEqual(frame[:2], b"\xff\xd8", "frame should start with JPEG SOI")
             self.assertEqual(frame[-2:], b"\xff\xd9", "frame should end with JPEG EOI")
-            self.assertEqual((manager.framebuffer.width, manager.framebuffer.height), (64, 64))
+            self.assertEqual((manager.framebuffer.width, manager.framebuffer.height),
+                             (64, 64))
         finally:
             manager.stop()
 
