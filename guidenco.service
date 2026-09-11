@@ -1,0 +1,21 @@
+[Unit]
+Description=guidenco — HDMI capture and USB HID control over HTTP
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/guidenco
+# Bring up the USB HID gadget before the service opens /dev/hidg*.
+# Prefixed with - so a Pi without a usable gadget controller still serves the screen.
+ExecStartPre=-/usr/local/bin/guidenco-hid-setup
+# Clear any stale ffmpeg still holding the capture device after an unclean stop.
+ExecStartPre=-/bin/sh -c 'fuser -k /dev/video0 2>/dev/null; true'
+ExecStart=/usr/bin/python3 /opt/guidenco/main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/guidenco/config.env
+
+[Install]
+WantedBy=multi-user.target

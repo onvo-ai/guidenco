@@ -1,56 +1,275 @@
-# Guidenco
+# guidenco
 
-Vision-driven remote desktop automation — controlled from a hosted web dashboard.
-A vision-language agent runs in the cloud and drives a target machine through one
-of three "device" backends.
+A Raspberry Pi that sits between a machine and its monitor, captures that
+machine's HDMI output, and presents itself to it as a USB keyboard and mouse.
+Both are exposed as an MCP server, so Claude can drive the machine directly.
 
-## Packages
+Nothing is installed on the target and nothing runs on it. It sees an ordinary
+USB keyboard and mouse and an ordinary monitor. So this works on a machine you
+cannot log into, during boot, at a BIOS screen, or on an OS with no remote
+access software at all.
 
-| Package | Description |
-|---------|-------------|
-| `web/` | Next.js dashboard + cloud relay (Better Auth, PostgreSQL, MinIO, agent loop) |
-| `pi-agent/` | Raspberry Pi HID bridge — HDMI capture + USB HID gadget (Python) |
-| `desktop-agent/` | Self-mode client — runs on your own computer (mss capture + pynput) |
-| `skill/` | Claude Code skill for AI-assisted remote control |
-
-## Device types
-
-- **Bridged** — a Raspberry Pi captures the target's HDMI output and replays input
-  as USB HID. Runs `pi-agent/`.
-- **Self** — install the agent directly on the computer you want to control. Runs
-  `desktop-agent/`.
-- **Remote** — a cloud sandbox (e2b) provisioned on demand; runs `desktop-agent/`.
-
-All three connect to the cloud the same way: frames stream up over a WebSocket,
-the agent's actions come back down, and the browser watches over SSE.
-
-## Quick Start — Raspberry Pi (Bridged)
-
-```bash
-curl -fsSL https://guidenco.app/api/install/bridged | sudo bash
+```
+┌────────────┐   HDMI    ┌──────────────┐   MCP :8080  ┌──────────────┐
+│   target   │──────────▶│              │◀────────────▶│    Claude    │
+│  machine   │           │  Raspberry   │              └──────────────┘
+│            │◀──────────│     Pi       │◀─ Bluetooth ─  setup page
+└────────────┘  USB HID  └──────────────┘   (wifi, URL)
 ```
 
-The installer detects the capture hardware (USB HDMI capture card or HDMI-to-CSI
-adapter), sets up the HID gadget, registers the device, and prints a pairing code
-to enter in the dashboard.
-
-## Quick Start — Web (local dev)
+## Install
 
 ```bash
-cd web
-cp .env.local.example .env.local   # fill in BETTER_AUTH_SECRET
-docker compose up -d               # PostgreSQL + MinIO
-npm install
-npm run db:push                    # create tables
-npm run dev                        # http://localhost:3000
+git clone https://github.com/onvo-ai/guidenco
+cd guidenco && sudo ./install.sh
 ```
 
-## Architecture
+The installer detects the capture hardware, sets the boot overlays it needs,
+generates an API token, installs the service and starts it, then prints the URLs
+and the token. A reboot is required the first time, because the USB gadget
+overlay only takes effect at boot.
 
-The Pi agent is pure I/O: `capture/` reads HDMI via ffmpeg/v4l2 and forwards JPEG
-frames; `relay.py` holds the cloud WebSocket and dispatches inbound actions to the
-USB HID gadget through `hid/`. All agent / LLM logic lives in `web/` — the agent
-loop in `web/lib/agent.ts` calls the model, and `web/lib/relay.ts` brokers frames
-and actions between the browser, the agent, and the device.
+## Connecting Claude
 
-See `docs/superpowers/specs/` for design records.
+```bash
+claude mcp add --transport http guidenco http://<pi>:8080/mcp \
+  --header "Authorization: Bearer $TOKEN"
+```
+
+The token is printed by `install.sh` and lives in `/etc/guidenco/config.env`.
+The repository also carries a skill in `skill/guidenco/` covering the
+screenshot-act-verify loop and what to check when the bridge misbehaves.
+
+### Tools
+
+| Tool | |
+|---|---|
+| `screenshot` | what the target is displaying, as an image |
+| `get_status` | screen size, input availability, network |
+| `move_mouse` | `{x, y}` |
+| `click` | `{x, y, button?, count?}` |
+| `drag` | `{from_x, from_y, to_x, to_y}` |
+| `scroll` | `{x, y, amount}` — signed notches |
+| `type_text` | `{text}` |
+| `press_key` | `{key}` — `"Return"`, `"ctrl+c"`, `"cmd+shift+4"` |
+
+Coordinates are **pixels in the screenshot**, origin top-left. Read a position
+off the image and pass it back unchanged.
+
+### Read-only HTTP
+
+Alongside MCP there are three GET endpoints, for when you want to look without
+an MCP client:
+
+```bash
+curl -s http://<pi>:8080/health     -H "Authorization: Bearer $TOKEN"
+curl -s http://<pi>:8080/screenshot -H "Authorization: Bearer $TOKEN" -o screen.jpg
+open      http://<pi>:8080/stream   # live MJPEG, plays in any browser
+```
+
+`GET /openapi.json` describes those three and needs no token. Actions are not
+duplicated there — an MCP client asks the server for its tools, and two
+descriptions of the same thing would eventually disagree.
+
+## Public access
+
+`cloudflared` is installed by the installer. Set `TUNNEL_ENABLED=on` and restart,
+and the bridge gets a `trycloudflare.com` hostname reachable from anywhere:
+
+```bash
+claude mcp add --transport http guidenco https://<random>.trycloudflare.com/mcp \
+  --header "Authorization: Bearer $TOKEN"
+```
+
+Two things to know. The hostname is **new every restart**, which is what the
+Bluetooth setup page is for. And the service **refuses to open a tunnel while
+`API_TOKEN` is empty** — a public URL to an unauthenticated bridge would hand
+keyboard and mouse control of the target to anyone who found it.
+
+## Setup over Bluetooth
+
+Getting the Pi onto Wi-Fi normally needs the Pi to already be on Wi-Fi. It
+advertises a BLE service instead, so a browser can configure it with no network
+at all — and read the current tunnel URL, which otherwise there is no way to
+learn.
+
+Host `web/index.html` anywhere with HTTPS (GitHub Pages works), open it, and
+connect. It can set Wi-Fi credentials and shows the live status and tunnel URL.
+
+**Chrome or Edge only.** Web Bluetooth does not exist in Safari or Firefox, and
+no browser on iOS has it. The Wi-Fi password is write-only over BLE and is never
+readable afterwards.
+
+### Pointer motion
+
+Moves are interpolated with ease-in-out rather than teleporting. This is
+functional, not decorative: a cursor that jumps never crosses the pixels in
+between, so hover states never fire, menus that open on hover stay shut, and
+drag-and-drop frequently fails because applications decide a drag has begun by
+watching for motion while a button is held.
+
+Duration scales with the square root of distance, Fitts-style — a 70 px nudge
+takes about 200 ms, a full-screen sweep caps at 600 ms. Pass `{"smooth": false}`
+on any action for an instant jump, or set `MOUSE_SMOOTH=off` to make that the
+default.
+
+### Keyboard
+
+`type_text` sends a string; `press_key` sends one key or combination. Modifiers join with
+`+`: `ctrl`, `shift`, `alt` (`option`), `cmd` (`command`, `super`, `win`,
+`meta`). Named keys include `Return`, `Escape`, `Tab`, `Backspace`, `Delete`,
+`Home`, `End`, `PageUp`, `PageDown`, the arrows and `F1`–`F24`.
+
+This is a **US layout**. HID sends scan codes and the target decides what they
+mean, so a target set to another layout produces different punctuation.
+Characters with no mapping are skipped and listed in the response rather than
+failing the whole string.
+
+## Hardware
+
+Either capture path works:
+
+- **USB HDMI capture card** — cheap, plug and play, needs a spare USB host port.
+- **HDMI-to-CSI adapter** (Toshiba TC358743) — sits on the camera ribbon cable.
+
+| Board | USB capture card | HDMI-to-CSI adapter |
+|---|---|---|
+| Pi 4 / Pi 5 | screen + input | screen + input |
+| Pi Zero 2 W | **screen only** | screen + input |
+
+A Pi Zero has one USB data port. The HID gadget needs it as a *device* port and
+a capture card needs it as a *host* port, and it cannot be both. So on a Zero,
+use the CSI adapter if you want to control the target. The installer warns you
+if you hit this, and `get_status` reports `input.available: false`.
+
+You also need a USB cable from the Pi's gadget port to the target, and the Pi on
+its own power supply. On a Pi 4 the USB-C port carries both, so the target can
+power it.
+
+## Configuration
+
+`/etc/guidenco/config.env`. Restart after editing:
+
+```bash
+sudo systemctl restart guidenco
+```
+
+| Key | Default | |
+|---|---|---|
+| `CAPTURE_TYPE` | detected | `usb`, `csi`, or `test` for a synthetic pattern |
+| `VIDEO_DEV` | detected | capture device node |
+| `STREAM_W` / `STREAM_H` | `0` | `0` keeps the native size **and enables JPEG passthrough** |
+| `CAPTURE_MAX_W` / `_H` | `1920` / `1080` | ceiling on the probed capture mode |
+| `STREAM_FPS` | `10` | capture frame rate |
+| `API_PORT` | `8080` | |
+| `API_TOKEN` | generated | blank disables authentication entirely |
+| `HID_ENABLED` | `auto` | `auto`, `on` (missing gadget is an error), `off` |
+| `MOUSE_SMOOTH` | `on` | `off` for instant pointer jumps |
+| `TUNNEL_ENABLED` | `off` | `on` publishes a public Cloudflare URL |
+| `BLE_ENABLED` | `on` | Bluetooth setup service |
+| `BLE_NAME` | `guidenco` | how it appears in the browser's pairing dialog |
+
+Re-running the installer keeps an existing config and adds any keys it is
+missing, so an upgrade never silently falls back to defaults you did not choose.
+
+### Security
+
+Anything that can reach this port can type on and click the target machine. The
+installer generates a token for that reason; clearing `API_TOKEN` disables
+authentication completely.
+
+On the LAN the token travels in plain HTTP, so treat that as a trusted-network
+service — or reach it over SSH instead:
+
+```bash
+ssh -L 8080:localhost:8080 pi@<pi>
+```
+
+The Cloudflare tunnel is HTTPS end to end, so the token is not exposed in
+transit there. It does put the bridge on the public internet, which is why a
+token is mandatory for it.
+
+`/` and `/openapi.json` stay readable without a token so an agent can discover
+the API before it has credentials. Neither reveals anything about the target.
+
+## How it works
+
+```
+capture/   ffmpeg reads the capture device and keeps the latest JPEG,
+           restarting itself if the HDMI signal drops or changes resolution.
+api/       the MCP endpoint, the read-only routes, the Cloudflare tunnel,
+           and network detection.
+ble/       the Bluetooth setup service. service.py holds the behaviour and has
+           no D-Bus in it; bluez.py is the BlueZ plumbing, so the logic stays
+           testable on a machine with no Bluetooth.
+hid/       turns intent into USB HID reports, including the eased motion.
+skill/     a Claude skill describing how to use the bridge well.
+web/       the Web Bluetooth setup page. Host it separately.
+```
+
+**Frames are never decoded.** A USB capture card already emits MJPEG, so ffmpeg
+copies frames through with `-c:v copy` — no decode, no scale, no re-encode. The
+service sits near 0% CPU while capturing, and a screenshot is a memory read.
+Setting `STREAM_W`/`STREAM_H` forces a re-encode and gives that up. The CSI
+adapter is the one path that must encode, since the TC358743 emits raw UYVY.
+
+That passthrough is why this API replaced an earlier VNC server. VNC clients
+could not accept JPEG — the common client library implements only Raw, CopyRect,
+Hextile and ZRLE, no Tight — so every frame had to be decoded to raw pixels and
+re-encoded as ZRLE, about 47 ms of Pi 4 CPU per frame. Worse, lossy MJPEG
+re-encode noise meant no two frames were ever byte-identical, so change
+detection never stabilised and the whole screen was resent continuously. Serving
+the card's own JPEG removes all of it.
+
+## Development
+
+No dependencies — Python standard library only. The synthetic capture backend
+means the whole thing runs on a laptop with no Pi and no ffmpeg:
+
+```bash
+CAPTURE_TYPE=test API_PORT=8080 python3 main.py
+```
+
+```bash
+python3 -m unittest discover -s tests -t . -v
+```
+
+The suite covers the MCP protocol on the wire, the read-only routes, auth, the
+motion curve and key parsing, using a fake HID sink that records every report.
+It speaks MCP over a real socket rather than calling handlers directly, so the
+transport requirements — status codes, session headers, Origin checks — are
+genuinely exercised.
+
+Two checks run separately, so the suite itself stays dependency-free: the served
+OpenAPI document against `openapi-spec-validator`, and the MCP endpoint against
+the official `mcp` SDK client.
+
+## Troubleshooting
+
+```bash
+journalctl -u guidenco -f          # what the service is doing
+curl -s localhost:8080/health -H "Authorization: Bearer $TOKEN"
+v4l2-ctl --list-devices            # is the capture device there
+ls /dev/hidg*                      # is the HID gadget bound
+```
+
+**Screenshots fail, or `/screenshot` returns 503.** No frame has been captured. Check the HDMI source
+is connected and powered. For the CSI adapter the log says whether it latched DV
+timings; the EDID is capped at 1080p30 deliberately, because 1080p60 needs more
+CSI lanes than a Pi Zero 2 W has.
+
+**Actions report that input is unavailable.** The HID gadget is not bound, and
+`get_status` explains why in `input.detail`. On a Pi Zero with a USB capture card that is expected.
+Otherwise confirm `dtoverlay=dwc2,dr_mode=peripheral` is in `config.txt` under
+`[all]` and that you rebooted — stock images put `dwc2` under `[cm4]`/`[cm5]`
+filters that never apply to a Model B. Check the USB cable to the target carries
+data rather than only power.
+
+**Clicks land in the wrong place.** The pointer is positioned as a fraction of
+the target's screen, so the captured image has to correspond to the whole
+desktop. Mirroring a display of a different aspect ratio, overscan, and
+capturing one screen of an extended desktop all break that correspondence.
+
+**Input stops after the target sleeps.** The service re-binds the gadget to wake
+the host, which works on most machines. If it does not, the target's USB wake
+setting is off.
