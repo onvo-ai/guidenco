@@ -8,8 +8,11 @@ delivers frames:
   • DV (digital video) timings must be latched once from the live signal.
 
 Both of these generate V4L2_EVENT_SOURCE_CHANGE events that abort the next
-frame's DMA mid-transfer. We therefore latch them exactly once (re-doing setup
-only after a signal loss) and drain pending events before each ffmpeg start.
+frame's DMA mid-transfer, so we latch them exactly once and only redo setup
+after a signal loss. Draining pending events before each start is still worth
+doing, but it cannot save the first frame: starting the stream is itself what
+emits the event, so the first buffer always arrives half-written and is dropped
+by --stream-skip instead.
 
 ffmpeg's v4l2 demuxer mishandles V4L2_BUF_FLAG_ERROR (it re-queues the bad
 buffer and loops on a partial frame forever), so we stream raw frames via
@@ -195,6 +198,11 @@ class CsiBackend(CaptureBackend):
         v4l2_cmd = [
             "v4l2-ctl", "-d", VIDEO_DEV,
             "--stream-mmap=4",   # 4 DMA buffers — enough depth, ~25MB lighter than 8
+            # Starting the stream is itself what emits the source-change event,
+            # so no amount of draining beforehand saves the first buffer: its DMA
+            # is aborted part-way and it arrives half-written. Throw the first two
+            # away inside v4l2-ctl, before they can reach the encoder.
+            "--stream-skip=2",
             "--stream-to=-",
         ]
         ffmpeg_cmd = [
