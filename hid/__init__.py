@@ -45,7 +45,24 @@ BUTTONS = {"left": 0x01, "right": 0x02, "middle": 0x04}
 
 # Delay between a press and its release. Too short and some applications drop
 # the event; this sits comfortably inside what a real click looks like.
-_PRESS_MS = 40
+_PRESS_MS = 90
+
+# Pause after the pointer arrives, before the button goes down.
+#
+# Clicks on macOS intermittently do nothing the first time and work when
+# repeated, most often on a control that has just appeared. The press used to
+# go out in the same breath as the last move, which gives the host no chance to
+# process the motion and settle on what is under the cursor before it has to
+# hit-test the press. A hand does not arrive and press in the same instant
+# either.
+#
+# This is a considered guess at that race rather than a proven cure: the
+# failure is intermittent and resisted isolation, partly because a captured
+# frame does not reliably show where the pointer actually is. It costs a fifth
+# of a second per click and makes the sequence more like a real one, so it is
+# worth keeping whether or not it turns out to be the whole story.
+_HOVER_MS = 150
+
 _KEYSTROKE_MS = 12
 
 _lock = threading.RLock()
@@ -323,6 +340,7 @@ def click(x: float, y: float, button: str = "left", count: int = 1,
     bit = _button_bit(button)
     with _lock:
         _goto(x, y, smooth)
+        time.sleep(_HOVER_MS / 1000.0)
         for n in range(count):
             _buttons = bit
             _emit(_x, _y)
@@ -341,6 +359,7 @@ def drag(from_x: float, from_y: float, to_x: float, to_y: float,
     bit = _button_bit(button)
     with _lock:
         _goto(from_x, from_y, smooth)
+        time.sleep(_HOVER_MS / 1000.0)
         _buttons = bit
         _emit(_x, _y)
         time.sleep(_PRESS_MS / 1000.0)

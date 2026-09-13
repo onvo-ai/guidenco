@@ -344,6 +344,32 @@ class ClickAndScrollTest(unittest.TestCase):
         self.assertIn(1, self.gadget.buttons, "the left button should be pressed")
         self.assertEqual(self.gadget.buttons[-1], 0, "and released at the end")
 
+    def test_the_pointer_arrives_before_the_button_goes_down(self):
+        # The host hit-tests a press against what it last saw under the cursor.
+        # Press in the same breath as the move and the click lands on the old
+        # target — which reads as the first click doing nothing at all.
+        self.hid.move(10, 10, smooth=False)
+        self.gadget.mouse.clear()
+        start = time.monotonic()
+        self.hid.click(900, 500, smooth=False)
+        elapsed = time.monotonic() - start
+
+        first_press = next(i for i, b in enumerate(self.gadget.buttons) if b == 1)
+        self.assertGreater(first_press, 0,
+                           "a move report must precede the press")
+        self.assertEqual(self.gadget.positions[first_press],
+                         self.gadget.positions[first_press - 1],
+                         "and the press must happen at the arrival point")
+        self.assertGreaterEqual(elapsed, self.hid._HOVER_MS / 1000.0)
+
+    def test_a_drag_also_settles_before_pressing(self):
+        start = time.monotonic()
+        self.hid.drag(10, 10, 200, 200, smooth=False)
+        self.assertGreaterEqual(time.monotonic() - start,
+                                self.hid._HOVER_MS / 1000.0)
+        first_press = next(i for i, b in enumerate(self.gadget.buttons) if b == 1)
+        self.assertGreater(first_press, 0)
+
     def test_a_double_click_presses_twice(self):
         self.hid.click(100, 100, count=2, smooth=False)
         presses = sum(1 for a, b in zip(self.gadget.buttons, self.gadget.buttons[1:])
