@@ -281,6 +281,20 @@ for item in main.py config.py capture api hid ble; do
 done
 install -m 755 "$SOURCE_DIR/hid-gadget-setup.sh" /usr/local/bin/guidenco-hid-setup
 
+# The EDID a CSI adapter advertises to the machine plugged into it. Generated
+# rather than shipped so the checksums are computed here and cannot rot, and
+# regenerated on every install so a fixed timing reaches existing boxes.
+# Without it the code falls back to a generic EDID that does not stop a source
+# choosing 1080p60 — more than the Pi Zero 2 W's two CSI lanes can carry.
+if python3 -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); from capture import edid; sys.stdout.write(edid.to_hex(edid.build()))" \
+     > "$CONFIG_DIR/edid_1080p30.hex" 2>/dev/null; then
+  chmod 644 "$CONFIG_DIR/edid_1080p30.hex"
+  info "Wrote $CONFIG_DIR/edid_1080p30.hex"
+else
+  rm -f "$CONFIG_DIR/edid_1080p30.hex"
+  warn "Could not generate the EDID; the generic one will be used instead."
+fi
+
 # ── 5. Configuration ──────────────────────────────────────────────────────────
 # Written once and never overwritten, so re-running the installer does not throw
 # away a password or a tuned resolution.

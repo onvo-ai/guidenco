@@ -98,6 +98,28 @@ class CaptureBackend:
         """
         return True
 
+    def ensure_link(self) -> bool:
+        """
+        Make the input ready to receive a signal, without starting capture.
+
+        Called once at service start. A backend that has to answer the source
+        before it will send anything (CSI, which must advertise EDID) does that
+        here, so a machine plugged in later is answered straight away instead of
+        only when something first asks for a frame.
+        """
+        return True
+
+    def link_state(self) -> dict:
+        """
+        What the input can see, for diagnostics.
+
+        Exists so callers can tell "nothing has asked for a frame yet" apart
+        from "there is no signal", which are indistinguishable from the frame
+        count alone. Backends that do not negotiate report negotiated=None.
+        """
+        return {"negotiated": None, "signal": None,
+                "detail": "this backend does not negotiate with the source"}
+
     def open(self) -> tuple[object, list[subprocess.Popen], int, int]:
         """
         Start the capture pipeline.

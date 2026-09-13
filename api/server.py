@@ -60,6 +60,22 @@ def capture_frame(server, timeout: float | None = None) -> bytes | None:
     return frame
 
 
+def _describe_health(ready: bool, link: dict) -> str:
+    """
+    One line saying what is actually wrong, when anything is.
+
+    "waiting for capture" was true of every failure mode at once — nothing
+    asked yet, no cable, source asleep — which made it useless for diagnosis.
+    """
+    if ready:
+        return "ok"
+    if link.get("negotiated") is False:
+        return "waiting for the input link: " + (link.get("detail") or "not negotiated")
+    if link.get("signal") is False:
+        return "no signal: " + (link.get("detail") or "nothing arriving from the source")
+    return "waiting for capture"
+
+
 class ApiError(Exception):
     def __init__(self, status: int, message: str) -> None:
         super().__init__(message)
@@ -196,8 +212,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _health(self) -> dict:
         fb = self.framebuffer
+        link = (self.server.capture.link_state()
+                if self.server.capture is not None else {})
         return {
-            "status": "ok" if fb.ready else "waiting for capture",
+            "status": _describe_health(fb.ready, link),
             "capture": {
                 "ready": fb.ready,
                 "width": fb.width,
@@ -206,6 +224,10 @@ class Handler(BaseHTTPRequestHandler):
                 "frames": fb.sequence,
                 "source": config.CAPTURE_TYPE,
                 "device": config.VIDEO_DEV,
+                # Whether the source has been told to send anything, and whether
+                # it did. Without this, "no frames yet" and "cable unplugged"
+                # look identical from out here.
+                "link": link,
             },
             "input": hid.status(),
             "network": netinfo.describe(),

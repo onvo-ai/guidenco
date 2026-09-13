@@ -181,3 +181,134 @@ class RateCapTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LinkSetupTest(unittest.TestCase):
+    """
+    Readying the input is separate from streaming frames.
+
+    A CSI adapter that has not advertised EDID is invisible to the machine
+    plugged into it, so this has to happen at service start. Doing it lazily on
+    the first screenshot means you connect the cable, see nothing, and have no
+    way to find out why.
+    """
+
+    class LinkBackend(CaptureBackend):
+        def __init__(self):
+            self.links = 0
+
+        def ensure_link(self) -> bool:
+            self.links += 1
+            return True
+
+        def link_state(self) -> dict:
+            return {"negotiated": bool(self.links), "signal": False,
+                    "detail": "test backend"}
+
+    def test_the_link_is_readied_without_starting_capture(self):
+        backend = self.LinkBackend()
+        manager = CaptureManager(backend=backend)
+        self.assertTrue(manager.ensure_link())
+        self.assertEqual(backend.links, 1)
+        self.assertFalse(manager.capturing)
+
+    def test_link_state_is_readable_before_any_frame(self):
+        backend = self.LinkBackend()
+        manager = CaptureManager(backend=backend)
+        manager.ensure_link()
+        self.assertTrue(manager.link_state()["negotiated"])
+        self.assertFalse(manager.capturing)
+
+    def test_a_backend_that_cannot_be_built_does_not_take_the_service_down(self):
+        class Exploding(CaptureBackend):
+            def ensure_link(self):
+                raise RuntimeError("no adapter")
+
+            def link_state(self):
+                raise RuntimeError("no adapter")
+
+        manager = CaptureManager(backend=Exploding())
+        self.assertFalse(manager.ensure_link())
+        self.assertIsNone(manager.link_state()["negotiated"])
+
+    def test_the_default_backend_reports_that_it_does_not_negotiate(self):
+        state = CaptureBackend().link_state()
+        self.assertIsNone(state["negotiated"])
+        self.assertTrue(CaptureBackend().ensure_link())
+
+
+class CsiEdidTest(unittest.TestCase):
+    """
+    EDID goes out once, at service start, and again only if the signal drops.
+
+    Re-advertising is not free: it emits a source-change event that costs the
+    next frame. So "already done" has to mean done.
+    """
+
+    def setUp(self):
+        from capture import csi
+        self.csi = csi
+        self.backend = csi.CsiBackend()
+        self.calls: list[list[str]] = []
+
+        class FakeCompleted:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+
+        def fake_run(cmd, **kwargs):
+            self.calls.append(cmd)
+            return FakeCompleted()
+
+        self._patch(csi.subprocess, "run", fake_run)
+        self._patch(csi.os.path, "exists", lambda path: True)
+        self._patch(csi, "_find_subdev", lambda: "/dev/v4l-subdev0")
+
+    def _patch(self, target, name, value):
+        original = getattr(target, name)
+        setattr(target, name, value)
+        self.addCleanup(setattr, target, name, original)
+
+    def edid_calls(self):
+        return [c for c in self.calls if any("--set-edid" in str(a) for a in c)]
+
+    def test_edid_is_advertised_without_capturing(self):
+        self.assertTrue(self.backend.ensure_link())
+        self.assertEqual(len(self.edid_calls()), 1)
+
+    def test_advertising_twice_writes_once(self):
+        self.backend.ensure_link()
+        self.backend.ensure_link()
+        self.assertEqual(len(self.edid_calls()), 1)
+
+    def test_the_generated_file_is_preferred_over_the_generic_edid(self):
+        self.backend.ensure_link()
+        self.assertIn(f"--set-edid=pad=0,file={self.csi.EDID_1080P30}",
+                      self.edid_calls()[0])
+
+    def test_it_falls_back_to_the_generic_edid_when_the_file_is_missing(self):
+        self._patch(self.csi.os.path, "exists",
+                    lambda path: path != self.csi.EDID_1080P30)
+        self.backend.ensure_link()
+        self.assertIn("--set-edid=type=hdmi", self.edid_calls()[0])
+
+    def test_link_state_reports_no_signal_before_negotiation(self):
+        self._patch(self.csi, "_query_dv_timings", lambda: None)
+        state = self.backend.link_state()
+        self.assertFalse(state["negotiated"])
+        self.assertFalse(state["signal"])
+        self.assertIn("EDID", state["detail"])
+
+    def test_link_state_reports_the_size_once_a_signal_arrives(self):
+        self._patch(self.csi, "_query_dv_timings", lambda: (1920, 1080))
+        self.backend.ensure_link()
+        state = self.backend.link_state()
+        self.assertTrue(state["signal"])
+        self.assertIn("1920x1080", state["detail"])
+
+    def test_link_state_distinguishes_a_silent_source_from_a_silent_us(self):
+        self._patch(self.csi, "_query_dv_timings", lambda: None)
+        self.backend.ensure_link()
+        state = self.backend.link_state()
+        self.assertTrue(state["negotiated"])
+        self.assertIn("no signal is arriving", state["detail"])

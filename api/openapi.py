@@ -39,7 +39,11 @@ def build_spec() -> dict:
                     "summary": "Service state: capture, input and network.",
                     "description": ("Reports the screen dimensions your coordinates "
                                     "must fall within, whether input is available, "
-                                    "and which network the bridge is attached to."),
+                                    "and which network the bridge is attached to. "
+                                    "capture.link says whether the source has been "
+                                    "told to send a signal and whether one arrived, "
+                                    "which is how you tell an idle bridge from an "
+                                    "unplugged cable."),
                     "responses": {"200": {
                         "description": "Current state.",
                         "content": {"application/json": {"schema": {
@@ -55,6 +59,14 @@ def build_spec() -> dict:
                                         "frames": {"type": "integer"},
                                         "source": {"type": "string"},
                                         "device": {"type": "string"},
+                                        "link": {
+                                            "type": "object",
+                                            "properties": {
+                                                "negotiated": {"type": ["boolean", "null"]},
+                                                "signal": {"type": ["boolean", "null"]},
+                                                "detail": {"type": "string"},
+                                            },
+                                        },
                                     },
                                 },
                                 "input": {

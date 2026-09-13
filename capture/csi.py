@@ -109,6 +109,29 @@ def _drain_source_change_events(dev: str, timeout: float = 3.0) -> None:
         logger.debug("[csi] event-drain skipped: %s", e)
 
 
+def _query_dv_timings() -> tuple[int, int] | None:
+    """
+    Size of the signal currently arriving, or None if there isn't one.
+
+    The adapter reports a stale set of timings when nothing is connected, so a
+    zero width — not just the exit status — is what says "no signal".
+    """
+    try:
+        r = subprocess.run(["v4l2-ctl", "-d", VIDEO_DEV, "--query-dv-timings"],
+                          capture_output=True, timeout=5)
+    except Exception:
+        return None
+    out = (r.stdout + r.stderr).decode(errors="replace")
+    if r.returncode != 0 or "no-link" in out.lower():
+        return None
+    width = re.search(r"Active width:\s*(\d+)", out)
+    height = re.search(r"Active height:\s*(\d+)", out)
+    if not (width and height):
+        return None
+    w, h = int(width.group(1)), int(height.group(1))
+    return (w, h) if w and h else None
+
+
 def _query_fmt() -> tuple[str, int, int]:
     """Current device pixel format + size, as (ffmpeg_pix_fmt, w, h)."""
     try:
@@ -136,50 +159,118 @@ def _query_fmt() -> tuple[str, int, int]:
 class CsiBackend(CaptureBackend):
     def __init__(self) -> None:
         self._initialized = False
+        self._edid_set = False
+
+    def _load_driver(self) -> bool:
+        """modprobe the adapter and wait for its video node to appear."""
+        subprocess.run(["modprobe", "tc358743"], capture_output=True)
+
+        for _ in range(10):
+            if os.path.exists(VIDEO_DEV):
+                return True
+            time.sleep(0.5)
+        logger.warning("[csi] device %s not found after modprobe", VIDEO_DEV)
+        return False
+
+    def ensure_link(self) -> bool:
+        """Advertise EDID so the source starts sending. See advertise_edid()."""
+        return self.advertise_edid()
+
+    def advertise_edid(self) -> bool:
+        """
+        Tell the HDMI source what we accept, so that it enables its output.
+
+        A source reads EDID back from the cable before it sends anything: with
+        no EDID it decides nothing is plugged in and stays dark. So this cannot
+        wait for the first frame request — by then the operator has already
+        plugged the cable in and seen nothing happen.
+
+        Idempotent. Only redone after a signal loss, because re-writing EDID
+        emits a source-change event that costs the next frame.
+        """
+        if self._edid_set:
+            return True
+        if not self._load_driver():
+            return False
+
+        subdev = _find_subdev()
+        if not subdev:
+            logger.warning("[csi] TC358743 subdevice not found")
+            return False
+
+        # Capped at 1080p30 so the source doesn't pick 1080p60, which needs more
+        # CSI lanes than the Pi Zero 2 W's two.
+        edid_file = EDID_1080P30 if os.path.exists(EDID_1080P30) else None
+        cmd = (["v4l2-ctl", "-d", subdev, f"--set-edid=pad=0,file={edid_file}"]
+               if edid_file else
+               ["v4l2-ctl", "-d", subdev, "--set-edid=type=hdmi"])
+        r = subprocess.run(cmd, capture_output=True, timeout=5)
+        if r.returncode != 0:
+            logger.warning("[csi] could not set EDID on %s", subdev)
+            return False
+
+        if edid_file is None:
+            logger.warning("[csi] %s is missing, so the generic EDID was used "
+                           "— it does not cap the source at 1080p30",
+                           EDID_1080P30)
+        self._edid_set = True
+        logger.info("[csi] EDID advertised on %s (%s)", subdev,
+                    edid_file or "generic hdmi")
+        return True
+
+    def link_state(self) -> dict:
+        """Whether EDID is out there and whether a signal came back."""
+        state = {
+            "negotiated": self._edid_set,
+            "edid": (EDID_1080P30 if os.path.exists(EDID_1080P30)
+                     else "generic hdmi"),
+            "signal": False,
+            "detail": "",
+        }
+        if not os.path.exists(VIDEO_DEV):
+            state["detail"] = (f"{VIDEO_DEV} is not present — check the CSI "
+                               f"ribbon cable and the boot overlay")
+            return state
+
+        timings = _query_dv_timings()
+        if timings:
+            state["signal"] = True
+            state["detail"] = f"{timings[0]}x{timings[1]} from the source"
+        elif not self._edid_set:
+            state["detail"] = ("no EDID advertised yet, so the source has not "
+                               "been told to send anything")
+        else:
+            state["detail"] = ("EDID is advertised but no signal is arriving — "
+                               "check the HDMI cable and that the source is awake")
+        return state
 
     def prepare(self) -> bool:
         """
         Ensure the adapter is negotiated. EDID + DV timings are latched once and
         remembered; we only redo setup after an actual signal loss.
         """
-        subprocess.run(["modprobe", "tc358743"], capture_output=True)
-
-        for _ in range(10):
-            if os.path.exists(VIDEO_DEV):
-                break
-            time.sleep(0.5)
-        else:
-            logger.warning("[csi] device %s not found after modprobe", VIDEO_DEV)
+        if not self._load_driver():
             return False
 
         # Fast path: signal already negotiated — don't touch timings (would emit
         # a source-change event that corrupts the next frame).
         if self._initialized:
-            r = subprocess.run(["v4l2-ctl", "-d", VIDEO_DEV, "--query-dv-timings"],
-                              capture_output=True, timeout=5)
-            out = (r.stdout + r.stderr).decode(errors="replace").lower()
-            if r.returncode == 0 and "active width: 0" not in out and "no-link" not in out:
+            if _query_dv_timings():
                 _drain_source_change_events(VIDEO_DEV)
                 return True
             logger.info("[csi] signal lost — re-initialising adapter")
             self._initialized = False
+            # The source has gone; make it introduce itself again.
+            self._edid_set = False
 
-        # Advertise EDID (capped at 1080p30 so the source doesn't pick 1080p60,
-        # which needs more CSI lanes than the Pi Zero 2 W's two).
-        subdev = _find_subdev()
-        if subdev:
-            edid_file = EDID_1080P30 if os.path.exists(EDID_1080P30) else None
-            cmd = (["v4l2-ctl", "-d", subdev, f"--set-edid=pad=0,file={edid_file}"]
-                   if edid_file else
-                   ["v4l2-ctl", "-d", subdev, "--set-edid=type=hdmi"])
-            r = subprocess.run(cmd, capture_output=True, timeout=5)
-            if r.returncode != 0:
-                logger.warning("[csi] could not set EDID on %s", subdev)
-        else:
-            logger.warning("[csi] TC358743 subdevice not found")
+        # Usually already done at service start, in which case the source has
+        # long since negotiated and there is nothing to wait for.
+        was_advertised = self._edid_set
+        self.advertise_edid()
+        if not was_advertised:
+            # Let the source re-negotiate with the new EDID before we latch.
+            time.sleep(3)
 
-        # Let the source re-negotiate with the new EDID, then latch DV timings.
-        time.sleep(3)
         r = subprocess.run(["v4l2-ctl", "-d", VIDEO_DEV, "--set-dv-bt-timings", "query"],
                           capture_output=True, timeout=5)
         if r.returncode != 0:

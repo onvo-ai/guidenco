@@ -52,6 +52,22 @@ Leave a moment between acting and re-screenshotting when the target needs time �
 an application launching, a page loading. If the screen looks unchanged, take
 another screenshot before concluding the action failed.
 
+Step 4 has a shortcut: pass `return_frame: true` on any action and it hands back
+the screenshot itself, so the loop costs one call instead of two. Prefer it
+whenever the next thing you would do is look. It already pauses briefly so the
+target has time to redraw; if an application is slow — a big app launching, a
+theme downloading — pass `settle_ms` up to 5000 rather than believing a frame
+that shows nothing happened.
+
+When several actions are already decided — a run of strokes, filling a form,
+walking a menu — send them as one `batch` instead of one call each. It stops at
+the first failure and tells you how far it got. Put
+`{"action": "wait", "seconds": n}` between steps wherever something has to
+appear first: opening a launcher then typing into it needs a pause, or the
+typing lands on the desktop. Do not batch past a point where the screen changes
+in a way you have not seen: every coordinate in the batch is read from the
+screenshot you took before it.
+
 ## Things that catch people out
 
 **Typing goes to whatever has focus.** `type_text` does not target a field. Click

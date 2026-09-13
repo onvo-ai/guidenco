@@ -489,7 +489,49 @@ class DiscoveryTest(ServerTestCase):
                 seen.add(operation["operationId"])
 
 
+class HealthStatusTest(unittest.TestCase):
+    """
+    The status line has to name the actual fault. It used to say "waiting for
+    capture" for every failure at once — nothing asked yet, no cable, source
+    asleep — which is no use to anyone trying to work out why there is no image.
+    """
+
+    def describe(self, ready, link):
+        from api.server import _describe_health
+        return _describe_health(ready, link)
+
+    def test_a_working_bridge_is_just_ok(self):
+        self.assertEqual(self.describe(True, {"negotiated": True, "signal": True}), "ok")
+
+    def test_an_unnegotiated_link_says_so(self):
+        status = self.describe(False, {
+            "negotiated": False, "signal": False,
+            "detail": "no EDID advertised yet, so the source has not been told "
+                      "to send anything"})
+        self.assertIn("input link", status)
+        self.assertIn("EDID", status)
+
+    def test_a_negotiated_link_with_no_signal_says_so(self):
+        status = self.describe(False, {
+            "negotiated": True, "signal": False,
+            "detail": "EDID is advertised but no signal is arriving"})
+        self.assertIn("no signal", status)
+
+    def test_a_live_signal_with_no_frames_yet_is_merely_waiting(self):
+        # Nothing is wrong here: capture is on demand and nobody has asked.
+        self.assertEqual(
+            self.describe(False, {"negotiated": True, "signal": True}),
+            "waiting for capture")
+
+    def test_a_backend_that_reports_nothing_still_gets_a_status(self):
+        self.assertEqual(self.describe(False, {}), "waiting for capture")
+
+
 class HealthTest(ServerTestCase):
+    def test_health_reports_the_link_state(self):
+        _, body = self.get_json("/health")
+        self.assertIn("link", body["capture"])
+
     def test_health_reports_the_screen_size(self):
         status, body = self.get_json("/health")
         self.assertEqual(status, 200)

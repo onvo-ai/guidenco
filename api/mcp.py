@@ -23,6 +23,7 @@ import secrets
 import threading
 import time
 
+import config
 import hid
 
 logger = logging.getLogger("guidenco.mcp")
@@ -79,6 +80,39 @@ _SMOOTH = {
                     "recognise a drag when they observe motion."),
 }
 _BUTTON = {"type": "string", "enum": ["left", "right", "middle"], "default": "left"}
+_RETURN_FRAME = {
+    "type": "boolean",
+    "description": ("Return a screenshot taken after this action, so you can see "
+                    "what it did without a second call. Worth it whenever the "
+                    "next thing you would do is look."),
+}
+_SETTLE_MS = {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 5000,
+    "description": ("How long to let the screen settle before the return_frame "
+                    "screenshot, in milliseconds. Defaults to 400, which covers "
+                    "an ordinary redraw. Raise it for an application that is "
+                    "slow to react — a frame taken too early shows the screen "
+                    "as it was and reads as though nothing happened."),
+}
+
+# Enough to draw something or fill a form in one call, small enough that a
+# runaway list cannot hold the input device for minutes.
+MAX_BATCH_ACTIONS = 100
+
+# A single pause, and the total across one batch. Capped because a batch holds
+# the input device while it runs.
+MAX_WAIT_S = 10.0
+MAX_BATCH_WAIT_S = 30.0
+
+# Tools that act on the machine, and so can hand back a frame showing the result.
+_ACTION_TOOLS = ("move_mouse", "click", "drag", "scroll", "type_text", "press_key")
+
+# Batch steps that are not tools. "wait" exists because a batch otherwise cannot
+# survive anything that has to appear before the next step can land — opening a
+# launcher, a menu, a dialog.
+_BATCH_ONLY = ("wait",)
 
 
 def _xy_schema(extra: dict | None = None, required: list[str] | None = None) -> dict:
@@ -86,6 +120,8 @@ def _xy_schema(extra: dict | None = None, required: list[str] | None = None) -> 
         "x": {"type": "number", "description": _COORD},
         "y": {"type": "number", "description": _COORD},
         "smooth": _SMOOTH,
+        "return_frame": _RETURN_FRAME,
+        "settle_ms": _SETTLE_MS,
     }
     properties.update(extra or {})
     return {"type": "object", "required": required or ["x", "y"],
@@ -176,7 +212,9 @@ class Tools:
                                 "skipped and reported. Use press_key for Return, Tab "
                                 "and shortcuts."),
                 "inputSchema": {"type": "object", "required": ["text"],
-                                "properties": {"text": {"type": "string"}}},
+                                "properties": {"text": {"type": "string"},
+                                               "return_frame": _RETURN_FRAME,
+                                               "settle_ms": _SETTLE_MS}},
             },
             {
                 "name": "press_key",
@@ -188,10 +226,60 @@ class Tools:
                                 "arrows and F1-F24."),
                 "inputSchema": {
                     "type": "object", "required": ["key"],
-                    "properties": {"key": {
-                        "type": "string",
-                        "examples": ["Return", "ctrl+c", "cmd+shift+4", "alt+Tab"],
-                    }},
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "examples": ["Return", "ctrl+c", "cmd+shift+4", "alt+Tab"],
+                        },
+                        "return_frame": _RETURN_FRAME,
+                        "settle_ms": _SETTLE_MS,
+                    },
+                },
+            },
+            {
+                "name": "batch",
+                "title": "Run several actions",
+                "description": (
+                    "Run a list of actions in order, in one call. Every action "
+                    "here is a network round trip on its own, so anything you "
+                    "can plan ahead — a sequence of strokes, filling a form, a "
+                    "menu path — belongs in one batch. Stops at the first "
+                    "failure and tells you how far it got, because later "
+                    "actions almost always assume the earlier ones landed. "
+                    "Use a 'wait' step wherever something has to appear before "
+                    "the next action can land: a launcher, a menu, a dialog. "
+                    "Coordinates are pixels in the most recent screenshot, so "
+                    "do not batch past a point where the screen moves somewhere "
+                    "you have not seen."),
+                "inputSchema": {
+                    "type": "object", "required": ["actions"],
+                    "properties": {
+                        "actions": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": MAX_BATCH_ACTIONS,
+                            "description": (
+                                "Each item is one action's arguments plus an "
+                                "'action' naming the tool. The exception is "
+                                f"{{\"action\": \"wait\", \"seconds\": n}}, which "
+                                f"pauses (at most {MAX_WAIT_S:.0f}s per step, "
+                                f"{MAX_BATCH_WAIT_S:.0f}s per batch)."),
+                            "items": {
+                                "type": "object", "required": ["action"],
+                                "properties": {
+                                    "action": {
+                                        "type": "string",
+                                        "enum": list(_ACTION_TOOLS) + list(_BATCH_ONLY)},
+                                    "seconds": {
+                                        "type": "number", "minimum": 0,
+                                        "maximum": MAX_WAIT_S,
+                                        "description": "For 'wait' only."},
+                                },
+                            },
+                        },
+                        "return_frame": _RETURN_FRAME,
+                        "settle_ms": _SETTLE_MS,
+                    },
                 },
             },
         ]
@@ -205,7 +293,16 @@ class Tools:
             # client, so it stays a JSON-RPC error.
             raise McpError(METHOD_NOT_FOUND, f"no such tool: {name}")
         try:
-            return handler(arguments or {})
+            arguments = arguments or {}
+            wants_frame = arguments.get("return_frame")
+            if wants_frame is not None and not isinstance(wants_frame, bool):
+                raise McpError(INVALID_PARAMS, "return_frame must be true or false")
+            result = handler(arguments)
+            # Only for tools that changed something — screenshot already returns
+            # an image, and a status call has nothing to show.
+            if name in _ACTION_TOOLS or name == "batch":
+                result = self._with_frame(result, arguments)
+            return result
         except (McpError, hid.InputUnavailable, hid.UnknownKey, ValueError) as exc:
             # Everything that goes wrong while running a tool — bad arguments,
             # off-screen coordinates, no HDMI signal, no gadget — comes back as
@@ -251,7 +348,7 @@ class Tools:
 
     # ── Tools ─────────────────────────────────────────────────────────────────
 
-    def _tool_screenshot(self, args: dict) -> dict:
+    def _frame(self) -> bytes:
         # Through the manager, so the image is captured after this call rather
         # than being whatever the last background frame happened to be.
         if self.capture is not None:
@@ -261,11 +358,45 @@ class Tools:
         if frame is None:
             raise McpError(INTERNAL_ERROR,
                            "no frame captured — is an HDMI source connected?")
+        return frame
+
+    @staticmethod
+    def _image(frame: bytes) -> dict:
+        return {"type": "image", "data": base64.b64encode(frame).decode(),
+                "mimeType": "image/jpeg"}
+
+    @staticmethod
+    def _settle_seconds(args: dict) -> float:
+        value = args.get("settle_ms")
+        if value is None:
+            value = config.ACTION_SETTLE_MS
+        elif not isinstance(value, int) or isinstance(value, bool):
+            raise McpError(INVALID_PARAMS, "settle_ms must be a whole number")
+        elif not 0 <= value <= 5000:
+            raise McpError(INVALID_PARAMS, "settle_ms must be between 0 and 5000")
+        return value / 1000.0
+
+    def _with_frame(self, result: dict, args: dict) -> dict:
+        """
+        Append a post-action screenshot when the caller asked for one.
+
+        Pauses first. An action returns as soon as the HID report is written,
+        which is before the target has drawn anything: capture immediately and
+        the image shows the screen as it was, which reads as the action having
+        done nothing at all.
+        """
+        if not args.get("return_frame"):
+            return result
+        settle = self._settle_seconds(args)
+        if settle:
+            time.sleep(settle)
+        return {**result, "content": [*result["content"], self._image(self._frame())]}
+
+    def _tool_screenshot(self, args: dict) -> dict:
+        frame = self._frame()
         width, height = self.framebuffer.width, self.framebuffer.height
         return {"content": [
-            {"type": "image",
-             "data": base64.b64encode(frame).decode(),
-             "mimeType": "image/jpeg"},
+            self._image(frame),
             {"type": "text",
              "text": f"Screen is {width}x{height}. Coordinates for every action "
                      f"tool are pixels in this image, origin top-left."},
@@ -334,6 +465,71 @@ class Tools:
             raise McpError(INVALID_PARAMS, "key must be a non-empty string")
         hid.press_key(combo)
         return _text(f"Pressed {combo}.")
+
+    @staticmethod
+    def _wait_seconds(step: dict, index: int) -> float:
+        seconds = step.get("seconds")
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+            raise McpError(INVALID_PARAMS,
+                           f"action {index}: wait needs a 'seconds' number")
+        if not 0 <= seconds <= MAX_WAIT_S:
+            raise McpError(INVALID_PARAMS,
+                           f"action {index}: wait must be between 0 and "
+                           f"{MAX_WAIT_S:.0f} seconds")
+        return float(seconds)
+
+    def _tool_batch(self, args: dict) -> dict:
+        actions = args.get("actions")
+        if not isinstance(actions, list) or not actions:
+            raise McpError(INVALID_PARAMS, "actions must be a non-empty list")
+        if len(actions) > MAX_BATCH_ACTIONS:
+            raise McpError(INVALID_PARAMS,
+                           f"{len(actions)} actions is more than the "
+                           f"{MAX_BATCH_ACTIONS} allowed in one batch")
+
+        # Validate the whole list first: a batch that fails halfway has already
+        # changed the screen, and a typo in step 9 should not cost steps 1-8.
+        total_wait = 0.0
+        for index, step in enumerate(actions):
+            if not isinstance(step, dict):
+                raise McpError(INVALID_PARAMS, f"action {index} is not an object")
+            name = step.get("action")
+            if name == "wait":
+                total_wait += self._wait_seconds(step, index)
+                if total_wait > MAX_BATCH_WAIT_S:
+                    raise McpError(INVALID_PARAMS,
+                                   f"waits in this batch total {total_wait:.1f}s, "
+                                   f"over the {MAX_BATCH_WAIT_S:.0f}s limit")
+            elif name not in _ACTION_TOOLS:
+                raise McpError(INVALID_PARAMS,
+                               f"action {index}: {name!r} cannot be batched. "
+                               f"Choose one of: "
+                               f"{', '.join(_ACTION_TOOLS + _BATCH_ONLY)}")
+
+        done: list[str] = []
+        for index, step in enumerate(actions):
+            name = step["action"]
+            if name == "wait":
+                time.sleep(self._wait_seconds(step, index))
+                done.append("wait")
+                continue
+            handler = getattr(self, f"_tool_{name}")
+            arguments = {k: v for k, v in step.items()
+                         if k not in ("action", "return_frame", "settle_ms")}
+            try:
+                handler(arguments)
+            except (McpError, hid.InputUnavailable, hid.UnknownKey, ValueError) as exc:
+                # Stop here rather than pressing on: the remaining actions were
+                # written assuming this one landed, and running them against a
+                # screen that never changed does damage rather than nothing.
+                message = exc.message if isinstance(exc, McpError) else str(exc)
+                return {"content": [{"type": "text", "text":
+                        f"Ran {len(done)} of {len(actions)} actions, then action "
+                        f"{index} ({name}) failed: {message}"}],
+                        "isError": True}
+            done.append(name)
+
+        return _text(f"Ran {len(done)} actions: {', '.join(done)}.")
 
 
 # ── Sessions ──────────────────────────────────────────────────────────────────

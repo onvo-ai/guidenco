@@ -89,6 +89,14 @@ def main() -> None:
     threading.Thread(target=_track_screen_size, args=(framebuffer,),
                      daemon=True, name="screen-size").start()
 
+    # Answer the source now rather than at the first screenshot. A CSI adapter
+    # that has not advertised EDID is invisible to the machine plugged into it,
+    # so without this you connect the cable and nothing happens at all. Off the
+    # main thread because it waits on hardware, and a slow adapter must not hold
+    # up the API.
+    threading.Thread(target=manager.ensure_link,
+                     daemon=True, name="link-setup").start()
+
     server = serve(framebuffer, host=config.API_HOST, port=config.API_PORT,
                    capture=manager)
 

@@ -249,7 +249,7 @@ class ToolListTest(McpTestCase):
         names = {tool["name"] for tool in body["result"]["tools"]}
         self.assertEqual(names, {
             "screenshot", "get_status", "move_mouse", "click", "drag",
-            "scroll", "type_text", "press_key",
+            "scroll", "type_text", "press_key", "batch",
         })
 
     def test_required_arguments_are_declared(self):
@@ -387,6 +387,205 @@ class RestSurfaceTest(McpTestCase):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=5) as response:
             body = json.loads(response.read())
         self.assertEqual(body["mcp"], "/mcp")
+
+
+class BatchTest(McpTestCase):
+    """
+    One call, several actions. Exists because every action is a round trip, and
+    anything you can plan ahead should not pay for one each.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.initialize()
+
+    def _abs(self, x, y):
+        """Pixels as the gadget records them: absolute HID units."""
+        return (self.hid._to_abs(x, 0, 1920), self.hid._to_abs(y, 0, 1080))
+
+    def test_actions_run_in_order(self):
+        body = self.call_tool("batch", {"actions": [
+            {"action": "move_mouse", "x": 10, "y": 20, "smooth": False},
+            {"action": "move_mouse", "x": 30, "y": 40, "smooth": False},
+        ]})
+        self.assertNotIn("isError", body["result"])
+        self.assertEqual(self.gadget.positions[0], self._abs(10, 20))
+        self.assertEqual(self.gadget.positions[-1], self._abs(30, 40))
+
+    def test_typing_and_pressing_work_in_a_batch(self):
+        body = self.call_tool("batch", {"actions": [
+            {"action": "type_text", "text": "hi"},
+            {"action": "press_key", "key": "Return"},
+        ]})
+        self.assertNotIn("isError", body["result"])
+        self.assertTrue(self.gadget.keyboard)
+
+    def test_it_stops_at_the_first_failure(self):
+        # The second action is off-screen. The third must not run: it was
+        # written assuming the second landed.
+        body = self.call_tool("batch", {"actions": [
+            {"action": "move_mouse", "x": 10, "y": 20, "smooth": False},
+            {"action": "move_mouse", "x": 99999, "y": 20, "smooth": False},
+            {"action": "move_mouse", "x": 50, "y": 60, "smooth": False},
+        ]})
+        self.assertTrue(body["result"]["isError"])
+        text = body["result"]["content"][0]["text"]
+        self.assertIn("Ran 1 of 3 actions", text)
+        self.assertNotIn(self._abs(50, 60), self.gadget.positions)
+
+    def test_an_unbatchable_tool_is_refused(self):
+        body = self.call_tool("batch", {"actions": [{"action": "screenshot"}]})
+        self.assertTrue(body["result"]["isError"])
+        self.assertIn("cannot be batched", body["result"]["content"][0]["text"])
+
+    def test_an_empty_batch_is_refused(self):
+        body = self.call_tool("batch", {"actions": []})
+        self.assertTrue(body["result"]["isError"])
+
+    def test_an_over_long_batch_is_refused(self):
+        from api.mcp import MAX_BATCH_ACTIONS
+        actions = [{"action": "move_mouse", "x": 1, "y": 1}] * (MAX_BATCH_ACTIONS + 1)
+        body = self.call_tool("batch", {"actions": actions})
+        self.assertTrue(body["result"]["isError"])
+        self.assertIn("more than", body["result"]["content"][0]["text"])
+
+
+class ReturnFrameTest(McpTestCase):
+    """
+    Actions can hand back the screen they produced, so seeing the result does
+    not cost a second round trip.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.initialize()
+
+    def _kinds(self, body):
+        return [part["type"] for part in body["result"]["content"]]
+
+    def test_an_action_returns_only_text_by_default(self):
+        body = self.call_tool("move_mouse", {"x": 5, "y": 5, "smooth": False})
+        self.assertEqual(self._kinds(body), ["text"])
+
+    def test_an_action_can_return_the_resulting_frame(self):
+        body = self.call_tool("move_mouse",
+                              {"x": 5, "y": 5, "smooth": False, "return_frame": True})
+        self.assertEqual(self._kinds(body), ["text", "image"])
+        image = body["result"]["content"][1]
+        self.assertEqual(image["mimeType"], "image/jpeg")
+        self.assertEqual(base64.b64decode(image["data"]), self.jpeg)
+
+    def test_a_batch_can_return_the_resulting_frame(self):
+        body = self.call_tool("batch", {
+            "actions": [{"action": "move_mouse", "x": 5, "y": 5, "smooth": False}],
+            "return_frame": True,
+        })
+        self.assertEqual(self._kinds(body), ["text", "image"])
+
+    def test_return_frame_is_not_passed_down_into_batched_actions(self):
+        # Otherwise every step would capture a frame and the batch would be
+        # slower than the calls it replaced.
+        body = self.call_tool("batch", {
+            "actions": [{"action": "move_mouse", "x": 5, "y": 5, "smooth": False},
+                        {"action": "move_mouse", "x": 6, "y": 6, "smooth": False}],
+            "return_frame": True,
+        })
+        self.assertEqual(self._kinds(body), ["text", "image"])
+
+    def test_a_non_boolean_is_refused(self):
+        body = self.call_tool("move_mouse",
+                              {"x": 5, "y": 5, "return_frame": "yes"})
+        self.assertTrue(body["result"]["isError"])
+        self.assertIn("true or false", body["result"]["content"][0]["text"])
+
+    def test_it_waits_for_the_screen_to_settle_before_capturing(self):
+        # An action returns before the target has redrawn. Without the pause the
+        # frame shows the old screen and reads as though nothing happened.
+        import time as _time
+        start = _time.monotonic()
+        self.call_tool("move_mouse",
+                       {"x": 5, "y": 5, "smooth": False,
+                        "return_frame": True, "settle_ms": 600})
+        self.assertGreaterEqual(_time.monotonic() - start, 0.6)
+
+    def test_no_settle_is_paid_when_no_frame_was_asked_for(self):
+        import time as _time
+        start = _time.monotonic()
+        self.call_tool("move_mouse", {"x": 5, "y": 5, "smooth": False})
+        self.assertLess(_time.monotonic() - start, 0.4)
+
+    def test_settle_can_be_switched_off(self):
+        import time as _time
+        start = _time.monotonic()
+        self.call_tool("move_mouse", {"x": 5, "y": 5, "smooth": False,
+                                      "return_frame": True, "settle_ms": 0})
+        self.assertLess(_time.monotonic() - start, 0.4)
+
+    def test_an_absurd_settle_is_refused(self):
+        body = self.call_tool("move_mouse", {"x": 5, "y": 5, "return_frame": True,
+                                             "settle_ms": 60000})
+        self.assertTrue(body["result"]["isError"])
+        self.assertIn("between 0 and 5000", body["result"]["content"][0]["text"])
+
+    def test_a_non_integer_settle_is_refused(self):
+        body = self.call_tool("move_mouse", {"x": 5, "y": 5, "return_frame": True,
+                                             "settle_ms": "soon"})
+        self.assertTrue(body["result"]["isError"])
+
+
+class BatchWaitTest(McpTestCase):
+    """
+    A batch can pause. Without it a batch cannot survive anything that has to
+    appear before the next step lands — a launcher, a menu, a dialog.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.initialize()
+
+    def test_a_wait_step_actually_pauses(self):
+        import time as _time
+        start = _time.monotonic()
+        body = self.call_tool("batch", {"actions": [
+            {"action": "move_mouse", "x": 10, "y": 10, "smooth": False},
+            {"action": "wait", "seconds": 0.5},
+            {"action": "move_mouse", "x": 20, "y": 20, "smooth": False},
+        ]})
+        self.assertNotIn("isError", body["result"])
+        self.assertGreaterEqual(_time.monotonic() - start, 0.5)
+        self.assertIn("wait", body["result"]["content"][0]["text"])
+
+    def test_a_wait_without_seconds_is_refused(self):
+        body = self.call_tool("batch", {"actions": [{"action": "wait"}]})
+        self.assertTrue(body["result"]["isError"])
+        self.assertIn("seconds", body["result"]["content"][0]["text"])
+
+    def test_a_single_overlong_wait_is_refused(self):
+        body = self.call_tool("batch", {"actions": [
+            {"action": "wait", "seconds": 999}]})
+        self.assertTrue(body["result"]["isError"])
+
+    def test_waits_are_capped_across_the_whole_batch(self):
+        body = self.call_tool("batch", {"actions": [
+            {"action": "wait", "seconds": 10} for _ in range(5)]})
+        self.assertTrue(body["result"]["isError"])
+        self.assertIn("over the", body["result"]["content"][0]["text"])
+
+    def test_a_bad_step_is_caught_before_anything_runs(self):
+        # Validation happens up front: a typo late in the list must not leave
+        # the screen half-changed.
+        body = self.call_tool("batch", {"actions": [
+            {"action": "move_mouse", "x": 10, "y": 10, "smooth": False},
+            {"action": "wait", "seconds": "ages"},
+        ]})
+        self.assertTrue(body["result"]["isError"])
+        self.assertEqual(self.gadget.positions, [])
+
+    def test_screenshot_is_unaffected(self):
+        # It already returns an image; it must not gain a second one.
+        body = self.call_tool("screenshot", {"return_frame": True})
+        kinds = [part["type"] for part in body["result"]["content"]]
+        self.assertEqual(kinds, ["image", "text"])
 
 
 if __name__ == "__main__":

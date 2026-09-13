@@ -142,6 +142,38 @@ class CaptureManager:
     def _touch(self) -> None:
         self._last_used = time.monotonic()
 
+    # ── The input link, independent of capture ────────────────────────────────
+
+    def backend(self):
+        """The backend, created on first use rather than at first capture."""
+        with self._lock:
+            if self._backend is None:
+                self._backend = _make_backend()
+            return self._backend
+
+    def ensure_link(self) -> bool:
+        """
+        Ready the input so a source plugged in now is answered now.
+
+        Called at service start. Without it a CSI adapter stays silent until
+        something asks for a frame, and the machine on the other end of the
+        cable never sees a monitor at all.
+        """
+        try:
+            return self.backend().ensure_link()
+        except Exception:
+            logger.exception("[capture] link setup failed")
+            return False
+
+    def link_state(self) -> dict:
+        """Backend diagnostics: is the input negotiated, is a signal arriving."""
+        try:
+            return self.backend().link_state()
+        except Exception:
+            logger.exception("[capture] link state unavailable")
+            return {"negotiated": None, "signal": None,
+                    "detail": "could not read the capture link state"}
+
     # ── Running and reaping ───────────────────────────────────────────────────
 
     def _ensure_running(self) -> None:
@@ -186,9 +218,7 @@ class CaptureManager:
         threading.Thread(target=work, daemon=True, name="letterbox").start()
 
     def _loop(self) -> None:
-        if self._backend is None:
-            self._backend = _make_backend()
-        backend = self._backend
+        backend = self.backend()
         logger.info("[capture] starting (%s)", type(backend).__name__)
         started = time.monotonic()
 

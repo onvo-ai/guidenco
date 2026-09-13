@@ -50,14 +50,27 @@ STREAM_H   = _int("STREAM_H", 0)
 STREAM_FPS = _int("STREAM_FPS", 10)
 
 # Capture runs only while something is reading it. After the last request it
-# stays warm this long, so a burst of screenshots does not pay start-up each
-# time, then shuts down. Raise it for interactive use, lower it to idle sooner.
-CAPTURE_IDLE_TIMEOUT_S = _int("CAPTURE_IDLE_TIMEOUT_S", 30)
+# stays warm this long, then shuts down.
+#
+# Five minutes because the caller is usually a model: it takes a screenshot,
+# spends a while deciding what to do, acts, and looks again. Thirty seconds was
+# shorter than that pause, so nearly every screenshot in a session paid the cold
+# restart (~2.7s against ~0.5s warm) even though the session never went idle.
+# Lower it if the Pi is doing something else and you want the pipeline gone.
+CAPTURE_IDLE_TIMEOUT_S = _int("CAPTURE_IDLE_TIMEOUT_S", 300)
 
 # How long to wait for a frame after asking for one. It has to cover a cold
 # start: a CSI adapter negotiates EDID and latches DV timings before the first
 # frame, which takes several seconds the first time.
 CAPTURE_WARMUP_S = _int("CAPTURE_WARMUP_S", 20)
+
+# How long to let the screen settle before a return_frame screenshot.
+#
+# An action returns the instant the HID report is written, which is well before
+# the target has redrawn — without this pause the frame shows the screen as it
+# was, and the caller concludes the action failed when it did not. 400ms covers
+# ordinary redraws; a slow app needs the caller to ask for more via settle_ms.
+ACTION_SETTLE_MS = _int("ACTION_SETTLE_MS", 400)
 
 # ── HTTP API ──────────────────────────────────────────────────────────────────
 API_HOST = os.environ.get("API_HOST", "0.0.0.0")
