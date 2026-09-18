@@ -158,6 +158,9 @@ class RecordingGadget:
         self.hid = hid
         hid._enabled = True
         hid._reason = "test"
+        # A real gadget with a host attached; individual tests override this to
+        # simulate a detached or sleeping host.
+        hid._host_state = lambda: "configured"
         hid._write = self._write
         hid._buttons = 0
         hid._x = hid._y = 0
@@ -568,6 +571,15 @@ class HealthTest(ServerTestCase):
     def test_health_reports_input_availability(self):
         _, body = self.get_json("/health")
         self.assertTrue(body["input"]["available"])
+
+    def test_health_reports_input_unavailable_when_the_host_is_detached(self):
+        # A power-only cable leaves /dev/hidg* open but no USB host attached, so
+        # every write fails. Health must read the live link state and say so,
+        # not keep reporting the "ready" it found when the devices first opened.
+        self.hid._host_state = lambda: "not attached"
+        _, body = self.get_json("/health")
+        self.assertFalse(body["input"]["available"])
+        self.assertIn("not attached", body["input"]["detail"])
 
     def test_health_reports_the_network(self):
         _, body = self.get_json("/health")
