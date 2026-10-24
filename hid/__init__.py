@@ -84,14 +84,42 @@ class InputUnavailable(RuntimeError):
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
+def _live_state() -> tuple[bool, str]:
+    """Whether input works *right now*, with a reason.
+
+    ``_enabled`` only records what init() found once: that the gadget devices
+    existed and opened. Whether a keystroke actually lands also needs a USB host
+    attached at this moment, and that changes with no reopening — a power-only
+    cable or an unplugged lead leaves the devices open while every write fails.
+    A sleeping target is the exception: the first failed write wakes it. So the
+    host link is read live here, each time, and a stale "ready" is never
+    reported for a machine that cannot be driven.
+    """
+    if not _enabled:
+        return False, _reason
+    state = _host_state()
+    if state == "configured":
+        return True, "ready"
+    if state is None:
+        return False, "no USB device controller found"
+    if state == "suspended":
+        # A write to a sleeping host fails once, and _write() then wakes it and
+        # sends again, so input still lands. Reporting it unavailable would stop
+        # a caller from sending the input that wakes it.
+        return True, "the target is attached but asleep; it wakes on the first input"
+    return False, (f"the USB host is not attached (link state: {state}) — the target "
+                   "is not connected to the gadget over USB, or the cable is power-only")
+
+
 def available() -> bool:
-    return _enabled
+    return _live_state()[0]
 
 
 def status() -> dict:
     x, y, w, h = _active
+    ok, detail = _live_state()
     return {
-        "available": _enabled, "detail": _reason,
+        "available": ok, "detail": detail,
         "keyboard": KB_DEVICE, "mouse": MS_DEVICE,
         "frame": {"width": _frame[0], "height": _frame[1]},
         # Exposed because a mismatch between these two is invisible in a
