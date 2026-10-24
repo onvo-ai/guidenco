@@ -96,7 +96,8 @@ compensating by guesswork.
 
 Call `get_status` first. It answers most questions directly:
 
-- `input.available: false` — the USB HID gadget is not bound, so you can see the
+- `input.available: false` — the USB HID gadget is not bound, or no USB host is
+  attached to it (an unplugged lead or a power-only cable), so you can see the
   screen but cannot act. `input.detail` says why. On a Pi Zero with a USB capture
   card this is expected and unfixable: its single USB port cannot be both a HID
   gadget and a capture-card host.

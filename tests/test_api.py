@@ -581,6 +581,14 @@ class HealthTest(ServerTestCase):
         self.assertFalse(body["input"]["available"])
         self.assertIn("not attached", body["input"]["detail"])
 
+    def test_health_reports_input_available_when_the_host_is_asleep(self):
+        # A sleeping host still takes input: the first failed write wakes it and
+        # is sent again. Health must not tell a caller to stop before that write.
+        self.hid._host_state = lambda: "suspended"
+        _, body = self.get_json("/health")
+        self.assertTrue(body["input"]["available"])
+        self.assertIn("asleep", body["input"]["detail"])
+
     def test_health_reports_the_network(self):
         _, body = self.get_json("/health")
         network = body["network"]

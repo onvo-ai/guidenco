@@ -90,9 +90,10 @@ def _live_state() -> tuple[bool, str]:
     ``_enabled`` only records what init() found once: that the gadget devices
     existed and opened. Whether a keystroke actually lands also needs a USB host
     attached at this moment, and that changes with no reopening — a power-only
-    cable, an unplugged lead, or a sleeping target all leave the devices open
-    while every write fails. So the host link is read live here, each time, and
-    a stale "ready" is never reported for a machine that cannot be driven.
+    cable or an unplugged lead leaves the devices open while every write fails.
+    A sleeping target is the exception: the first failed write wakes it. So the
+    host link is read live here, each time, and a stale "ready" is never
+    reported for a machine that cannot be driven.
     """
     if not _enabled:
         return False, _reason
@@ -102,7 +103,10 @@ def _live_state() -> tuple[bool, str]:
     if state is None:
         return False, "no USB device controller found"
     if state == "suspended":
-        return False, "the target is attached but asleep; it wakes on the first input"
+        # A write to a sleeping host fails once, and _write() then wakes it and
+        # sends again, so input still lands. Reporting it unavailable would stop
+        # a caller from sending the input that wakes it.
+        return True, "the target is attached but asleep; it wakes on the first input"
     return False, (f"the USB host is not attached (link state: {state}) — the target "
                    "is not connected to the gadget over USB, or the cable is power-only")
 
